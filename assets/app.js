@@ -43,6 +43,10 @@
     const updated = $('#content',doc);
     if (updated) root.replaceWith(updated);
   }
+  async function refreshAfterSuccess() {
+    try { await refreshContent(); }
+    catch (error) { toast('操作已完成，但页面刷新失败，请手动刷新页面',true); }
+  }
   document.addEventListener('submit',async event=>{
     const form=event.target.closest('form[data-ajax]');if (!form)return;
     event.preventDefault();
@@ -58,7 +62,7 @@
       // Reveal one-time credentials before refreshing page content. If the refresh
       // fails after the server committed the password reset, the secret must not be lost.
       if (result.password) showPassword(result.username || '客户', result.password);
-      await refreshContent();
+      await refreshAfterSuccess();
     } catch(err){toast(err.message,true);}
     finally {if(submit)submit.disabled=false;}
   });
@@ -138,7 +142,7 @@
       toast(result.message||'操作成功');
       // Display one-time passwords before any non-critical page refresh.
       if(result.password)showPassword(result.username||'账号',result.password);
-      await refreshContent();
+      await refreshAfterSuccess();
     }catch(err){toast(err.message,true);}
     finally{trigger.disabled=false;}
   });
