@@ -71,8 +71,10 @@ function feature_action(string $action): never {
                 $set[]='u.license_until=?';$params[]=input_to_utc(trim((string)($_POST['license_until']??'')));
             } elseif ($f==='entitlements') {
                 $v=(array)($_POST['entitlements']??[]);
-                if (array_diff($v,['douyin','xiaohongshu','mcp','skill'])) throw new RuntimeException('未知平台或扩展授权');
-                if (array_intersect($v,['mcp','skill'])) require_owner();
+                if (array_diff($v,['douyin','xiaohongshu','mcp','skill','mcp-codex','mcp-harness'])) throw new RuntimeException('未知平台或扩展授权');
+                if (array_intersect($v,['mcp','skill','mcp-codex','mcp-harness'])) require_owner();
+                if (array_intersect($v,['mcp-codex','mcp-harness']) && !in_array('mcp',$v,true))
+                    throw new RuntimeException('Codex 与 DeepSeek Harness MCP 必须同时授权上级 MCP 权限');
                 $set[]='u.entitlements=?';$params[]=json_encode(array_values(array_unique($v)),JSON_UNESCAPED_UNICODE);
             }
         }
@@ -152,9 +154,14 @@ function feature_action(string $action): never {
     }
     if ($action==='cloud_features_save') {
         require_owner();
-        $values=['mcp_enabled'=>isset($_POST['mcp_enabled'])?'1':'0','skill_enabled'=>isset($_POST['skill_enabled'])?'1':'0'];
+        $values=[
+            'mcp_enabled'=>isset($_POST['mcp_enabled'])?'1':'0',
+            'mcp_codex_enabled'=>isset($_POST['mcp_codex_enabled'])?'1':'0',
+            'mcp_harness_enabled'=>isset($_POST['mcp_harness_enabled'])?'1':'0',
+            'skill_enabled'=>isset($_POST['skill_enabled'])?'1':'0'
+        ];
         foreach($values as $key=>$value) sql('INSERT INTO phonehub_feature_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)',[$key,$value]);
-        audit('cloud_features_save','mcp='.$values['mcp_enabled'].', skill='.$values['skill_enabled']);
+        audit('cloud_features_save','mcp='.$values['mcp_enabled'].', codex='.$values['mcp_codex_enabled'].', harness='.$values['mcp_harness_enabled'].', skill='.$values['skill_enabled']);
         json_response(['ok'=>true,'message'=>'客户端扩展总开关已保存']);
     }
     if ($action==='mobile_revoke') {
@@ -228,6 +235,8 @@ function feature_view(string $view): void {
                 <label><input data-bulk-field type="checkbox" name="entitlements[]" value="douyin" checked disabled> 抖音</label>
                 <label><input data-bulk-field type="checkbox" name="entitlements[]" value="xiaohongshu" disabled> 小红书</label>
                 <label><input data-bulk-field type="checkbox" name="entitlements[]" value="mcp" disabled> MCP</label>
+                <label><input data-bulk-field type="checkbox" name="entitlements[]" value="mcp-codex" disabled> Codex MCP</label>
+                <label><input data-bulk-field type="checkbox" name="entitlements[]" value="mcp-harness" disabled> DeepSeek Harness MCP</label>
                 <label><input data-bulk-field type="checkbox" name="entitlements[]" value="skill" disabled> Skill</label>
               </div><small>未勾选的平台将从客户授权中移除；MCP/Skill 还需要主管理员开启云端总开关。</small>
             </div>
@@ -262,6 +271,7 @@ function feature_view(string $view): void {
         $rows=sql("SELECT setting_key,setting_value FROM phonehub_feature_settings WHERE setting_key IN ('mcp_enabled','skill_enabled')")->fetchAll();
         $flags=[];foreach($rows as $row)$flags[$row['setting_key']]=$row['setting_value']==='1';
         $mcp=!empty($flags['mcp_enabled']);$skill=!empty($flags['skill_enabled']);
+        $codex=!empty($flags['mcp_codex_enabled']);$harness=!empty($flags['mcp_harness_enabled']);
         ?><div class="page-title"><div><h1>客户端能力控制</h1><p>统一管理客户端扩展的云端开放状态，默认全部关闭</p></div><span class="cloud-live-indicator"><i></i> 云端策略生效中</span></div>
         <div class="cloud-summary"><div><span class="cloud-summary-label">全局开放能力</span><strong><?=((int)$mcp+(int)$skill)?> <small>/ 2</small></strong></div><p>只有全局开关、客户单独授权、已启用签名版本三项同时满足，客户端才可以使用对应能力。</p></div>
         <form data-ajax="cloud_features_save" class="cloud-feature-form"><input type="hidden" name="action" value="cloud_features_save">
@@ -279,6 +289,14 @@ function feature_view(string $view): void {
               <ul><li>控制 Skill 版本查询与下载</li><li>客户还必须单独获得 Skill 授权</li><li>需要存在已启用的签名发布版本</li></ul>
             </section>
           </div>
+          <div class="card" style="margin-top:14px">
+          <div class="card-head"><h2>MCP 平台独立授权</h2></div>
+          <p class="muted">Codex 和 DeepSeek Harness 默认关闭。实际开放还必须同时启用上方 MCP 总开关，并给客户同时授予 MCP 和对应平台权限。旧版 MCP 权限保持不变，不自动升级为新权限。</p>
+          <div class="form-grid">
+            <div class="field"><label class="check-row"><input type="checkbox" name="mcp_codex_enabled" <?=$codex?'checked':''?>> Codex MCP 全局开放</label></div>
+            <div class="field"><label class="check-row"><input type="checkbox" name="mcp_harness_enabled" <?=$harness?'checked':''?>> DeepSeek Harness MCP 全局开放</label></div>
+          </div>
+        </div>
           <div class="cloud-savebar"><div><strong>修改云端开放策略</strong><small>保存后立即影响后续授权检查与下载请求</small></div><button class="btn primary" type="submit">保存设置</button></div>
         </form>
         <div class="cloud-warning"><strong>安全说明</strong><p>关闭总开关会立即阻止后续版本查询与下载，但不能远程删除客户已经下载的本地文件。桌面客户端必须定期查询 <code>license_status</code> / <code>capabilities</code>，在能力变为不可用时停止本地调用；离线设备在下次联网校验时收到撤销状态。</p></div><?php
