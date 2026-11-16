@@ -86,12 +86,21 @@ function update_archive(): array {
         } finally {$zip->close();}
     } finally {@unlink($file);}
 }
+function missing_runtime_modules(): array {
+    $required=['app/features.php','app/gateway.php','app/releases.php','app/release_admin.php',
+        'api/phonehub.php','api/extensions.php'];
+    return array_values(array_filter($required,static fn($name)=>!is_file(APP_ROOT.'/'.$name)));
+}
 function check_update(): array {
     $archive=update_archive();
     $current=app_version();
+    $missing=missing_runtime_modules();
+    $newer=version_compare($archive['version'],$current,'>');
     return [
         'current'=>$current, 'latest'=>$archive['version'],
-        'available'=>version_compare($archive['version'],$current,'>'),
+        'available'=>$newer || count($missing)>0,
+        'repair'=>!$newer && count($missing)>0,
+        'missing_modules'=>$missing,
         'source'=>UPDATE_ARCHIVE
     ];
 }
@@ -100,7 +109,9 @@ function apply_update(): array {
     if (!$lock || !flock($lock,LOCK_EX|LOCK_NB)) throw new RuntimeException('另一个更新任务正在执行');
     try {
         $archive=update_archive();$latest=$archive['version'];$current=app_version();
-        if (!version_compare($latest,$current,'>')) return ['message'=>'当前已经是最新版本','version'=>$current];
+        $missing=missing_runtime_modules();
+        if (!version_compare($latest,$current,'>') && !$missing)
+            return ['message'=>'当前已经是最新版本','version'=>$current];
         $backup=APP_STORE.'/backups/'.gmdate('Ymd-His').'-'.bin2hex(random_bytes(4));
         if (!mkdir($backup,0700,true)) throw new RuntimeException('无法创建更新备份目录');
         $changed=[];$installed=[];
