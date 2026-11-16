@@ -87,7 +87,7 @@ function update_archive(): array {
     } finally {@unlink($file);}
 }
 function missing_runtime_modules(): array {
-    $required=['app/features.php','app/gateway.php','app/releases.php','app/release_admin.php',
+    $required=['app/features.php','app/gateway.php','app/releases.php','app/release_admin.php','app/ai.php',
         'api/phonehub.php','api/extensions.php'];
     return array_values(array_filter($required,static fn($name)=>!is_file(APP_ROOT.'/'.$name)));
 }
