@@ -148,7 +148,7 @@ try {
         try {
             client_sql('SELECT id FROM phonehub_users WHERE id=? FOR UPDATE',[$userId])->fetch();
             $meta=client_sql('SELECT COALESCE(m.mobile_limit,0) AS mobile_limit FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetch();
-            $bound=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
+            $bound=api_mobile_quota($userId)['active_count'];
             if ((int)($meta['mobile_limit']??0)<1 || $bound<1) {
                 $pdo->rollBack();
                 api_error('请先绑定已授权的安卓手机，再下载操作包',403);
