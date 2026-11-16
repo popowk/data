@@ -6,8 +6,8 @@ const UPDATE_MAX_BYTES = 16777216;
 const UPDATE_FILES = [
     'index.php','install.php','version.json','README.md','.htaccess',
     'app/core.php','app/updater.php','app/features.php','app/gateway.php',
-    'app/releases.php','app/release_admin.php','app/ai.php',
-    'api/phonehub.php','api/extensions.php','assets/app.css','assets/app.js'
+    'app/releases.php','app/release_admin.php','app/ai.php','app/mobile.php',
+    'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','assets/app.css','assets/app.js'
 ];
 
 function update_download(string $destination): void {
