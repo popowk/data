@@ -30,7 +30,7 @@
     const body = fields instanceof FormData ? fields : new FormData();
     if (!(fields instanceof FormData)) Object.entries(fields).forEach(([k,v])=>body.append(k,v));
     body.set('action',action); body.set('csrf',token());
-    const response=await fetch('index.php',{method:'POST',body,credentials:'same-origin',headers:{'X-Requested-With':'XMLHttpRequest'}});
+    const response=await fetch('index.php',{method:'POST',body,credentials:'same-origin',cache:'no-store',headers:{'X-Requested-With':'XMLHttpRequest'}});
     const payload=await response.json().catch(()=>({ok:false,error:'服务器返回格式异常'}));
     if (!response.ok || !payload.ok) throw new Error(payload.error || '操作失败');
     return payload;
@@ -111,8 +111,20 @@
     if (action==='apply-update'){
       if(!updateAvailable || !confirm('更新将备份并替换管理后台代码，确认继续？'))return;
       trigger.disabled=true;$('#update-status').textContent='正在下载、备份并安装更新…';
-      try{const result=await request('update_apply');toast(result.message+'：v'+result.version);location.href='index.php?view=update';}
-      catch(err){toast(err.message,true);$('#update-status').textContent='更新失败：'+err.message;}
+      try{
+        const result=await request('update_apply');
+        if(result.cache_reset===false){
+          const warning=result.message||'更新文件已安装，但 PHP OPcache 未能确认刷新';
+          toast(warning,true);
+          $('#update-status').textContent=warning+'。请在服务器重启 PHP-FPM/Web 服务后，再重新打开管理后台。';
+          return;
+        }
+        toast((result.message||'更新成功')+'：v'+result.version);
+        location.replace('index.php?view=update&_='+Date.now());
+      } catch(err){
+        toast(err.message,true);
+        $('#update-status').textContent='更新失败：'+err.message;
+      }
       finally{trigger.disabled=false;}
       return;
     }
