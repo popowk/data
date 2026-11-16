@@ -224,7 +224,8 @@ function api_ai_chat(array $input,array $session,int $userId): never {
     $payload=[
         'model'=>$model,'messages'=>$clean,'max_tokens'=>$maxTokens,
         'temperature'=>(float)$temperature,'top_p'=>(float)$topP,'stream'=>false,
-        'thinking'=>['type'=>$thinking]
+        'thinking'=>['type'=>$thinking],
+        'safety_check'=>['level'=>'high']
     ];
     $body=json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
     $response='';$started=microtime(true);$status=0;
