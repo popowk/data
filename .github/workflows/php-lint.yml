@@ -1,4 +1,4 @@
-name: PHP syntax checks
+name: PHP syntax and MySQL 5.7 smoke checks
 
 on:
   push:
@@ -16,3 +16,30 @@ jobs:
         run: find . -type f -name '*.php' -not -path './storage/*' -print0 | xargs -0 -n1 php -l
       - name: Validate version manifest
         run: php -r '$d=json_decode(file_get_contents("version.json"),true,512,JSON_THROW_ON_ERROR); if (!preg_match("/^\d+\.\d+\.\d+$/", $d["version"])) exit(1);'
+      - name: Probe China mirror ZIP endpoint (informational)
+        continue-on-error: true
+        run: |
+          curl -fLsS --max-time 35 'https://git.wksite.cn/popowk/data/archive/refs/heads/main.zip' -o /tmp/phonehub-proxy.zip
+          php -r '$z=new ZipArchive; if ($z->open("/tmp/phonehub-proxy.zip")!==true) exit(1); echo "Mirror archive: ".$z->numFiles." entries\n"; $z->close();'
+
+  mysql57-smoke:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:5.7
+        env:
+          MYSQL_ROOT_PASSWORD: ci_password
+          MYSQL_DATABASE: phonehub_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm PHP MySQL driver
+        run: php -r 'if (!extension_loaded("pdo_mysql")) {fwrite(STDERR,"pdo_mysql missing\n");exit(1);}'
+      - name: Schema and account smoke test
+        run: php tests/smoke.php
