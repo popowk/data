@@ -18,6 +18,8 @@ jobs:
         run: node --check assets/app.js
       - name: Validate version manifest
         run: php -r '$d=json_decode(file_get_contents("version.json"),true,512,JSON_THROW_ON_ERROR); if (!preg_match("/^\d+\.\d+\.\d+$/", $d["version"])) exit(1);'
+      - name: Ed25519 release-signing and ZIP smoke test
+        run: php tests/release-smoke.php
       - name: Verify updater's strict mirror download
         run: |
           php -r 'require "app/core.php"; require "app/updater.php"; $f=tempnam("storage","ci-"); try {update_download($f); $z=new ZipArchive; if ($z->open($f)!==true) exit(1); echo "PHP updater download: ".$z->numFiles." files\n";$z->close();} finally {@unlink($f);}'
