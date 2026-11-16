@@ -57,7 +57,7 @@ Authorization: Bearer <登录令牌>
 | device_list | 无 | 当前账号占用名额的电脑会话及到期时间 |
 | device_revoke | target_device_id | 踢掉指定电脑，返回 revoked |
 | mobile_bind | phone_id, 可选 display_name、imei | 绑定安卓手机；IMEI 可选，返回 imei_bound 与手机额度 |
-| mobile_list | 无 | 当前用户的手机列表、mobile_limit、active_count |
+| mobile_list | 无 | 当前用户的手机列表、mobile_limit、active_count、每台设备的 imei_bound |
 | mobile_check | phone_id, 可选 imei | 检查绑定状态与黑名单，返回 bound/imei_bound |
 | mobile_heartbeat | phone_id, 可选 imei | 绑定检查并刷新 last_seen；黑名单设备拒绝心跳 |
 | mobile_unbind | phone_id | 解绑安卓手机，释放名额 |
@@ -198,7 +198,7 @@ login -> license_status -> mobile_list
 电脑换机：device_list/device_revoke 或登录的 replace_device_id。
 手机换机：mobile_unbind/mobile_bind。
 
-## 七、AI 接口（v0.3.0）
+## 七、AI 接口（v0.4.0，兼容 v0.3）
 
 AI 默认由服务器中转，APP 不需要也不应该拿到服务器 DeepSeek Key。主管理员在后台「AI 接口管理」配置服务器 Key、默认模型和额度。默认模型为 \`deepseek-flash\`，请求固定发往 \`https://api.deepseek.com/chat/completions\`，不允许客户端自定义 URL、Host 或代理地址，防止 SSRF。
 
@@ -286,17 +286,17 @@ BYOK Key 仅随当前 HTTPS 请求转发给 DeepSeek，不写入 PhoneHub 数据
 - 管理员：login/logout；admin_create/admin_reset/admin_toggle/admin_delete（仅主管理员），owner_password（仅主管理员）。
 - 客户：account_save/account_password/reset_sessions/revoke_session。
 - 分组：group_create/group_delete/group_bulk。
-- 手机：mobile_add/mobile_revoke；mobile_blacklist/mobile_unblacklist（仅主管理员）。
+- 手机：mobile_add/mobile_revoke；mobile_blacklist/mobile_unblacklist（仅主管理员）。手工绑定支持可选 IMEI，服务端只存 HMAC 摘要。
 - 核心更新：release_publish/release_toggle（仅主管理员）。
 - 系统自身更新：update_check/update_apply（仅主管理员；与客户端更新同名但路径和认证不同）。
 - AI 配置：ai_settings_save（仅主管理员）。
-- MCP/Skill 云端总开关：cloud_features_save（仅主管理员）。
+- MCP/Skill 云端总开关：cloud_features_save（仅主管理员）；新客户默认不授予 mcp/skill。
 - 日志清理：logs_purge（仅主管理员）。
 - 旧 API 接管：gateway_install（仅主管理员）。
 
 **上线顺序（重要）：**
 
-1. 先让已部署的 /license/ 管理后台从 GitHub 国内镜像升级到 0.2.0，自动执行 MySQL 5.7 数据表迁移。
+1. 先让已部署的 /license/ 管理后台从 GitHub 国内镜像升级到当前版本，自动执行 MySQL 5.7 数据表迁移。
 2. 暂时保留现有 /phonehub/api.php，不影响旧 APP 和已经在使用的客户。
 3. APP 开发可先调用 /license/api/phonehub.php 测试新 API，绑定手机、日志、核心 ZIP 更新等。
 4. 完成 APP 适配后，以主管理员打开 /license/?view=gateway 进行旧 API 接管。此操作只会在旧接口文件 SHA-256 与上传的 0.7.1 参考版相同、目录可写时执行，原文件备份保存到 storage/backups/gateways。
