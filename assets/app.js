@@ -108,6 +108,22 @@
     if (action==='new-account'){openEditor(null);return;}
     if (action==='close-editor'){$('#account-editor').hidden=true;return;}
     if (action==='check-update'){await checkUpdate();return;}
+    if (action==='diagnose-update'){
+      const target=$('#update-diagnostics');
+      trigger.disabled=true;
+      if(target) target.textContent='正在检查 PHP、数据库及程序目录…';
+      try{
+        const result=await request('update_diagnostics');
+        const checks=Array.isArray(result.checks)?result.checks:[];
+        const symbols={ok:'✓',warning:'!',error:'×'};
+        const lines=checks.map(x=>(symbols[x.status]||'?')+' '+x.name+'：'+x.detail);
+        lines.unshift('自检结果：'+(result.summary?.errors||0)+' 项异常，'+(result.summary?.warnings||0)+' 项需人工确认');
+        if(target) target.textContent=lines.join('\n');
+      }catch(err){
+        if(target) target.textContent='运行环境自检失败：'+err.message;
+      }finally{trigger.disabled=false;}
+      return;
+    }
     if (action==='apply-update'){
       if(!updateAvailable || !confirm('更新将备份并替换管理后台代码，确认继续？'))return;
       trigger.disabled=true;$('#update-status').textContent='正在下载、备份并安装更新…';
