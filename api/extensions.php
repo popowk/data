@@ -19,7 +19,10 @@ function api_phone(string $value): string {
 }
 function api_mobile_quota(int $userId): array {
     $meta=client_sql('SELECT COALESCE(m.mobile_limit,0) AS lim FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetch();
-    $count=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
+    $count=(int)client_sql("SELECT COUNT(*) FROM phonehub_mobile_devices d WHERE d.user_id=? AND d.enabled=1
+        AND NOT EXISTS (SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND
+          ((b.identifier_type='phone_id' AND b.identifier_hash=d.phone_id) OR
+           (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash)))",[$userId])->fetchColumn();
     return ['mobile_limit'=>(int)($meta['lim']??0),'active_count'=>$count];
 }
 function api_cloud_feature_enabled(string $feature): bool {
