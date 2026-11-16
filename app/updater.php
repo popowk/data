@@ -76,7 +76,7 @@ function update_archive(): array {
                 if ($bytes===false) throw new RuntimeException('ZIP 文件读取失败');
                 $files[$path]=$bytes;
             }
-            foreach (['index.php','install.php','app/core.php','app/updater.php','version.json'] as $must) {
+            foreach (['index.php','install.php','app/core.php','app/accounts.php','app/updater.php','version.json'] as $must) {
                 if (!isset($files[$must])) throw new RuntimeException('更新包缺少必要文件：'.$must);
             }
             $version=json_decode($files['version.json'],true);
@@ -87,7 +87,7 @@ function update_archive(): array {
     } finally {@unlink($file);}
 }
 function missing_runtime_modules(): array {
-    $required=['app/features.php','app/gateway.php','app/releases.php','app/release_admin.php','app/ai.php',
+    $required=['app/accounts.php','app/features.php','app/gateway.php','app/releases.php','app/release_admin.php','app/ai.php',
         'api/phonehub.php','api/extensions.php'];
     return array_values(array_filter($required,static fn($name)=>!is_file(APP_ROOT.'/'.$name)));
 }
@@ -103,6 +103,12 @@ function check_update(): array {
         'missing_modules'=>$missing,
         'source'=>UPDATE_ARCHIVE
     ];
+}
+function update_reset_opcache(): ?bool {
+    if (!function_exists('opcache_reset')) return null;
+    $enabled=filter_var((string)ini_get('opcache.enable'),FILTER_VALIDATE_BOOLEAN);
+    if (!$enabled) return null;
+    return @opcache_reset();
 }
 function apply_update(): array {
     $lock=fopen(APP_STORE.'/update.lock','c+');
@@ -138,16 +144,20 @@ function apply_update(): array {
                 $installed[]=$path;
                 if (function_exists('opcache_invalidate')) @opcache_invalidate($dest,true);
             }
-            return ['message'=>'更新成功，原文件已备份','version'=>$latest,'backup'=>basename($backup)];
+            $cacheReset=update_reset_opcache();
+            $message='更新成功，原文件已备份';
+            if ($cacheReset===false) $message='更新文件已安装，但 PHP OPcache 未能确认刷新；请重启 PHP-FPM 或 Web 服务后再访问';
+            return ['message'=>$message,'version'=>$latest,'backup'=>basename($backup),'cache_reset'=>$cacheReset];
         } catch (Throwable $e) {
             $restored=true;
             foreach (array_reverse($installed) as $path) {
                 $dest=APP_ROOT.'/'.$path;
                 if ($changed[$path]===false) { if (!@unlink($dest)) $restored=false; }
                 elseif (!@copy($changed[$path],$dest)) $restored=false;
-                if (function_exists('opcache_invalidate')) @opcache_invalidate($dest,true);
             }
-            throw new RuntimeException($e->getMessage().($restored?'；已尝试恢复原文件':'；回滚未完成，请使用备份目录手工恢复'));
+            $cacheReset=update_reset_opcache();
+            $cacheWarning=$cacheReset===false?'；OPcache 刷新未确认，请重启 PHP-FPM 或 Web 服务':'';
+            throw new RuntimeException($e->getMessage().($restored?'；已尝试恢复原文件':'；回滚未完成，请使用备份目录手工恢复').$cacheWarning);
         }
     } finally {flock($lock,LOCK_UN);fclose($lock);}
 }
