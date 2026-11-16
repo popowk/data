@@ -2,6 +2,8 @@
 declare(strict_types=1);
 require dirname(__DIR__).'/app/core.php';
 require dirname(__DIR__).'/app/ai.php';
+require dirname(__DIR__).'/app/mobile.php';
+require dirname(__DIR__).'/app/releases.php';
 
 $pdo=new PDO('mysql:host=127.0.0.1;port=3306;dbname=phonehub_ci;charset=utf8mb4','root','ci_password',[
     PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_EMULATE_PREPARES=>false
@@ -16,6 +18,7 @@ foreach(['ai_enabled','allow_client_ai_key','ai_daily_limit'] as $column) if(!in
 $aiTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_ai_usage'")->fetchColumn();
 if($aiTable!==1) throw new RuntimeException('AI usage table missing');
 // Simulate a partially upgraded v0.3 deployment whose migration marker exists but AI objects are missing.
+$pdo->exec("DELETE FROM phonehub_admin_migrations WHERE version>4");
 $pdo->exec("DROP TABLE phonehub_ai_usage");
 $pdo->exec("DROP TABLE phonehub_ai_settings");
 foreach(['ai_enabled','allow_client_ai_key','ai_daily_limit'] as $column) $pdo->exec("ALTER TABLE phonehub_users DROP COLUMN ".$column);
@@ -24,6 +27,22 @@ $aiTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE 
 if($aiTable!==1) throw new RuntimeException('AI schema self-repair failed');
 $aiColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_users'")->fetchAll(PDO::FETCH_COLUMN);
 foreach(['ai_enabled','allow_client_ai_key','ai_daily_limit'] as $column) if(!in_array($column,$aiColumns,true)) throw new RuntimeException('AI schema self-repair missed '.$column);
+$mobileColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_mobile_devices'")->fetchAll(PDO::FETCH_COLUMN);
+if(!in_array('imei_hash',$mobileColumns,true)) throw new RuntimeException('mobile IMEI hash column missing');
+$blacklistTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_mobile_blacklist'")->fetchColumn();
+if($blacklistTable!==1) throw new RuntimeException('mobile blacklist table missing');
+$featureFlags=$pdo->query("SELECT setting_key,setting_value FROM phonehub_feature_settings")->fetchAll(PDO::FETCH_KEY_PAIR);
+if(($featureFlags['mcp_enabled']??'1')!=='0' || ($featureFlags['skill_enabled']??'1')!=='0')
+    throw new RuntimeException('MCP/Skill must be globally disabled by default');
+$imei='490154203237518';
+$imeiHash=mobile_imei_hash($imei);
+if(!preg_match('/^[a-f0-9]{64}$/D',(string)$imeiHash) || hash_equals(hash('sha256',$imei),(string)$imeiHash))
+    throw new RuntimeException('IMEI must be stored as keyed HMAC, not raw or plain SHA-256');
+$phoneId=str_repeat('c',64);
+$pdo->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES('imei_hash',?,?,1,0)")
+    ->execute([$imeiHash,'CI blacklist test']);
+if(!mobile_blacklist_match($pdo,$phoneId,$imeiHash)) throw new RuntimeException('IMEI blacklist lookup failed');
+if(release_platform('mcp')!=='mcp' || release_platform('skill')!=='skill') throw new RuntimeException('MCP/Skill release targets unavailable');
 $value='test-encryption-value-123456';
 $encrypted=ai_encrypt_secret($value);
 if($encrypted===$value || ai_decrypt_secret($encrypted)!==$value) throw new RuntimeException('AI encryption round trip failed');
