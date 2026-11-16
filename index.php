@@ -148,12 +148,12 @@ if (admin_id()) {
 }
 if (!admin_id()) {
 ?>
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 · PhoneHub</title><link rel="stylesheet" href="assets/app.css"><meta name="csrf" content="<?=h(csrf())?>"></head>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 · PhoneHub</title><link rel="stylesheet" href="assets/app.css?v=<?=rawurlencode(app_version())?>"><meta name="csrf" content="<?=h(csrf())?>"></head>
 <body class="auth-body"><main class="auth-card">
 <div class="brand"><span class="brand-mark">P</span><div><strong>PhoneHub</strong><small>License Console</small></div></div>
 <h1>登录管理后台</h1><p class="muted">统一管理客户、授权、设备会话及系统更新。</p>
 <form data-ajax="login"><input type="hidden" name="action" value="login"><div class="field"><label>管理员账号</label><input name="username" autocomplete="username" required autofocus></div><div class="field"><label>管理员密码</label><input type="password" name="password" autocomplete="current-password" required></div>
-<button class="btn primary full">登录</button></form><p id="message" class="footnote"></p></main><script src="assets/app.js" defer></script></body></html>
+<button class="btn primary full">登录</button></form><p id="message" class="footnote"></p></main><script src="assets/app.js?v=<?=rawurlencode(app_version())?>" defer></script></body></html>
 <?php exit; }
 $view=(string)($_GET['view'] ?? 'dashboard');
 if (!in_array($view,['dashboard','accounts','groups','group_bulk','mobiles','sessions','packages','client_logs','releases','ai','update','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
