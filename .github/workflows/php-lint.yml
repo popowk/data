@@ -20,6 +20,8 @@ jobs:
         run: bash tests/backup-cli-smoke.sh
       - name: Test encrypted backup roundtrip and offline restore
         run: php tests/backup-crypto-smoke.php
+      - name: Exercise offline server update signer
+        run: bash tests/update-signer-smoke.sh
       - name: Verify pinned server update signatures and tamper rejection
         run: php tests/update-signature-smoke.php
       - name: Simulate complete update, forced failure and rollback
