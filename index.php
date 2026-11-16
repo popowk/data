@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__.'/app/core.php';
+require_once __DIR__.'/app/accounts.php';
 if (!installed()) { header('Location: install.php'); exit; }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -110,16 +111,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             json_response(['ok'=>true,'message'=>'会话已撤销']);
         }
         if ($action==='account_password') {
-            $id=(int)($_POST['id']??0);
-            $target=sql('SELECT username FROM phonehub_users WHERE id=?',[$id])->fetch();
-            if (!$target) throw new RuntimeException('客户账号不存在');
-            $password=random_password();
-            db()->beginTransaction();
-            sql('UPDATE phonehub_users SET password_hash=? WHERE id=?',[password_hash_safe($password),$id]);
-            sql('DELETE FROM phonehub_sessions WHERE user_id=?',[$id]);
-            audit('account_password',(string)$target['username']);
-            db()->commit();
-            json_response(['ok'=>true,'message'=>'客户密码已重置，原会话已撤销','username'=>$target['username'],'password'=>$password]);
+            $result=account_reset_password((int)($_POST['id']??0));
+            json_response(['ok'=>true,'message'=>'客户密码已重置，原电脑会话已撤销','username'=>$result['username'],'password'=>$result['password']]);
         }
         if (in_array($action,['update_check','update_apply'],true)) {
             require_owner();
