@@ -151,7 +151,20 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         if ($blocked) api_problem('DEVICE_BLACKLISTED','该手机已被管理员拉黑',403);
         if ($found && $providedImeiHash!==null && !empty($found['imei_hash']) && !hash_equals((string)$found['imei_hash'],$providedImeiHash))
             api_problem('DEVICE_IDENTITY_MISMATCH','手机指纹对应的 IMEI 与已绑定记录不一致',403);
-        $bound=$found && (int)$found['enabled']===1 && $quota['mobile_limit']>0;
+        // If an administrator lowers a customer's phone quota, only the oldest
+        // still-enabled, non-blacklisted bindings remain eligible. Newest excess
+        // bindings are reported as unbound until the quota is raised or older phones are revoked.
+        $withinQuota=false;
+        if ($found && (int)$found['enabled']===1 && $quota['mobile_limit']>0) {
+            $position=(int)client_sql("SELECT COUNT(*) FROM phonehub_mobile_devices d
+                WHERE d.user_id=? AND d.enabled=1 AND d.id<=?
+                AND NOT EXISTS (SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND
+                  ((b.identifier_type='phone_id' AND b.identifier_hash=d.phone_id) OR
+                   (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash)))",
+                [$userId,(int)$found['id']])->fetchColumn();
+            $withinQuota=$position>0 && $position<=$quota['mobile_limit'];
+        }
+        $bound=(bool)$withinQuota;
         if ($bound && $action==='mobile_heartbeat') client_sql('UPDATE phonehub_mobile_devices SET last_seen=UTC_TIMESTAMP() WHERE id=?',[$found['id']]);
         api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>(bool)$bound,'imei_bound'=>(bool)($found && !empty($found['imei_hash'])),'display_name'=>$found['display_name']??null]+$quota);
     }
