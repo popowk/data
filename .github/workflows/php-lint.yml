@@ -48,3 +48,5 @@ jobs:
         run: php -r 'if (!extension_loaded("pdo_mysql")) {fwrite(STDERR,"pdo_mysql missing\n");exit(1);}'
       - name: Schema and account smoke test
         run: php tests/smoke.php
+      - name: HTTP API end-to-end smoke test
+        run: bash tests/api-smoke.sh
