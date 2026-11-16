@@ -23,7 +23,7 @@ function ai_settings(): array {
         'server_key_configured'=>ai_setting('api_key_ciphertext','')!==''
     ];
 }
-function ai_master_key(): string {
+function ai_master_key(bool $create=true): string {
     $path=APP_STORE.'/ai-master.key';
     if (is_link($path)) throw new RuntimeException('AI 主密钥文件不能是符号链接');
     if (is_file($path)) {
@@ -35,12 +35,19 @@ function ai_master_key(): string {
     $key=random_bytes(SODIUM_CRYPTO_SECRETBOX_KEYBYTES);
     $fp=@fopen($path,'x+b');
     if (!$fp) {
-        if (is_file($path)) return ai_master_key();
+        if (is_file($path)) return ai_master_key($create);
+        if (!$create) throw new RuntimeException('AI 主密钥文件丢失，禁止自动重建以免永久丢失原密钥');
         throw new RuntimeException('无法安全创建 AI 主密钥文件');
     }
     try {
-        if (fwrite($fp,$key)!==strlen($key) || !fflush($fp)) throw new RuntimeException('无法写入 AI 主密钥文件');
-        @chmod($path,0600);
+        if (fwrite($fp,$key)!==strlen($key) || !fflush($fp)) {
+            @unlink($path);
+            throw new RuntimeException('无法写入 AI 主密钥文件');
+        }
+        if (PHP_OS_FAMILY!=='Windows' && !chmod($path,0600)) {
+            @unlink($path);
+            throw new RuntimeException('无法将 AI 主密钥权限限制为仅服务器用户可读');
+        }
     } finally {fclose($fp);}
     return $key;
 }
@@ -57,7 +64,7 @@ function ai_decrypt_secret(string $encoded): string {
     if (!is_string($raw) || strlen($raw)<=SODIUM_CRYPTO_SECRETBOX_NONCEBYTES)
         throw new RuntimeException('AI 服务密钥密文格式错误');
     $nonce=substr($raw,0,SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
-    $plain=sodium_crypto_secretbox_open(substr($raw,SODIUM_CRYPTO_SECRETBOX_NONCEBYTES),$nonce,ai_master_key());
+    $plain=sodium_crypto_secretbox_open(substr($raw,SODIUM_CRYPTO_SECRETBOX_NONCEBYTES),$nonce,ai_master_key(false));
     if (!is_string($plain)) throw new RuntimeException('AI 服务密钥解密失败，请检查主密钥备份');
     return $plain;
 }
@@ -104,12 +111,14 @@ function ai_daily_usage(int $userId): int {
 }
 function api_ai_status(int $userId): never {
     $global=ai_settings();$user=ai_user_policy($userId);$used=ai_daily_usage($userId);
+    $serverUsable=$global['server_key_configured'];
+    if ($serverUsable) { try {$serverUsable=ai_server_secret()!=='';} catch(Throwable $e) {$serverUsable=false;} }
     $enabled=$global['enabled'] && $user['enabled'];
     $clientAllowed=$enabled && $global['client_key_enabled'] && $user['allow_client_key'];
     api_out([
         'ok'=>true,'enabled'=>$enabled,'provider'=>AI_DEFAULT_PROVIDER,'default_model'=>$global['model'],
-        'server_mode_available'=>$enabled && $global['server_key_configured'],
-        'server_key_configured'=>$global['server_key_configured'],
+        'server_mode_available'=>$enabled && $serverUsable,
+        'server_key_configured'=>$serverUsable,
         'client_key_allowed'=>$clientAllowed,
         'allowed_models'=>AI_ALLOWED_MODELS,
         'max_tokens'=>$global['max_tokens'],
@@ -123,11 +132,23 @@ function ai_reserve_request(int $userId,string $device,string $mode,string $mode
     $requestId=bin2hex(random_bytes(16));
     $pdo->beginTransaction();
     try {
-        client_sql('SELECT id FROM phonehub_users WHERE id=? FOR UPDATE',[$userId])->fetch();
+        $account=client_sql('SELECT ai_enabled,allow_client_ai_key,ai_daily_limit FROM phonehub_users WHERE id=? FOR UPDATE',[$userId])->fetch();
+        $globalEnabled=client_sql('SELECT setting_value FROM phonehub_ai_settings WHERE setting_key=? FOR UPDATE',['enabled'])->fetchColumn();
+        if (!$account || (int)$account['ai_enabled']!==1 || $globalEnabled!=='1') {
+            $pdo->rollBack();
+            api_problem('AI_DISABLED','当前账号未开放 AI 功能',403);
+        }
+        if ($mode==='client') {
+            $clientAllowed=client_sql('SELECT setting_value FROM phonehub_ai_settings WHERE setting_key=? FOR UPDATE',['client_key_enabled'])->fetchColumn();
+            if ($clientAllowed!=='1' || (int)$account['allow_client_ai_key']!==1) {
+                $pdo->rollBack();
+                api_problem('CLIENT_KEY_FORBIDDEN','管理员尚未允许此客户使用自带 API Key',403);
+            }
+        }
         $minute=(int)client_sql('SELECT COUNT(*) FROM phonehub_ai_usage WHERE user_id=? AND created_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 MINUTE)',[$userId])->fetchColumn();
         if ($minute >= $settings['requests_per_minute']) api_problem('AI_RATE_LIMIT','AI 请求过于频繁，请稍后重试',429);
         $daily=(int)client_sql('SELECT COUNT(*) FROM phonehub_ai_usage WHERE user_id=? AND created_at>=UTC_DATE()',[$userId])->fetchColumn();
-        if ($policy['daily_limit']<1 || $daily >= $policy['daily_limit']) api_problem('AI_DAILY_LIMIT','当前账号 AI 每日额度已用完',429);
+        if ((int)$account['ai_daily_limit']<1 || $daily >= (int)$account['ai_daily_limit']) api_problem('AI_DAILY_LIMIT','当前账号 AI 每日额度已用完',429);
         client_sql('INSERT INTO phonehub_ai_usage(request_id,user_id,device_id,mode,model,status,created_at) VALUES(?,?,?,?,?,"pending",UTC_TIMESTAMP())',
             [$requestId,$userId,$device,$mode,$model]);
         $pdo->commit();
