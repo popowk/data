@@ -16,6 +16,8 @@ jobs:
         run: find . -type f -name '*.php' -not -path './storage/*' -print0 | xargs -0 -n1 php -l
       - name: JavaScript syntax check
         run: node --check assets/app.js
+      - name: Simulate complete update, forced failure and rollback
+        run: php tests/updater-install-smoke.php
       - name: Validate version manifest
         run: php -r '$d=json_decode(file_get_contents("version.json"),true,512,JSON_THROW_ON_ERROR); if (!preg_match("/^\d+\.\d+\.\d+$/", $d["version"])) exit(1);'
       - name: Ed25519 release-signing and ZIP smoke test
