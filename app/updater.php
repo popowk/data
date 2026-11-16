@@ -10,6 +10,30 @@ const UPDATE_FILES = [
     'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','assets/app.css','assets/app.js'
 ];
 
+/**
+ * Fail before touching live files. The update catalog is an exact runtime
+ * manifest: optional files must be removed from UPDATE_FILES intentionally.
+ * TOKEN_PARSE checks PHP syntax without executing downloaded code.
+ */
+function update_validate_files(array $files): void {
+    foreach (UPDATE_FILES as $path) {
+        if (!array_key_exists($path,$files) || !is_string($files[$path]) || $files[$path]==='')
+            throw new RuntimeException('更新包缺少必要文件：'.$path);
+        if (strlen($files[$path])>2097152)
+            throw new RuntimeException('更新文件过大：'.$path);
+        if (str_ends_with($path,'.php')) {
+            if (!str_starts_with(ltrim($files[$path]),'<?php'))
+                throw new RuntimeException('PHP 更新文件不包含有效的 PHP 文件头：'.$path);
+            try { token_get_all($files[$path], TOKEN_PARSE); }
+            catch (ParseError $e) {
+                throw new RuntimeException('PHP 更新文件存在语法错误：'.$path.'（'.$e->getMessage().'）');
+            }
+        }
+    }
+    $manifest=json_decode($files['version.json'],true);
+    if (!is_array($manifest) || !is_string($manifest['version']??null))
+        throw new RuntimeException('更新包 version.json 格式错误');
+}
 function update_download(string $destination): void {
     if (!extension_loaded('curl') || !extension_loaded('zip')) throw new RuntimeException('请在 PHP 中启用 curl 与 zip 扩展');
     $url=UPDATE_ARCHIVE;
@@ -65,7 +89,7 @@ function update_archive(): array {
             $files=[];
             foreach (UPDATE_FILES as $path) {
                 $index=$zip->locateName($prefix.$path);
-                if ($index===false) continue;
+                if ($index===false) throw new RuntimeException('更新包缺少清单文件：'.$path);
                 $stat=$zip->statIndex($index);
                 if (($stat['size']??0)>2097152) throw new RuntimeException('更新文件大小异常');
                 if ($zip->getExternalAttributesIndex($index,$opsys,$attrs) && $opsys===ZipArchive::OPSYS_UNIX) {
@@ -76,9 +100,7 @@ function update_archive(): array {
                 if ($bytes===false) throw new RuntimeException('ZIP 文件读取失败');
                 $files[$path]=$bytes;
             }
-            foreach (['index.php','install.php','app/core.php','app/accounts.php','app/updater.php','version.json'] as $must) {
-                if (!isset($files[$must])) throw new RuntimeException('更新包缺少必要文件：'.$must);
-            }
+            update_validate_files($files);
             $version=json_decode($files['version.json'],true);
             $number=(string)($version['version']??'');
             if (!preg_match('/^\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?$/D',$number)) throw new RuntimeException('远端版本号格式不正确');
