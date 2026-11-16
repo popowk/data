@@ -190,7 +190,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         if (!$release) api_problem('RELEASE_NOT_FOUND','更新包不存在或已停用',404);
         api_require_release_permission($release,$session);
         $path=release_store().'/'.$release['storage_name'];
-        if (!preg_match('/^[0-9a-f]{40}\.zip$/D',(string)$release['storage_name']) || !is_file($path)
+        if (!preg_match('/^[0-9a-f]{40}\.zip$/D',(string)$release['storage_name']) || is_link($path) || !is_file($path)
             || (int)filesize($path)!==(int)$release['size_bytes'])
             api_problem('FILE_UNAVAILABLE','更新文件暂不可用',503);
         // Hash file again before sending to protect against local file corruption.
@@ -206,8 +206,10 @@ function api_extra(string $action,array $input,array $session,int $userId): void
                 api_problem('INVALID_RANGE','只支持单段 bytes=start-end 下载',416);
             $from=(int)$matches[1];
             $to=$matches[2]===''?$total-1:(int)$matches[2];
-            if ($from>=$total || $to>=$total-1 || $to<$from)
+            if ($from>=$total || $to>=$total || $to<$from) {
+                header('Content-Range: bytes */'.$total);
                 api_problem('INVALID_RANGE','下载范围超过文件长度',416);
+            }
             http_response_code(206);
             header('Content-Range: bytes '.$from.'-'.$to.'/'.$total);
         }
