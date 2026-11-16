@@ -17,7 +17,7 @@ adminHtml=$(mktemp)
 adminCookies=$(mktemp)
 curl -fsS -c "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
 grep -q '登录管理后台' "$adminHtml"
-CSRF=$(python3 -c 'import sys,re,html; s=open(sys.argv[1],encoding="utf-8").read(); m=re.search(r"<meta name=\\"csrf\\" content=\\"([^\\"]+)\\"",s); assert m; print(html.unescape(m.group(1)))' "$adminHtml")
+CSRF=$(python3 -c 'import re,sys; s=open(sys.argv[1],encoding="utf-8").read(); m=re.search(r"name=.csrf. content=.([0-9a-f]{64}).",s); assert m; print(m.group(1))' "$adminHtml")
 adminLogin=$(curl -fsS -b "$adminCookies" -c "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=login" \
   --data-urlencode "username=ci_ai_owner" --data-urlencode "password=ci-owner-test-123456")
