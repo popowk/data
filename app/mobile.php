@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /**
  * Mobile identity helpers.
- * Raw IMEI is accepted only over HTTPS, normalized and immediately converted to
+ * Callers must submit raw IMEI only over HTTPS; it is normalized and immediately converted to
  * a deployment-keyed HMAC. It is never stored or returned.
  */
 function mobile_identity_db_sql(string $statement,array $params=[]): PDOStatement {
