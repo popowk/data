@@ -115,6 +115,8 @@
       'admin-toggle':['admin_toggle',{id},true],
       'admin-delete':['admin_delete',{id},true],
       'mobile-revoke':['mobile_revoke',{id},true],
+      'release-toggle':['release_toggle',{id},true],
+      'logs-purge':['logs_purge',{days:30},true],
       'gateway-install':['gateway_install',{},true]
     };
     if(!map[action])return;
