@@ -16,6 +16,8 @@ jobs:
         run: find . -type f -name '*.php' -not -path './storage/*' -print0 | xargs -0 -n1 php -l
       - name: JavaScript syntax check
         run: node --check assets/app.js
+      - name: Test CLI backup creation and isolated recovery
+        run: bash tests/backup-cli-smoke.sh
       - name: Test encrypted backup roundtrip and offline restore
         run: php tests/backup-crypto-smoke.php
       - name: Verify pinned server update signatures and tamper rejection
