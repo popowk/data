@@ -23,6 +23,8 @@ jobs:
       - name: Verify updater's strict mirror download
         run: |
           php -r 'require "app/core.php"; require "app/updater.php"; $f=tempnam("storage","ci-"); try {update_download($f); $z=new ZipArchive; if ($z->open($f)!==true) exit(1); echo "PHP updater download: ".$z->numFiles." files\n";$z->close();} finally {@unlink($f);}'
+      - name: Validate self-update archive contents
+        run: php tests/updater-smoke.php
       - name: Probe China mirror ZIP endpoint (informational)
         continue-on-error: true
         run: |
