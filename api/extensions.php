@@ -50,11 +50,14 @@ function api_extra(string $action,array $input,array $session,int $userId): void
     if (in_array($action,['license_status','capabilities','client_config','client_heartbeat'],true)) {
         $quota=api_mobile_quota($userId);
         $permitted=json_decode((string)$session['entitlements'],true)?:[];
+        $account=client_sql('SELECT device_limit FROM phonehub_users WHERE id=?',[$userId])->fetch();
+        $pcUsed=(int)client_sql('SELECT COUNT(DISTINCT device_id) FROM phonehub_sessions WHERE user_id=? AND expires_at>UTC_TIMESTAMP()',[$userId])->fetchColumn();
         api_out([
             'ok'=>true,'username'=>$session['username'],'server_time'=>time(),
             'session_expires_at'=>strtotime($session['expires_at'].' UTC'),
             'license_until'=>$session['license_until'],'entitlements'=>$permitted,
             'mobile'=>$quota,
+            'computer'=>['device_limit'=>(int)($account['device_limit']??0),'used'=>$pcUsed],
             'features'=>[
                 'mobile_bind'=>true,'mobile_unbind'=>true,'package_requires_mobile_binding'=>true,
                 'update_check'=>true,'update_download'=>true,'log_batch'=>true,'device_list'=>true,'device_revoke'=>true
@@ -110,7 +113,18 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         api_out(['ok'=>true,'package_id'=>$id,'version'=>(int)$row['version'],
             'mobile_required'=>true,'download_allowed'=>$quota['mobile_limit']>0 && $quota['active_count']>0]+$quota);
     }
-    if ($action==='update_check' || $action==='update_manifest') {
+    if ($action==='update_list') {
+        try {
+            $platform=release_platform((string)($input['platform']??'core'));
+            $channel=release_channel((string)($input['channel']??'stable'));
+        } catch(Throwable $e) {api_problem('INVALID_PARAMETER',$e->getMessage());}
+        $allowed=json_decode((string)$session['entitlements'],true)?:[];
+        if ($platform!=='core' && !in_array($platform,$allowed,true)) api_problem('NOT_ENTITLED','未授权此更新目标',403);
+        $rows=client_sql('SELECT * FROM phonehub_releases WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC LIMIT 30',[$platform,$channel])->fetchAll();
+        usort($rows,static fn($a,$b)=>version_compare($b['version'],$a['version']));
+        api_out(['ok'=>true,'releases'=>array_map('public_release',$rows)]);
+    }
+        if ($action==='update_check' || $action==='update_manifest') {
         try {
             $platform=release_platform((string)($input['platform']??'core'));
             $channel=release_channel((string)($input['channel']??'stable'));
@@ -141,20 +155,41 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         header_remove('Content-Type');
         header('Content-Type: application/zip');
         header('Content-Disposition: attachment; filename="'.str_replace('"','',(string)$release['filename']).'"');
-        header('Content-Length: '.(int)$release['size_bytes']);
+        $total=(int)$release['size_bytes'];
+        $from=0;$to=$total-1;$range=(string)($_SERVER['HTTP_RANGE']??'');
+        if ($range!=='') {
+            if (!preg_match('/^bytes=([0-9]+)-([0-9]*)$/D',$range,$matches))
+                api_problem('INVALID_RANGE','只支持单段 bytes=start-end 下载',416);
+            $from=(int)$matches[1];
+            $to=$matches[2]===''?$total-1:(int)$matches[2];
+            if ($from>=$total || $to>=$total-1 || $to<$from)
+                api_problem('INVALID_RANGE','下载范围超过文件长度',416);
+            http_response_code(206);
+            header('Content-Range: bytes '.$from.'-'.$to.'/'.$total);
+        }
+        header('Content-Length: '.($to-$from+1));
         header('Cache-Control: no-store');
-        header('Accept-Ranges: none');
+        header('Accept-Ranges: bytes');
         $fp=fopen($path,'rb');
         if (!$fp) api_problem('FILE_UNAVAILABLE','更新文件无法打开',503);
-        while(!feof($fp)) {
-            $buffer=fread($fp,65536);
-            if ($buffer===false) break;
+        if ($from>0 && fseek($fp,$from)!==0) {fclose($fp);exit;}
+        $remaining=$to-$from+1;
+        while($remaining>0 && !feof($fp)) {
+            $buffer=fread($fp,min(65536,$remaining));
+            if ($buffer===false || $buffer==='') break;
             echo $buffer;
+            $remaining-=strlen($buffer);
             if (connection_aborted()) break;
         }
         fclose($fp);exit;
     }
-    if ($action==='log_batch') {
+    if ($action==='log_upload') {
+        $used=(int)client_sql('SELECT COUNT(*) FROM phonehub_client_logs WHERE user_id=? AND created_at>DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 HOUR)',[$userId])->fetchColumn();
+        if ($used>=1000) api_problem('LOG_RATE_LIMIT','日志已达到每小时 1000 条上限',429);
+        api_log_entry($input,$userId,$device);
+        api_out(['ok'=>true,'received'=>1]);
+    }
+        if ($action==='log_batch') {
         $records=$input['logs']??null;
         if (!is_array($records) || !array_is_list($records) || count($records)<1 || count($records)>50)
             api_problem('INVALID_LOG_BATCH','每批次需上传 1–50 条日志');
