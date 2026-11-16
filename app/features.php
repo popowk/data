@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__.'/mobile.php';
 
 function feature_action(string $action): never {
     require_admin();
@@ -70,7 +71,7 @@ function feature_action(string $action): never {
                 $set[]='u.license_until=?';$params[]=input_to_utc(trim((string)($_POST['license_until']??'')));
             } elseif ($f==='entitlements') {
                 $v=(array)($_POST['entitlements']??[]);
-                if (array_diff($v,['douyin','xiaohongshu'])) throw new RuntimeException('未知平台授权');
+                if (array_diff($v,['douyin','xiaohongshu','mcp','skill'])) throw new RuntimeException('未知平台或扩展授权');
                 $set[]='u.entitlements=?';$params[]=json_encode(array_values(array_unique($v)),JSON_UNESCAPED_UNICODE);
             }
         }
@@ -96,16 +97,62 @@ function feature_action(string $action): never {
         $name=trim((string)($_POST['display_name']??''));
         if ($user<1 || !preg_match('/^[a-f0-9]{64}$/D',$fingerprint)) throw new RuntimeException('请选择客户并输入 64 位手机设备指纹');
         if (utf8_length($name)>120) throw new RuntimeException('手机备注过长');
+        $imeiHash=mobile_imei_hash((string)($_POST['imei']??''));
         db()->beginTransaction();
         $u=sql('SELECT u.id,u.enabled,COALESCE(m.mobile_limit,0) AS mobile_limit FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.id=? FOR UPDATE',[$user])->fetch();
         if (!$u || !(int)$u['enabled']) throw new RuntimeException('客户不存在或已停用');
-        $existing=sql('SELECT id,enabled FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$user,$fingerprint])->fetch();
+        if (mobile_blacklist_match(db(),$fingerprint,$imeiHash)) throw new RuntimeException('该手机指纹或 IMEI 已在设备黑名单中');
+        $existing=sql('SELECT id,enabled,imei_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=? FOR UPDATE',[$user,$fingerprint])->fetch();
+        if ($existing && $imeiHash!==null && !empty($existing['imei_hash']) && !hash_equals((string)$existing['imei_hash'],$imeiHash))
+            throw new RuntimeException('该手机指纹已绑定不同 IMEI，请先由主管理员核对设备');
+        if ($imeiHash!==null) {
+            $other=sql('SELECT id FROM phonehub_mobile_devices WHERE imei_hash=? AND enabled=1 AND NOT(user_id=? AND phone_id=?) LIMIT 1 FOR UPDATE',[$imeiHash,$user,$fingerprint])->fetch();
+            if ($other) throw new RuntimeException('该 IMEI 已绑定其他手机记录');
+        }
         $active=(int)sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$user])->fetchColumn();
         if ((!$existing || !(int)$existing['enabled']) && $active>=(int)$u['mobile_limit']) throw new RuntimeException('已达到客户安卓手机授权上限');
-        sql('INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,enabled,last_seen) VALUES(?,?,?,1,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),enabled=1,last_seen=UTC_TIMESTAMP()',[$user,$fingerprint,$name]);
-        audit('mobile_add','user='.$user.' id='.substr($fingerprint,0,10));
+        sql('INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,imei_hash,enabled,last_seen) VALUES(?,?,?,?,1,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),imei_hash=COALESCE(VALUES(imei_hash),imei_hash),enabled=1,last_seen=UTC_TIMESTAMP()',[$user,$fingerprint,$name,$imeiHash]);
+        audit('mobile_add','user='.$user.' id='.substr($fingerprint,0,10).' imei='.(($imeiHash!==null)?'bound':'unavailable'));
         db()->commit();
-        json_response(['ok'=>true,'message'=>'安卓手机已绑定']);
+        json_response(['ok'=>true,'message'=>'安卓手机已绑定','imei_bound'=>$imeiHash!==null || !empty($existing['imei_hash'])]);
+    }
+    if ($action==='mobile_blacklist') {
+        require_owner();
+        if ($id<1) throw new RuntimeException('手机记录无效');
+        $reason=trim((string)($_POST['reason']??'管理员手动拉黑'));
+        if (utf8_length($reason)>255) throw new RuntimeException('拉黑原因不能超过 255 字');
+        db()->beginTransaction();
+        $record=sql('SELECT id,phone_id,imei_hash FROM phonehub_mobile_devices WHERE id=? FOR UPDATE',[$id])->fetch();
+        if (!$record) throw new RuntimeException('绑定记录不存在');
+        $identifiers=[['phone_id',(string)$record['phone_id']]];
+        if (!empty($record['imei_hash'])) $identifiers[]=['imei_hash',(string)$record['imei_hash']];
+        foreach($identifiers as [$type,$hash]) {
+            sql('INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by,created_at) VALUES(?,?,?,1,?,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE reason=VALUES(reason),enabled=1,created_by=VALUES(created_by),created_at=UTC_TIMESTAMP()',
+                [$type,$hash,$reason,admin_id()]);
+        }
+        $sql='UPDATE phonehub_mobile_devices SET enabled=0 WHERE phone_id=?';
+        $params=[(string)$record['phone_id']];
+        if (!empty($record['imei_hash'])) {$sql.=' OR imei_hash=?';$params[]=(string)$record['imei_hash'];}
+        sql($sql,$params);
+        audit('mobile_blacklist','record='.$id.' identifiers='.count($identifiers));
+        db()->commit();
+        json_response(['ok'=>true,'message'=>'设备已拉黑，匹配的手机绑定已全部停用']);
+    }
+    if ($action==='mobile_unblacklist') {
+        require_owner();
+        if ($id<1) throw new RuntimeException('黑名单记录无效');
+        $record=sql('SELECT id,identifier_type,identifier_hash FROM phonehub_mobile_blacklist WHERE id=? AND enabled=1',[$id])->fetch();
+        if (!$record) throw new RuntimeException('黑名单记录不存在或已解除');
+        sql('UPDATE phonehub_mobile_blacklist SET enabled=0 WHERE id=?',[$id]);
+        audit('mobile_unblacklist',$record['identifier_type'].'='.substr($record['identifier_hash'],0,12));
+        json_response(['ok'=>true,'message'=>'已解除该条黑名单；设备绑定不会自动恢复']);
+    }
+    if ($action==='cloud_features_save') {
+        require_owner();
+        $values=['mcp_enabled'=>isset($_POST['mcp_enabled'])?'1':'0','skill_enabled'=>isset($_POST['skill_enabled'])?'1':'0'];
+        foreach($values as $key=>$value) sql('INSERT INTO phonehub_feature_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)',[$key,$value]);
+        audit('cloud_features_save','mcp='.$values['mcp_enabled'].', skill='.$values['skill_enabled']);
+        json_response(['ok'=>true,'message'=>'客户端扩展总开关已保存']);
     }
     if ($action==='mobile_revoke') {
         if ($id<1) throw new RuntimeException('手机记录无效');
@@ -156,16 +203,37 @@ function feature_view(string $view): void {
         <p class="muted">修改电脑数量、账号状态、期限或平台权限时，为确保立即生效，会撤销该分组现有电脑会话；客户需要重新登录。</p>
         <button class="btn primary" data-confirm-submit="此操作将批量修改该分组全部客户的所选字段，是否继续？">批量保存配置</button></form></div><?php
     } elseif ($view==='mobiles') {
-        $phones=sql("SELECT p.id,p.phone_id,p.display_name,p.enabled,p.last_seen,p.created_at,u.username FROM phonehub_mobile_devices p JOIN phonehub_users u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 500")->fetchAll();
+        $phones=sql("SELECT p.id,p.phone_id,p.imei_hash,p.display_name,p.enabled,p.last_seen,p.created_at,u.username,
+          EXISTS(SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND
+            ((b.identifier_type='phone_id' AND b.identifier_hash=p.phone_id) OR
+             (b.identifier_type='imei_hash' AND p.imei_hash IS NOT NULL AND b.identifier_hash=p.imei_hash))) AS blacklisted
+          FROM phonehub_mobile_devices p JOIN phonehub_users u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 500")->fetchAll();
         $users=sql("SELECT u.id,u.username,COALESCE(m.mobile_limit,0) AS mobile_limit FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id ORDER BY u.username")->fetchAll();
-        ?><div class="page-title"><div><h1>安卓手机绑定</h1><p>已绑定至少一台启用的安卓手机且额度大于零，才可下载平台操作包</p></div></div>
+        $blacklist=sql("SELECT id,identifier_type,identifier_hash,reason,created_at FROM phonehub_mobile_blacklist WHERE enabled=1 ORDER BY id DESC LIMIT 200")->fetchAll();
+        $isOwner=(string)sql('SELECT role FROM phonehub_admins WHERE id=?',[admin_id()])->fetchColumn()==='owner';
+        ?><div class="page-title"><div><h1>安卓手机绑定与黑名单</h1><p>设备指纹为主标识，IMEI 仅在客户端依法可读取时作为辅助校验；拉黑后立即停用匹配设备</p></div></div>
         <div class="card"><div class="card-head"><h2>管理员手工绑定设备</h2></div><form data-ajax="mobile_add"><input type="hidden" name="action" value="mobile_add">
         <div class="form-grid"><div class="field"><label>客户</label><select required name="user_id"><option value="">选择客户</option><?php foreach($users as $u): ?><option value="<?=(int)$u['id']?>"><?=h($u['username'])?>（手机额度 <?=(int)$u['mobile_limit']?>）</option><?php endforeach ?></select></div>
         <div class="field"><label>手机名称</label><input name="display_name" maxlength="120" placeholder="例如：客户安卓手机"></div>
-        <div class="field span2"><label>手机设备指纹（SHA-256，64位小写十六进制）</label><input name="phone_id" required pattern="[a-fA-F0-9]{64}" placeholder="由客户端提供，不使用手机号或IMEI"></div></div><button class="btn primary">绑定手机</button></form>
-        <p class="footnote">推荐由适配后的 PhoneHub 客户端通过 mobile_bind 自动提交绑定；没有可信客户端设备证明时，设备指纹只能作为授权标识，并不能构成强硬件防伪。</p></div>
-        <div class="card"><div class="card-head"><h2>设备绑定记录</h2><span class="count">最近 500 条</span></div><div class="table-scroll"><table><thead><tr><th>客户</th><th>备注</th><th>手机指纹</th><th>状态</th><th>最近绑定/使用</th><th>操作</th></tr></thead><tbody>
-        <?php foreach($phones as $p): ?><tr><td><?=h($p['username'])?></td><td><?=h($p['display_name'])?></td><td><code title="<?=h($p['phone_id'])?>"><?=h(substr($p['phone_id'],0,16))?>…</code></td><td><span class="pill <?=(int)$p['enabled']?'ok':'off'?>"><?=(int)$p['enabled']?'已绑定':'已撤销'?></span></td><td><?=h(utc_to_cn($p['last_seen']?:$p['created_at']))?></td><td><?php if((int)$p['enabled']): ?><button class="small-link" data-action="mobile-revoke" data-id="<?=(int)$p['id']?>">解绑</button><?php endif ?></td></tr><?php endforeach ?></tbody></table></div></div><?php
+        <div class="field"><label>手机设备指纹（SHA-256，64位）</label><input name="phone_id" required pattern="[a-fA-F0-9]{64}" placeholder="客户端生成的稳定设备指纹"></div>
+        <div class="field"><label>IMEI（可选，14–16位数字）</label><input name="imei" inputmode="numeric" maxlength="16" pattern="[0-9]{14,16}" placeholder="服务器仅保存 HMAC 摘要"></div></div><button class="btn primary">绑定手机</button></form>
+        <p class="footnote">原始 IMEI 只通过 HTTPS 提交并立即转换为服务器 HMAC 摘要，不保存明文。请备份 storage/mobile-identity.key；丢失后原有 IMEI 摘要无法再匹配。普通 Android 应用在 Android 10+ 通常无权读取 IMEI，不能为此申请或绕过特权权限。</p></div>
+        <div class="card"><div class="card-head"><h2>设备绑定记录</h2><span class="count">最近 500 条</span></div><div class="table-scroll"><table><thead><tr><th>客户</th><th>备注</th><th>手机指纹</th><th>IMEI 摘要</th><th>状态</th><th>最近使用</th><th>操作</th></tr></thead><tbody>
+        <?php foreach($phones as $p): ?><tr><td><?=h($p['username'])?></td><td><?=h($p['display_name'])?></td><td><code title="<?=h($p['phone_id'])?>"><?=h(substr($p['phone_id'],0,16))?>…</code></td><td><?=!empty($p['imei_hash'])?'<code>'.h(substr($p['imei_hash'],0,12)).'…</code>':'<span class="muted">未获取</span>'?></td><td><span class="pill <?=((int)$p['blacklisted'])?'off':((int)$p['enabled']?'ok':'off')?>"><?=(int)$p['blacklisted']?'已拉黑':((int)$p['enabled']?'已绑定':'已解绑')?></span></td><td><?=h(utc_to_cn($p['last_seen']?:$p['created_at']))?></td><td><?php if((int)$p['enabled']): ?><button class="small-link" data-action="mobile-revoke" data-id="<?=(int)$p['id']?>">解绑</button><?php endif ?><?php if($isOwner && !(int)$p['blacklisted']): ?><button class="small-link" data-action="mobile-blacklist" data-id="<?=(int)$p['id']?>">拉黑</button><?php endif ?></td></tr><?php endforeach ?></tbody></table></div></div>
+        <div class="card"><div class="card-head"><h2>设备黑名单</h2><span class="count">最近 200 条有效记录</span></div><div class="table-scroll"><table><thead><tr><th>标识类型</th><th>摘要</th><th>拉黑原因</th><th>时间</th><th>操作</th></tr></thead><tbody>
+        <?php foreach($blacklist as $b): ?><tr><td><?=h($b['identifier_type']==='imei_hash'?'IMEI 摘要':'手机指纹')?></td><td><code><?=h(substr($b['identifier_hash'],0,16))?>…</code></td><td><?=h($b['reason'])?></td><td><?=h(utc_to_cn($b['created_at']))?></td><td><?php if($isOwner): ?><button class="small-link" data-action="mobile-unblacklist" data-id="<?=(int)$b['id']?>">解除拉黑</button><?php else: ?><span class="muted">仅主管理员可操作</span><?php endif ?></td></tr><?php endforeach ?></tbody></table></div></div><?php
+    } elseif ($view==='cloud_features') {
+        require_owner();
+        $rows=sql('SELECT setting_key,setting_value FROM phonehub_feature_settings')->fetchAll();
+        $flags=[];foreach($rows as $row)$flags[$row['setting_key']]=$row['setting_value']==='1';
+        $mcp=!empty($flags['mcp_enabled']);$skill=!empty($flags['skill_enabled']);
+        ?><div class="page-title"><div><h1>客户端能力控制</h1><p>MCP 与 Skill 由云端统一开关；默认关闭，开启后仍须给客户单独授权并发布对应版本</p></div></div>
+        <div class="card"><form data-ajax="cloud_features_save"><input type="hidden" name="action" value="cloud_features_save">
+        <div class="form-grid">
+          <div class="field"><label>MCP 云端总开关</label><label class="check-row"><input type="checkbox" name="mcp_enabled" <?=$mcp?'checked':''?>> <?=$mcp?'允许已授权客户获取 MCP':'全局禁用 MCP'?></label><span class="footnote">关闭后，MCP 版本查询与下载均被服务端拒绝。</span></div>
+          <div class="field"><label>Skill 云端总开关</label><label class="check-row"><input type="checkbox" name="skill_enabled" <?=$skill?'checked':''?>> <?=$skill?'允许已授权客户获取 Skill':'全局禁用 Skill'?></label><span class="footnote">关闭后，Skill 版本查询与下载均被服务端拒绝。</span></div>
+        </div><div class="editor-actions"><button class="btn primary">保存云端开关</button></div></form></div>
+        <div class="card"><h2>开放条件</h2><p class="muted">客户必须同时满足：对应全局开关开启、客户授权中勾选 MCP/Skill、对应签名版本已发布且启用、客户账号有效。新客户默认不授予 MCP/Skill。关闭总开关不会删除客户授权或已发布文件，只会立即阻止后续查询与下载。</p></div><?php
     } elseif($view==='gateway') {
         require_owner();
         require_once __DIR__.'/gateway.php';
