@@ -72,6 +72,7 @@ function feature_action(string $action): never {
             } elseif ($f==='entitlements') {
                 $v=(array)($_POST['entitlements']??[]);
                 if (array_diff($v,['douyin','xiaohongshu','mcp','skill'])) throw new RuntimeException('未知平台或扩展授权');
+                if (array_intersect($v,['mcp','skill'])) require_owner();
                 $set[]='u.entitlements=?';$params[]=json_encode(array_values(array_unique($v)),JSON_UNESCAPED_UNICODE);
             }
         }
