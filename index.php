@@ -52,6 +52,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $mobile=(int)($_POST['mobile_limit'] ?? 1);
             $aiEnabled=isset($_POST['ai_enabled'])?1:0;
             $allowClientAiKey=isset($_POST['allow_client_ai_key'])?1:0;
+            if ($allowClientAiKey) {
+                $alreadyAllowed=$id?(int)sql('SELECT allow_client_ai_key FROM phonehub_users WHERE id=?',[$id])->fetchColumn():0;
+                if (!$alreadyAllowed) require_owner();
+            }
             $aiDailyLimit=(int)($_POST['ai_daily_limit']??100);
             if ($aiDailyLimit<0 || $aiDailyLimit>5000) throw new RuntimeException('AI 每日请求额度必须为 0–5000');
             if ($allowClientAiKey && !$aiEnabled) throw new RuntimeException('关闭 AI 功能时不能单独开放客户端自带 Key');
