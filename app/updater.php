@@ -4,8 +4,8 @@ declare(strict_types=1);
 const UPDATE_ARCHIVE = 'https://git.wksite.cn/popowk/data/archive/refs/heads/main.zip';
 const UPDATE_MAX_BYTES = 16777216;
 const UPDATE_FILES = [
-    'index.php','install.php','version.json','README.md','.htaccess',
-    'app/core.php','app/updater.php','app/features.php','app/gateway.php',
+    'index.php','install.php','version.json','.htaccess',
+    'app/core.php','app/accounts.php','app/updater.php','app/features.php','app/gateway.php',
     'app/releases.php','app/release_admin.php','app/ai.php','app/mobile.php',
     'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','assets/app.css','assets/app.js'
 ];
