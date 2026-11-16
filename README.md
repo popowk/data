@@ -45,7 +45,7 @@
 ## Web 安全
 
 - 生产站点**务必使用 HTTPS**。
-- 对 `storage/` 禁止所有 HTTP 访问；Apache 可使用仓库随附 `storage/.htaccess`，若用宝塔/Nginx，请在站点配置增加 `location ^~ /license/storage/ { deny all; }`（按实际安装路径修改），防止备份等文件被访问。
+- 对 `storage/` 禁止所有 HTTP 访问；Apache 可使用仓库随附 `storage/.htaccess`，若用宝塔/Nginx，请把仓库 `deploy/nginx-license-storage.conf` 中的规则加入 HTTPS `server {}` 块（按实际安装路径修改），防止备份、AI 主密钥、签名私钥及更新包被直接访问。
 - 确保 PHP 源码由 PHP-FPM 执行，不得作为静态文本下载。
 - 建议针对管理入口限制 IP 或再加 WAF，定期备份数据库；管理员密码至少 12 字节。
 - 将前端目录与当前已有 `/phonehub/api.php` 分开；**不要覆盖已有客户端 API**。
