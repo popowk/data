@@ -24,6 +24,8 @@ $pdo->prepare("INSERT INTO phonehub_admins(username,password_hash,role,enabled,a
     ->execute(['ci_ai_owner',$hash??password_hash_safe('ci-owner-test-123456')]);
 $ownerId=(int)$pdo->lastInsertId();
 $_SESSION['admin_id']=$ownerId;$_SESSION['auth_version']=1;$_SESSION['admin_user']='ci_ai_owner';
+$saved=ai_save_settings(['enabled'=>'1','model'=>'deepseek-flash','max_tokens'=>'4096','requests_per_minute'=>'10']);
+if (!($saved['server_key_configured']===false)) throw new RuntimeException('AI settings save result incorrect');
 $settings=ai_settings();
 if (!$settings['enabled'] || $settings['model']!=='deepseek-flash' || $settings['client_key_enabled'] || $settings['server_key_configured'])
     throw new RuntimeException('AI default settings incorrect');
