@@ -14,7 +14,7 @@ function api_out(array $data,int $status=200): never {
 }
 function api_error(string $message,int $code=400): never {api_out(['ok'=>false,'error'=>$message],$code);}
 try {
-    if (($_GET['action']??'health')==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true]);
+    if (($_GET['action']??'health')==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true,'imei_binding'=>'optional_hmac']);
     $action=(string)($_GET['action']??'health');
     if (($_SERVER['REQUEST_METHOD']??'GET')!=='POST') api_error('仅支持 POST',405);
     if (isset($_SERVER['HTTP_ORIGIN'])) api_error('请通过 PhoneHub 客户端操作',403);
@@ -130,7 +130,12 @@ try {
         api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>true,'imei_bound'=>$imeiHash!==null || !empty($existing['imei_hash']),'mobile_limit'=>$limit,'active_count'=>$active]);
     }
     if ($action==='mobile_list') {
-        $devices=client_sql('SELECT phone_id,display_name,created_at,last_seen,CASE WHEN imei_hash IS NULL THEN 0 ELSE 1 END AS imei_bound FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1 ORDER BY id',[$userId])->fetchAll();
+        $devices=client_sql("SELECT d.phone_id,d.display_name,d.created_at,d.last_seen,CASE WHEN d.imei_hash IS NULL THEN 0 ELSE 1 END AS imei_bound
+            FROM phonehub_mobile_devices d WHERE d.user_id=? AND d.enabled=1
+            AND NOT EXISTS (SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND
+              ((b.identifier_type='phone_id' AND b.identifier_hash=d.phone_id) OR
+               (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash)))
+            ORDER BY d.id",[$userId])->fetchAll();
         $limit=(int)client_sql('SELECT COALESCE(m.mobile_limit,0) FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetchColumn();
         api_out(['ok'=>true,'mobile_limit'=>$limit,'active_count'=>count($devices),'devices'=>$devices]);
     }
