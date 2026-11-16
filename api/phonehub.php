@@ -122,14 +122,27 @@ try {
         $id=(string)($input['package_id']??'douyin');
         if (!preg_match('/^[a-z0-9-]{1,32}$/D',$id) ||
             !in_array($id,(array)json_decode((string)$session['entitlements'],true),true)) api_error('没有此操作包的授权',403);
-        $meta=client_sql('SELECT COALESCE(m.mobile_limit,0) AS mobile_limit FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetch();
-        $bound=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
-        if ((int)($meta['mobile_limit']??0)<1 || $bound<1)
-            api_error('请先绑定已授权的安卓手机，再下载操作包',403);
-        $package=client_sql('SELECT envelope,content_key FROM phonehub_packages WHERE package_id=? AND enabled=1 ORDER BY version DESC LIMIT 1',[$id])->fetch();
-        if (!$package) api_error('此平台操作包尚未上架',404);
-        client_sql('INSERT INTO phonehub_package_downloads(user_id,package_id,device_id,downloaded_at) VALUES(?,?,?,UTC_TIMESTAMP())',
-            [$userId,$id,$session['device_id']]);
+        $pdo->beginTransaction();
+        try {
+            client_sql('SELECT id FROM phonehub_users WHERE id=? FOR UPDATE',[$userId])->fetch();
+            $meta=client_sql('SELECT COALESCE(m.mobile_limit,0) AS mobile_limit FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetch();
+            $bound=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
+            if ((int)($meta['mobile_limit']??0)<1 || $bound<1) {
+                $pdo->rollBack();
+                api_error('请先绑定已授权的安卓手机，再下载操作包',403);
+            }
+            $package=client_sql('SELECT envelope,content_key FROM phonehub_packages WHERE package_id=? AND enabled=1 ORDER BY version DESC LIMIT 1',[$id])->fetch();
+            if (!$package) {
+                $pdo->rollBack();
+                api_error('此平台操作包尚未上架',404);
+            }
+            client_sql('INSERT INTO phonehub_package_downloads(user_id,package_id,device_id,downloaded_at) VALUES(?,?,?,UTC_TIMESTAMP())',
+                [$userId,$id,$session['device_id']]);
+            $pdo->commit();
+        } catch(Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
+        }
         api_out(['ok'=>true,'envelope'=>json_decode((string)$package['envelope'],true),'content_key'=>$package['content_key']]);
     }
     api_error('未知接口',404);
