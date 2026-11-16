@@ -70,6 +70,8 @@ Authorization: Bearer <登录令牌>
 | update_download | release_id | ZIP 二进制，支持 HTTP 单段 Range |
 | log_upload | level, event, message | received:1 |
 | log_batch | logs 数组 | received:本批数量 |
+| ai_status | 无 | AI 是否开放、服务器模式/BYOK 状态与额度；不返回密钥 |
+| ai_chat | credential_mode, messages 等 | 非流式 DeepSeek 兼容 Chat Completions JSON |
 
 除 login 和 health 外，以上表格省略了每个 JSON 请求都必填的 device_id。未知 action 返回 404。
 
@@ -120,7 +122,7 @@ MCP 与 Skill 均默认关闭，采用双层授权：
 2. 主管理员在客户授权中单独授予 `mcp` 或 `skill`。
 3. 对应签名更新包必须已发布且处于启用状态。
 
-客户端通过 `license_status`/`capabilities` 响应中的 `features.mcp_available`、`features.skill_available` 判断是否开放。MCP/Skill 可使用 `update_check`、`update_list`、`update_download`，平台字段分别为 `mcp`、`skill`。全局开关关闭时，版本查询与下载均返回 `FEATURE_DISABLED`；即使客户有单独授权也不能绕过。新客户默认不会获得这两项授权。
+客户端通过 `license_status`/`capabilities` 响应中的 `features.mcp_available`、`features.skill_available` 判断是否开放。MCP/Skill 可使用 `update_check`、`update_list`、`update_download`，平台字段分别为 `mcp`、`skill`。全局开关关闭时，版本查询与下载均返回 `FEATURE_DISABLED`；即使客户有单独授权也不能绕过。新客户默认不会获得这两项授权。 已经下载到客户设备的本地文件无法由服务器远程擦除；桌面 APP 必须定期查询 `license_status`/`capabilities`，并在对应 `*_available=false` 时停止本地 MCP/Skill 调用。离线客户端只能在下次联网校验时收到撤销状态。
 
 ## 四、客户端核心更新（独立于操作包）
 
