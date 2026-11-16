@@ -118,7 +118,7 @@ function api_ai_status(int $userId): never {
         'daily_remaining'=>$user['daily_limit']===0?0:max(0,$user['daily_limit']-$used)
     ]);
 }
-function ai_reserve_request(int $userId,int $deviceIdPlaceholder,string $device,string $mode,string $model,array $settings,array $policy): string {
+function ai_reserve_request(int $userId,string $device,string $mode,string $model,array $settings,array $policy): string {
     global $pdo;
     $requestId=bin2hex(random_bytes(16));
     $pdo->beginTransaction();
@@ -183,7 +183,7 @@ function api_ai_chat(array $input,array $session,int $userId): never {
     $thinking=(string)($input['thinking']??'disabled');
     if (!in_array($thinking,['enabled','disabled'],true)) api_problem('INVALID_PARAMETER','thinking 仅支持 enabled 或 disabled');
     $model=$settings['model'];
-    $requestId=ai_reserve_request($userId,0,(string)$session['device_id'],$mode,$model,$settings,$policy);
+    $requestId=ai_reserve_request($userId,(string)$session['device_id'],$mode,$model,$settings,$policy);
     $payload=[
         'model'=>$model,'messages'=>$clean,'max_tokens'=>$maxTokens,
         'temperature'=>(float)$temperature,'top_p'=>(float)$topP,'stream'=>false,
@@ -252,7 +252,7 @@ function ai_admin_view(): void {
           <div class="field"><label>每客户每分钟请求上限</label><input type="number" name="requests_per_minute" min="1" max="30" value="<?=$s['requests_per_minute']?>"></div>
           <div class="field"><label>AI 总开关</label><label class="check-row"><input type="checkbox" name="enabled" <?=$s['enabled']?'checked':''?>> 允许客户使用 AI</label></div>
           <div class="field"><label>允许客户端自带 Key（全局开关）</label><label class="check-row"><input type="checkbox" name="client_key_enabled" <?=$s['client_key_enabled']?'checked':''?>> 仅对已单独授权客户生效</label></div>
-          <div class="field"><label>删除已保存的服务器 Key</label><label class="check-row"><input type="checkbox" name="remove_api_key\"> 删除密钥</label></div>
+          <div class="field"><label>删除已保存的服务器 Key</label><label class="check-row"><input type="checkbox" name="remove_api_key"> 删除密钥</label></div>
         </div><div class="editor-actions"><button class="btn primary">保存 AI 配置</button></div>
       </form>
       <p class="muted">服务器密钥使用 sodium secretbox 加密存入数据库；加密主密钥保存在 storage/ai-master.key。必须备份该文件，丢失后无法解密原密钥。当前接口固定连接 https://api.deepseek.com，不接受客户端自定义 URL，避免 SSRF。</p>
