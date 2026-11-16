@@ -116,7 +116,7 @@ try {
             $pdo->rollBack();api_problem('DEVICE_IDENTITY_MISMATCH','该手机指纹已绑定不同 IMEI，请联系管理员核验',403);
         }
         if ($imeiHash!==null) {
-            $other=client_sql('SELECT id FROM phonehub_mobile_devices WHERE imei_hash=? AND NOT(user_id=? AND phone_id=?) LIMIT 1 FOR UPDATE',[$imeiHash,$userId,$phone])->fetch();
+            $other=client_sql('SELECT id FROM phonehub_mobile_devices WHERE imei_hash=? AND enabled=1 AND NOT(user_id=? AND phone_id=?) LIMIT 1 FOR UPDATE',[$imeiHash,$userId,$phone])->fetch();
             if ($other) {$pdo->rollBack();api_problem('IMEI_ALREADY_BOUND','该 IMEI 已绑定其他设备记录',403);}
         }
         $count=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
