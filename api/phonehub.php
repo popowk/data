@@ -15,10 +15,14 @@ function api_out(array $data,int $status=200): never {
 function api_error(string $message,int $code=400): never {api_out(['ok'=>false,'error'=>$message],$code);}
 try {
     if (($_GET['action']??'health')==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true]);
+    $action=(string)($_GET['action']??'health');
     if (($_SERVER['REQUEST_METHOD']??'GET')!=='POST') api_error('仅支持 POST',405);
     if (isset($_SERVER['HTTP_ORIGIN'])) api_error('请通过 PhoneHub 客户端操作',403);
-    if ((int)($_SERVER['CONTENT_LENGTH']??0)>65536) api_error('请求过大',413);
-    $input=json_decode(file_get_contents('php://input',false,null,0,65537),true,32,JSON_THROW_ON_ERROR);
+    $maxBody=$action==='ai_chat'?262144:65536;
+    if ((int)($_SERVER['CONTENT_LENGTH']??0)>$maxBody) api_error('请求过大',413);
+    $raw=file_get_contents('php://input',false,null,0,$maxBody+1);
+    if (!is_string($raw) || strlen($raw)>$maxBody) api_error('请求过大',413);
+    $input=json_decode($raw,true,32,JSON_THROW_ON_ERROR);
     if (!is_array($input)) api_error('请求格式不正确');
     $cfg=require dirname(__DIR__).'/storage/config.php';
     if (!is_array($cfg)) throw new RuntimeException('database configuration unavailable');
@@ -30,7 +34,6 @@ try {
         global $pdo;
         $st=$pdo->prepare($sql);$st->execute($params);return $st;
     }
-    $action=(string)($_GET['action']??'health');
     if ($action==='login') {
         $name=(string)($input['username']??'');
         $password=(string)($input['password']??'');
