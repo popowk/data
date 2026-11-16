@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "channel": "stable",
   "released_at": "2026-11-16",
-  "notes": "修复在线升级后白屏风险：更新包强制校验 app/accounts.php 等运行必需文件；安装完成后统一刷新 PHP OPcache，并在无法刷新时明确提示重启 PHP-FPM/Web 服务；后台页面禁用 HTML 缓存，CSS/JS 按版本号更新，升级后使用防缓存地址重新打开；新增升级 ZIP 完整性 CI 检查。保留 storage 客户数据和用户自定义 README.md。"
+  "notes": "服务端升级安全加固：ZIP 清单全量校验、PHP 语法预检、暂存与 SHA-256 校验、备份后安装、错误时原子逐文件回滚；增加安装/回滚模拟测试、主管理员运行环境自检及备份恢复运维指南。保留 storage 内客户数据及用户自行修改的 README.md；未改动 Windows 客户端。"
 }
