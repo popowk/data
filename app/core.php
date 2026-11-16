@@ -58,7 +58,15 @@ function schema(PDO $db): void {
  * 迁移记录只在执行成功后写入；不重建、不删除已有授权数据。
  */
 function migrate(PDO $conn): void {
-    // A shared lock serializes schema migrations across concurrent web requests.
+    // Fast path: once the current schema is recorded, normal page/API requests do not
+    // acquire a MySQL named lock or repeatedly query information_schema.
+    try {
+        $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
+        if ($ready>=5) return;
+    } catch (PDOException $e) {
+        if ($e->getCode()!=='42S02') throw $e;
+    }
+    // A shared lock serializes first-install and pending migrations.
     if ((int)$conn->query("SELECT GET_LOCK('phonehub_admin_schema_v1',15)")->fetchColumn()!==1)
         throw new RuntimeException('数据库迁移繁忙，请稍后刷新');
     try {
@@ -159,30 +167,21 @@ function migrate(PDO $conn): void {
           ('client_key_enabled','0'),('max_tokens','4096'),('requests_per_minute','10')");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(4,UTC_TIMESTAMP())");
     }
-    // Self-heal AI schema even when an older/interrupted deployment already recorded migration v4.
-    $aiUsersTable=$conn->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_users'")->fetchColumn();
-    if ((int)$aiUsersTable===1) {
-        $hasAiColumn=static function(string $name) use ($conn): bool {
-            $stmt=$conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_users' AND COLUMN_NAME=?");
-            $stmt->execute([$name]); return (int)$stmt->fetchColumn()>0;
+    if ($version < 5) {
+        // Repair AI objects even for installations that recorded v4 before all DDL completed.
+        $hasColumn=static function(string $table,string $name) use ($conn): bool {
+            $stmt=$conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?");
+            $stmt->execute([$table,$name]); return (int)$stmt->fetchColumn()>0;
         };
-        if (!$hasAiColumn('ai_enabled')) $conn->exec("ALTER TABLE phonehub_users ADD COLUMN ai_enabled TINYINT NOT NULL DEFAULT 1");
-        if (!$hasAiColumn('allow_client_ai_key')) $conn->exec("ALTER TABLE phonehub_users ADD COLUMN allow_client_ai_key TINYINT NOT NULL DEFAULT 0");
-        if (!$hasAiColumn('ai_daily_limit')) $conn->exec("ALTER TABLE phonehub_users ADD COLUMN ai_daily_limit INT NOT NULL DEFAULT 100");
-    }
-    $hasAiTable=static function(string $name) use ($conn): bool {
-        $stmt=$conn->prepare("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?");
-        $stmt->execute([$name]); return (int)$stmt->fetchColumn()>0;
-    };
-    if (!$hasAiTable('phonehub_ai_settings')) {
-        $conn->exec("CREATE TABLE phonehub_ai_settings (
+        foreach (['ai_enabled'=>"TINYINT NOT NULL DEFAULT 1",'allow_client_ai_key'=>"TINYINT NOT NULL DEFAULT 0",'ai_daily_limit'=>"INT NOT NULL DEFAULT 100"] as $column=>$definition) {
+            if (!$hasColumn('phonehub_users',$column)) $conn->exec("ALTER TABLE phonehub_users ADD COLUMN ".$column." ".$definition);
+        }
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_ai_settings (
           setting_key VARCHAR(64) NOT NULL PRIMARY KEY,
           setting_value MEDIUMTEXT NOT NULL,
           updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-    }
-    if (!$hasAiTable('phonehub_ai_usage')) {
-        $conn->exec("CREATE TABLE phonehub_ai_usage (
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_ai_usage (
           id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
           request_id CHAR(32) NOT NULL UNIQUE,
           user_id BIGINT UNSIGNED NOT NULL,
@@ -198,10 +197,39 @@ function migrate(PDO $conn): void {
           INDEX idx_user_time(user_id,created_at),
           INDEX idx_global_time(created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_ai_settings(setting_key,setting_value) VALUES
+          ('enabled','1'),('provider','deepseek'),('model','deepseek-flash'),
+          ('client_key_enabled','0'),('max_tokens','4096'),('requests_per_minute','10')");
+
+        if (!$hasColumn('phonehub_mobile_devices','imei_hash'))
+            $conn->exec("ALTER TABLE phonehub_mobile_devices ADD COLUMN imei_hash CHAR(64) NULL DEFAULT NULL");
+        $hasIndex=static function(string $table,string $name) use ($conn): bool {
+            $stmt=$conn->prepare("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?");
+            $stmt->execute([$table,$name]); return (int)$stmt->fetchColumn()>0;
+        };
+        if (!$hasIndex('phonehub_mobile_devices','idx_imei_hash'))
+            $conn->exec("ALTER TABLE phonehub_mobile_devices ADD INDEX idx_imei_hash(imei_hash)");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_mobile_blacklist (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          identifier_type VARCHAR(16) NOT NULL,
+          identifier_hash CHAR(64) NOT NULL,
+          reason VARCHAR(255) NOT NULL DEFAULT '',
+          enabled TINYINT NOT NULL DEFAULT 1,
+          created_by BIGINT UNSIGNED NOT NULL DEFAULT 0,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY uq_mobile_identifier(identifier_type,identifier_hash),
+          INDEX idx_mobile_blacklist_enabled(enabled,identifier_type)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_feature_settings (
+          setting_key VARCHAR(64) NOT NULL PRIMARY KEY,
+          setting_value VARCHAR(8) NOT NULL DEFAULT '0',
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        // MCP and Skill stay globally disabled until the owner explicitly enables them.
+        $conn->exec("INSERT IGNORE INTO phonehub_feature_settings(setting_key,setting_value) VALUES
+          ('mcp_enabled','0'),('skill_enabled','0')");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(5,UTC_TIMESTAMP())");
     }
-    $conn->exec("INSERT IGNORE INTO phonehub_ai_settings(setting_key,setting_value) VALUES
-      ('enabled','1'),('provider','deepseek'),('model','deepseek-flash'),
-      ('client_key_enabled','0'),('max_tokens','4096'),('requests_per_minute','10')");
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
