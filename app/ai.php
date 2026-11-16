@@ -100,19 +100,27 @@ function ai_save_settings(array $post): array {
     if (strlen($newSecret)>512 || preg_match('/[\r\n\x00]/',$newSecret)) throw new RuntimeException('DeepSeek API Key 格式不正确');
     $remove=isset($post['remove_api_key']);
     if ($newSecret!=='' && $remove) throw new RuntimeException('不能同时提交新密钥和删除密钥');
-    if ($newSecret!=='') {
-        if (!preg_match('/^[A-Za-z0-9._-]{16,512}$/D',$newSecret)) throw new RuntimeException('DeepSeek API Key 含有不允许的字符');
-        $cipher=ai_encrypt_secret($newSecret);
-        ai_db_sql('INSERT INTO phonehub_ai_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)', ['api_key_ciphertext',$cipher]);
-    } elseif ($remove) {
-        ai_db_sql('DELETE FROM phonehub_ai_settings WHERE setting_key=?',['api_key_ciphertext']);
+    $connection=db();
+    $connection->beginTransaction();
+    try {
+        if ($newSecret!=='') {
+            if (!preg_match('/^[A-Za-z0-9._-]{16,512}$/D',$newSecret)) throw new RuntimeException('DeepSeek API Key 含有不允许的字符');
+            $cipher=ai_encrypt_secret($newSecret);
+            ai_db_sql('INSERT INTO phonehub_ai_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)', ['api_key_ciphertext',$cipher]);
+        } elseif ($remove) {
+            ai_db_sql('DELETE FROM phonehub_ai_settings WHERE setting_key=?',['api_key_ciphertext']);
+        }
+        $values=['enabled'=>$enabled,'client_key_enabled'=>$byok,'model'=>$model,
+            'max_tokens'=>(string)$max,'requests_per_minute'=>(string)$rpm];
+        foreach($values as $key=>$value) {
+            ai_db_sql('INSERT INTO phonehub_ai_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)',[$key,$value]);
+        }
+        audit('ai_settings_save','enabled='.$enabled.', model='.$model.', client_key_enabled='.$byok.', secret_changed='.(($newSecret!==''||$remove)?'yes':'no'));
+        $connection->commit();
+    } catch(Throwable $e) {
+        if ($connection->inTransaction()) $connection->rollBack();
+        throw $e;
     }
-    $values=['enabled'=>$enabled,'client_key_enabled'=>$byok,'model'=>$model,
-        'max_tokens'=>(string)$max,'requests_per_minute'=>(string)$rpm];
-    foreach($values as $key=>$value) {
-        ai_db_sql('INSERT INTO phonehub_ai_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)',[$key,$value]);
-    }
-    audit('ai_settings_save','enabled='.$enabled.', model='.$model.', client_key_enabled='.$byok.', secret_changed='.(($newSecret!==''||$remove)?'yes':'no'));
     return ['message'=>'AI 接口配置已保存','server_key_configured'=>ai_settings()['server_key_configured']];
 }
 function ai_user_policy(int $userId): array {
