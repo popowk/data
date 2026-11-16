@@ -259,17 +259,30 @@ function check_csrf(): void {
 }
 function admin_id(): int { return (int)($_SESSION['admin_id'] ?? 0); }
 function require_admin(): void {
-    if (!admin_id()) throw new RuntimeException('登录已失效，请重新登录');
+    static $verified=[];
+    $id=admin_id();
+    if (!$id) throw new RuntimeException('登录已失效，请重新登录');
+    $sessionVersion=(int)($_SESSION['auth_version'] ?? 0);
+    $cacheKey=$id.':'.$sessionVersion;
+    if (isset($verified[$cacheKey])) return;
     $s=db()->prepare('SELECT enabled,auth_version FROM phonehub_admins WHERE id=?');
-    $s->execute([admin_id()]);
+    $s->execute([$id]);
     $row=$s->fetch(PDO::FETCH_ASSOC);
-    if (!$row || !(int)$row['enabled'] || (int)$row['auth_version'] !== (int)($_SESSION['auth_version'] ?? 0))
+    if (!$row || !(int)$row['enabled'] || (int)$row['auth_version'] !== $sessionVersion)
         throw new RuntimeException('管理员权限已变更，请重新登录');
+    $verified[$cacheKey]=true;
+}
+function admin_role(): string {
+    static $roles=[];
+    $id=admin_id();
+    if (!$id) return '';
+    if (!array_key_exists($id,$roles))
+        $roles[$id]=(string)sql('SELECT role FROM phonehub_admins WHERE id=?',[$id])->fetchColumn();
+    return $roles[$id];
 }
 function require_owner(): void {
     require_admin();
-    $row=sql('SELECT role FROM phonehub_admins WHERE id=?',[admin_id()])->fetch();
-    if (!$row || $row['role'] !== 'owner') throw new RuntimeException('仅主管理员可以执行此操作');
+    if (admin_role()!=='owner') throw new RuntimeException('仅主管理员可以执行此操作');
 }
 function random_password(int $length=20): string {
     $characters='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#%+-';
@@ -306,7 +319,11 @@ function validate_user(string $name): void {
 }
 function password_hash_safe(string $password): string {
     if (strlen($password) < 12 || strlen($password) > 128) throw new RuntimeException('密码长度必须为 12–128 字节');
-    return password_hash($password, PASSWORD_ARGON2ID);
+    // Prefer Argon2id, but remain compatible with PHP builds that do not include it.
+    $algorithm=in_array('argon2id',password_algos(),true)?PASSWORD_ARGON2ID:PASSWORD_DEFAULT;
+    $hash=password_hash($password,$algorithm);
+    if (!is_string($hash) || $hash==='') throw new RuntimeException('服务器密码哈希功能不可用，请检查 PHP password 扩展');
+    return $hash;
 }
 function app_version(): string {
     $data = json_decode((string)file_get_contents(APP_ROOT.'/version.json'), true);
