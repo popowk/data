@@ -19,6 +19,7 @@ $result=$pdo->prepare('SELECT u.username,m.mobile_limit,u.entitlements FROM phon
 $result->execute([$id]);
 $record=$result->fetch(PDO::FETCH_ASSOC);
 if (!$record || $record['username']!=='phonehub_ci_user' || (int)$record['mobile_limit']!==8 || json_decode($record['entitlements'],true)!==['douyin']) throw new RuntimeException('account readback failed');
+$pdo->prepare('INSERT INTO phonehub_packages(package_id,version,envelope,content_key) VALUES(?,?,?,?)')->execute(['douyin',1,'{"manifest":"test","signature":"test","nonce":"test","ciphertext":"test"}','test']);
 $utc=input_to_utc('2026-12-31T23:59');
 if ($utc!=='2026-12-31 15:59:00') throw new RuntimeException('timezone conversion failed');
 echo "PASS: MySQL 5.7 compatible schema, migrations, password hashes, account readback, UTC conversion\n";
