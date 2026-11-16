@@ -11,6 +11,11 @@ $pdo=new PDO('mysql:host=127.0.0.1;port=3306;dbname=phonehub_ci;charset=utf8mb4'
 $pdo->exec("SET time_zone = '+00:00'");
 migrate($pdo);
 migrate($pdo);
+$lockConn=new PDO('mysql:host=127.0.0.1;port=3306;dbname=phonehub_ci;charset=utf8mb4','root','ci_password');
+$lockAcquired=(int)$lockConn->query("SELECT GET_LOCK('phonehub_admin_schema_v1',0)")->fetchColumn();
+if($lockAcquired!==1) throw new RuntimeException('could not acquire migration lock for fast-path test');
+migrate($pdo);
+$lockConn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
 $count=(int)$pdo->query('SELECT COUNT(*) FROM phonehub_admin_migrations WHERE version=1')->fetchColumn();
 if ($count!==1) throw new RuntimeException('schema migration not idempotent');
 $aiColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_users'")->fetchAll(PDO::FETCH_COLUMN);
@@ -77,6 +82,13 @@ if (!$settings['enabled'] || $settings['model']!=='deepseek-flash' || $settings[
 ob_start();ai_admin_view();$aiHtml=ob_get_clean();
 if (strpos($aiHtml,'AI 接口管理')===false || strpos($aiHtml,'remove_api_key')===false)
     throw new RuntimeException('AI admin settings page render failed');
+require dirname(__DIR__).'/app/features.php';
+ob_start();feature_view('cloud_features');$cloudHtml=ob_get_clean();
+if (strpos($cloudHtml,'MCP 云端总开关')===false || strpos($cloudHtml,'Skill 云端总开关')===false)
+    throw new RuntimeException('cloud feature control page render failed');
+ob_start();feature_view('mobiles');$mobileHtml=ob_get_clean();
+if (strpos($mobileHtml,'设备黑名单')===false || strpos($mobileHtml,'IMEI')===false)
+    throw new RuntimeException('mobile device and blacklist page render failed');
 unset($_SESSION['admin_id'],$_SESSION['auth_version'],$_SESSION['admin_user']);
 @unlink(APP_STORE.'/config.php');
 
