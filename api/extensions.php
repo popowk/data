@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once dirname(__DIR__).'/app/releases.php';
 require_once dirname(__DIR__).'/app/ai.php';
+require_once dirname(__DIR__).'/app/mobile.php';
 
 function api_problem(string $code,string $message,int $status=400): never {
     api_out(['ok'=>false,'error'=>$message,'error_code'=>$code],$status);
@@ -20,6 +21,17 @@ function api_mobile_quota(int $userId): array {
     $meta=client_sql('SELECT COALESCE(m.mobile_limit,0) AS lim FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetch();
     $count=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
     return ['mobile_limit'=>(int)($meta['lim']??0),'active_count'=>$count];
+}
+function api_cloud_feature_enabled(string $feature): bool {
+    if (!in_array($feature,['mcp','skill'],true)) return false;
+    return client_sql('SELECT setting_value FROM phonehub_feature_settings WHERE setting_key=?',[$feature.'_enabled'])->fetchColumn()==='1';
+}
+function api_require_cloud_feature(string $feature,array $session): void {
+    if (!api_cloud_feature_enabled($feature))
+        api_problem('FEATURE_DISABLED',strtoupper($feature).' 当前由管理员在云端禁用',403);
+    $allowed=json_decode((string)$session['entitlements'],true);
+    if (!in_array($feature,is_array($allowed)?$allowed:[],true))
+        api_problem('NOT_ENTITLED','当前客户未获授权使用 '.strtoupper($feature),403);
 }
 function api_redact(string $message): string {
     $message=preg_replace('/Bearer\s+[a-f0-9]{64}/i','Bearer [REDACTED]',$message) ?? $message;
@@ -63,6 +75,8 @@ function api_store_logs(array $records,int $userId,string $device): never {
     api_out(['ok'=>true,'received'=>count($clean)]);
 }
 function api_require_release_permission(array $release,array $session): void {
+    if (in_array($release['platform'],['mcp','skill'],true))
+        api_require_cloud_feature($release['platform'],$session);
     $allowed=json_decode((string)$session['entitlements'],true);
     if ($release['platform']!=='core' && !in_array($release['platform'],is_array($allowed)?$allowed:[],true))
         api_problem('NOT_ENTITLED','当前客户没有此更新包的权限',403);
@@ -95,7 +109,9 @@ function api_extra(string $action,array $input,array $session,int $userId): void
             'computer'=>['device_limit'=>(int)($account['device_limit']??0),'used'=>$pcUsed],
             'features'=>[
                 'mobile_bind'=>true,'mobile_unbind'=>true,'package_requires_mobile_binding'=>true,
-                'update_check'=>true,'update_download'=>true,'log_batch'=>true,'device_list'=>true,'device_revoke'=>true
+                'update_check'=>true,'update_download'=>true,'log_batch'=>true,'device_list'=>true,'device_revoke'=>true,
+                'mcp_available'=>api_cloud_feature_enabled('mcp') && in_array('mcp',$permitted,true),
+                'skill_available'=>api_cloud_feature_enabled('skill') && in_array('skill',$permitted,true)
             ],
             'settings'=>['session_check_seconds'=>120,'mobile_heartbeat_seconds'=>300,'log_batch_max'=>50]
         ]);
@@ -111,13 +127,20 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         $affected=client_sql('DELETE FROM phonehub_sessions WHERE user_id=? AND device_id=?',[$userId,$target])->rowCount();
         api_out(['ok'=>true,'revoked'=>$affected>0,'current_session_revoked'=>$target===$device]);
     }
-        if ($action==='mobile_check' || $action==='mobile_heartbeat') {
+    if ($action==='mobile_check' || $action==='mobile_heartbeat') {
         $phone=api_phone((string)($input['phone_id']??''));
-        $found=client_sql('SELECT id,enabled,display_name FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
+        try {$providedImeiHash=mobile_imei_hash((string)($input['imei']??''));}
+        catch(Throwable $e) {api_problem('INVALID_IMEI','IMEI 格式不正确，应为 14–16 位数字');}
+        $found=client_sql('SELECT id,enabled,display_name,imei_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
         $quota=api_mobile_quota($userId);
+        $knownImeiHash=$providedImeiHash??(($found && !empty($found['imei_hash']))?(string)$found['imei_hash']:null);
+        $blocked=mobile_blacklist_match($pdo,$phone,$knownImeiHash);
+        if ($blocked) api_problem('DEVICE_BLACKLISTED','该手机已被管理员拉黑',403);
+        if ($found && $providedImeiHash!==null && !empty($found['imei_hash']) && !hash_equals((string)$found['imei_hash'],$providedImeiHash))
+            api_problem('DEVICE_IDENTITY_MISMATCH','手机指纹对应的 IMEI 与已绑定记录不一致',403);
         $bound=$found && (int)$found['enabled']===1 && $quota['mobile_limit']>0;
         if ($bound && $action==='mobile_heartbeat') client_sql('UPDATE phonehub_mobile_devices SET last_seen=UTC_TIMESTAMP() WHERE id=?',[$found['id']]);
-        api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>(bool)$bound,'display_name'=>$found['display_name']??null]+$quota);
+        api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>(bool)$bound,'imei_bound'=>(bool)($found && !empty($found['imei_hash'])),'display_name'=>$found['display_name']??null]+$quota);
     }
     if ($action==='mobile_unbind') {
         $phone=api_phone((string)($input['phone_id']??''));
@@ -142,6 +165,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         foreach($rows as $row) {
             $pid=(string)$row['package_id'];
             if (!in_array($pid,$allowed,true) || isset($result[$pid])) continue;
+            if (in_array($pid,['mcp','skill'],true) && !api_cloud_feature_enabled($pid)) continue;
             $result[$pid]=['package_id'=>$pid,'version'=>(int)$row['version'],'download_allowed'=>$ready];
         }
         api_out(['ok'=>true,'mobile_required'=>true,'mobile_ready'=>$ready,'packages'=>array_values($result)]);
@@ -150,6 +174,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         $id=(string)($input['package_id']??'douyin');
         if (!preg_match('/^[a-z0-9-]{1,32}$/D',$id)) api_problem('INVALID_PACKAGE','操作包 ID 无效');
         $allowed=json_decode((string)$session['entitlements'],true)?:[];
+        if (in_array($id,['mcp','skill'],true)) api_require_cloud_feature($id,$session);
         if (!in_array($id,$allowed,true)) api_problem('NOT_ENTITLED','未授权此操作包',403);
         $row=client_sql('SELECT version FROM phonehub_packages WHERE package_id=? AND enabled=1 ORDER BY version DESC LIMIT 1',[$id])->fetch();
         if (!$row) api_problem('NOT_FOUND','未发布此操作包',404);
@@ -163,6 +188,8 @@ function api_extra(string $action,array $input,array $session,int $userId): void
             $channel=release_channel((string)($input['channel']??'stable'));
         } catch(Throwable $e) {api_problem('INVALID_PARAMETER',$e->getMessage());}
         $allowed=json_decode((string)$session['entitlements'],true)?:[];
+        if (in_array($platform,['mcp','skill'],true)) api_require_cloud_feature($platform,$session);
+        if (in_array($platform,['mcp','skill'],true)) api_require_cloud_feature($platform,$session);
         if ($platform!=='core' && !in_array($platform,$allowed,true)) api_problem('NOT_ENTITLED','未授权此更新目标',403);
         $rows=client_sql('SELECT * FROM phonehub_releases WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC LIMIT 30',[$platform,$channel])->fetchAll();
         usort($rows,static fn($a,$b)=>version_compare($b['version'],$a['version']));
