@@ -51,7 +51,15 @@ try {
         client_sql('SELECT id FROM phonehub_users WHERE id=? FOR UPDATE',[$account['id']]);
         client_sql('DELETE FROM phonehub_sessions WHERE expires_at<UTC_TIMESTAMP()');
         $used=(int)client_sql('SELECT COUNT(DISTINCT device_id) FROM phonehub_sessions WHERE user_id=? AND device_id<>?',[$account['id'],$device])->fetchColumn();
-        if ($used>=(int)$account['device_limit']) { $pdo->rollBack();api_error('已超过授权电脑数量，请先在其他电脑退出',403); }
+        if ($used>=(int)$account['device_limit']) {
+            // Optional explicit replacement of an existing computer using valid account credentials.
+            $replace=(string)($input['replace_device_id']??'');
+            if (preg_match('/^[a-f0-9]{64}$/D',$replace) && $replace!==$device) {
+                client_sql('DELETE FROM phonehub_sessions WHERE user_id=? AND device_id=?',[$account['id'],$replace]);
+                $used=(int)client_sql('SELECT COUNT(DISTINCT device_id) FROM phonehub_sessions WHERE user_id=? AND device_id<>?',[$account['id'],$device])->fetchColumn();
+            }
+            if ($used>=(int)$account['device_limit']) { $pdo->rollBack();api_error('已超过授权电脑数量，请先在其他电脑退出或指定 replace_device_id',403); }
+        }
         client_sql('DELETE FROM phonehub_sessions WHERE user_id=? AND device_id=?',[$account['id'],$device]);
         $token=bin2hex(random_bytes(32));$expires=time()+28800;
         client_sql('INSERT INTO phonehub_sessions(user_id,device_id,token_hash,expires_at) VALUES(?,?,?,?)',
