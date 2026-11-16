@@ -85,7 +85,7 @@ if (strpos($aiHtml,'AI 接口管理')===false || strpos($aiHtml,'remove_api_key'
     throw new RuntimeException('AI admin settings page render failed');
 require dirname(__DIR__).'/app/features.php';
 ob_start();feature_view('cloud_features');$cloudHtml=ob_get_clean();
-if (strpos($cloudHtml,'MCP 云端总开关')===false || strpos($cloudHtml,'Skill 云端总开关')===false)
+if (strpos($cloudHtml,'MCP 连接能力')===false || strpos($cloudHtml,'Skill 技能能力')===false)
     throw new RuntimeException('cloud feature control page render failed');
 if (strpos($cloudHtml,'cloud-feature-card')===false || strpos($cloudHtml,'cloud-savebar')===false)
     throw new RuntimeException('redesigned cloud feature controls missing');
