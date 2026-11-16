@@ -126,6 +126,44 @@ function check_update(): array {
         'source'=>UPDATE_ARCHIVE
     ];
 }
+/**
+ * Owner-only runtime preflight. Intentionally returns no credentials, absolute
+ * filesystem paths, key contents, or publicly callable unauthenticated URL.
+ */
+function update_diagnostics(): array {
+    $checks=[];
+    $checks[]=['name'=>'PHP 运行版本','status'=>version_compare(PHP_VERSION,'8.2.0','>=')?'ok':'error',
+        'detail'=>'PHP '.PHP_VERSION.'（要求 8.2+）'];
+    foreach (['pdo_mysql','curl','zip','sodium'] as $extension) {
+        $checks[]=['name'=>'PHP 扩展 '.$extension,'status'=>extension_loaded($extension)?'ok':'error',
+            'detail'=>extension_loaded($extension)?'已启用':'未启用'];
+    }
+    $missing=missing_runtime_modules();
+    $checks[]=['name'=>'核心程序模块','status'=>$missing?'error':'ok',
+        'detail'=>$missing?'缺失：'.implode('、',$missing):'全部存在'];
+    $checks[]=['name'=>'数据目录可写','status'=>is_dir(APP_STORE)&&is_writable(APP_STORE)?'ok':'error',
+        'detail'=>is_dir(APP_STORE)&&is_writable(APP_STORE)?'读写检查通过':'storage 目录不存在或不可写'];
+    $backups=APP_STORE.'/backups';
+    $canBackup=is_dir($backups)?is_writable($backups):(is_dir(APP_STORE)&&is_writable(APP_STORE));
+    $checks[]=['name'=>'程序回滚备份目录','status'=>$canBackup?'ok':'error',
+        'detail'=>$canBackup?'具备写入备份的条件':'备份目录不可写'];
+    try {
+        $migrations=(int)db()->query('SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations')->fetchColumn();
+        $checks[]=['name'=>'MySQL 数据库','status'=>$migrations>=6?'ok':'warning',
+            'detail'=>'连接正常；数据结构版本 '.$migrations];
+    } catch(Throwable $e) {
+        error_log('PhoneHub runtime diagnostics database failure: '.get_class($e));
+        $checks[]=['name'=>'MySQL 数据库','status'=>'error','detail'=>'数据库连接或迁移状态异常，请检查 PHP 错误日志'];
+    }
+    $checks[]=['name'=>'Nginx 存储目录访问限制','status'=>'warning',
+        'detail'=>'需在宝塔确认 /license/storage/ 被拒绝访问；本地文件检查无法证明公网访问控制'];
+    $checks[]=['name'=>'数据库及密钥异地备份','status'=>'warning',
+        'detail'=>'未自动验证异地备份；请定期备份数据库、AI/IMEI/更新签名密钥并做恢复演练'];
+    return ['checks'=>$checks,'summary'=>[
+        'errors'=>count(array_filter($checks,static fn($x)=>$x['status']==='error')),
+        'warnings'=>count(array_filter($checks,static fn($x)=>$x['status']==='warning'))
+    ]];
+}
 function update_reset_opcache(): ?bool {
     if (!function_exists('opcache_reset')) return null;
     $enabled=filter_var((string)ini_get('opcache.enable'),FILTER_VALIDATE_BOOLEAN);
