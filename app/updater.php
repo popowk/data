@@ -7,7 +7,7 @@ const UPDATE_FILES = [
     'index.php','install.php','version.json','README.md','.htaccess',
     'app/core.php','app/updater.php','app/features.php','app/gateway.php',
     'app/releases.php','app/release_admin.php','app/ai.php','app/mobile.php',
-    'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','assets/app.css','assets/app.js'
+    'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','assets/app.css','assets/app.js'
 ];
 
 function update_download(string $destination): void {
