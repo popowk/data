@@ -30,7 +30,7 @@ function release_admin_view(): void {
       <form data-ajax="release_publish" enctype="multipart/form-data">
        <input type="hidden" name="action" value="release_publish">
        <div class="form-grid">
-        <div class="field"><label>更新目标</label><select name="platform"><option value="core">core（客户端核心）</option><option value="douyin">douyin（抖音模块）</option><option value="xiaohongshu">xiaohongshu（小红书模块）</option><option value="mcp">mcp（MCP 连接包）</option><option value="skill">skill（Skill 技能包）</option></select></div>
+        <div class="field"><label>更新目标</label><select name="platform"><option value="core">core（客户端核心）</option><option value="douyin">douyin（抖音模块）</option><option value="xiaohongshu">xiaohongshu（小红书模块）</option><option value="mcp">mcp（MCP 连接包）</option><option value="mcp-codex">mcp-codex（Codex MCP）</option><option value="mcp-harness">mcp-harness（DeepSeek Harness MCP）</option><option value="skill">skill（Skill 技能包）</option></select></div>
         <div class="field"><label>发布渠道</label><select name="channel"><option value="stable">正式版 stable</option><option value="beta">测试版 beta</option></select></div>
         <div class="field"><label>版本号</label><input name="version" required placeholder="1.0.1" pattern="[0-9]+\.[0-9]+\.[0-9]+([\-][0-9a-zA-Z.-]+)?"></div>
         <div class="field"><label>最低客户端版本</label><input name="min_client" required value="0.7.1"></div>
