@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "channel": "stable",
-  "released_at": "2026-11-16",
-  "notes": "服务端升级安全加固：ZIP 清单全量校验、PHP 语法预检、暂存与 SHA-256 校验、备份后安装、错误时原子逐文件回滚；增加安装/回滚模拟测试、主管理员运行环境自检及备份恢复运维指南。保留 storage 内客户数据及用户自行修改的 README.md；未改动 Windows 客户端。"
+  "released_at": "2026-11-17",
+  "notes": "服务端 v0.5：增加可选择启用的固定公钥 Ed25519 自更新验签，离线签名工具与篡改回放测试；新增 CLI 加密数据库和关键文件备份、离线完整性校验、隔离恢复及可选保留策略；Codex/DeepSeek Harness MCP 全局和客户权限分离且默认禁用；不改 Windows APP、不覆盖自定义 README、不修改现有客户数据。"
 }
