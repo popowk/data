@@ -125,6 +125,40 @@ function migrate(PDO $conn): void {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(3,UTC_TIMESTAMP())");
     }
+    if ($version < 4) {
+        $hasUserColumn = static function(string $name) use ($conn): bool {
+            $stmt=$conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_users' AND COLUMN_NAME=?");
+            $stmt->execute([$name]); return (int)$stmt->fetchColumn()>0;
+        };
+        if (!$hasUserColumn('ai_enabled')) $conn->exec("ALTER TABLE phonehub_users ADD COLUMN ai_enabled TINYINT NOT NULL DEFAULT 1");
+        if (!$hasUserColumn('allow_client_ai_key')) $conn->exec("ALTER TABLE phonehub_users ADD COLUMN allow_client_ai_key TINYINT NOT NULL DEFAULT 0");
+        if (!$hasUserColumn('ai_daily_limit')) $conn->exec("ALTER TABLE phonehub_users ADD COLUMN ai_daily_limit INT NOT NULL DEFAULT 100");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_ai_settings (
+          setting_key VARCHAR(64) NOT NULL PRIMARY KEY,
+          setting_value MEDIUMTEXT NOT NULL,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_ai_usage (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          request_id CHAR(32) NOT NULL UNIQUE,
+          user_id BIGINT UNSIGNED NOT NULL,
+          device_id CHAR(64) NOT NULL,
+          mode VARCHAR(12) NOT NULL,
+          model VARCHAR(48) NOT NULL,
+          status VARCHAR(16) NOT NULL DEFAULT 'pending',
+          http_status SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+          prompt_tokens INT UNSIGNED NOT NULL DEFAULT 0,
+          completion_tokens INT UNSIGNED NOT NULL DEFAULT 0,
+          elapsed_ms INT UNSIGNED NOT NULL DEFAULT 0,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_user_time(user_id,created_at),
+          INDEX idx_global_time(created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_ai_settings(setting_key,setting_value) VALUES
+          ('enabled','1'),('provider','deepseek'),('model','deepseek-flash'),
+          ('client_key_enabled','0'),('max_tokens','4096'),('requests_per_minute','10')");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(4,UTC_TIMESTAMP())");
+    }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
