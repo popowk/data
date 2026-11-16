@@ -9,12 +9,12 @@ const AI_MAX_REQUEST_BYTES=262144;
 const AI_MAX_RESPONSE_BYTES=4194304;
 
 function ai_db_sql(string $statement,array $params=[]): PDOStatement {
-    if (function_exists('client_sql')) return ai_db_sql($statement,$params);
+    if (function_exists('client_sql')) return client_sql($statement,$params);
     return sql($statement,$params);
 }
 
 function ai_setting(string $key,string $fallback=''): string {
-    $value=client_sql('SELECT setting_value FROM phonehub_ai_settings WHERE setting_key=?',[$key])->fetchColumn();
+    $value=ai_db_sql('SELECT setting_value FROM phonehub_ai_settings WHERE setting_key=?',[$key])->fetchColumn();
     return $value===false?$fallback:(string)$value;
 }
 function ai_settings(): array {
@@ -103,26 +103,26 @@ function ai_save_settings(array $post): array {
     if ($newSecret!=='') {
         if (!preg_match('/^[A-Za-z0-9._-]{16,512}$/D',$newSecret)) throw new RuntimeException('DeepSeek API Key 含有不允许的字符');
         $cipher=ai_encrypt_secret($newSecret);
-        client_sql('INSERT INTO phonehub_ai_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)', ['api_key_ciphertext',$cipher]);
+        ai_db_sql('INSERT INTO phonehub_ai_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)', ['api_key_ciphertext',$cipher]);
     } elseif ($remove) {
-        client_sql('DELETE FROM phonehub_ai_settings WHERE setting_key=?',['api_key_ciphertext']);
+        ai_db_sql('DELETE FROM phonehub_ai_settings WHERE setting_key=?',['api_key_ciphertext']);
     }
     $values=['enabled'=>$enabled,'client_key_enabled'=>$byok,'model'=>$model,
         'max_tokens'=>(string)$max,'requests_per_minute'=>(string)$rpm];
     foreach($values as $key=>$value) {
-        client_sql('INSERT INTO phonehub_ai_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)',[$key,$value]);
+        ai_db_sql('INSERT INTO phonehub_ai_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)',[$key,$value]);
     }
     audit('ai_settings_save','enabled='.$enabled.', model='.$model.', client_key_enabled='.$byok.', secret_changed='.(($newSecret!==''||$remove)?'yes':'no'));
     return ['message'=>'AI 接口配置已保存','server_key_configured'=>ai_settings()['server_key_configured']];
 }
 function ai_user_policy(int $userId): array {
-    $row=client_sql('SELECT ai_enabled,allow_client_ai_key,ai_daily_limit FROM phonehub_users WHERE id=?',[$userId])->fetch();
+    $row=ai_db_sql('SELECT ai_enabled,allow_client_ai_key,ai_daily_limit FROM phonehub_users WHERE id=?',[$userId])->fetch();
     if (!$row) api_problem('ACCOUNT_NOT_FOUND','客户账号不存在',401);
     return ['enabled'=>(int)$row['ai_enabled']===1,'allow_client_key'=>(int)$row['allow_client_ai_key']===1,
         'daily_limit'=>max(0,(int)$row['ai_daily_limit'])];
 }
 function ai_daily_usage(int $userId): int {
-    return (int)client_sql('SELECT COUNT(*) FROM phonehub_ai_usage WHERE user_id=? AND created_at>=UTC_DATE()',[$userId])->fetchColumn();
+    return (int)ai_db_sql('SELECT COUNT(*) FROM phonehub_ai_usage WHERE user_id=? AND created_at>=UTC_DATE()',[$userId])->fetchColumn();
 }
 function api_ai_status(int $userId): never {
     $global=ai_settings();$user=ai_user_policy($userId);$used=ai_daily_usage($userId);
@@ -147,30 +147,30 @@ function ai_reserve_request(int $userId,string $device,string $mode,string $mode
     $requestId=bin2hex(random_bytes(16));
     $pdo->beginTransaction();
     try {
-        $account=client_sql('SELECT ai_enabled,allow_client_ai_key,ai_daily_limit FROM phonehub_users WHERE id=? FOR UPDATE',[$userId])->fetch();
-        $globalEnabled=client_sql('SELECT setting_value FROM phonehub_ai_settings WHERE setting_key=? FOR UPDATE',['enabled'])->fetchColumn();
+        $account=ai_db_sql('SELECT ai_enabled,allow_client_ai_key,ai_daily_limit FROM phonehub_users WHERE id=? FOR UPDATE',[$userId])->fetch();
+        $globalEnabled=ai_db_sql('SELECT setting_value FROM phonehub_ai_settings WHERE setting_key=? FOR UPDATE',['enabled'])->fetchColumn();
         if (!$account || (int)$account['ai_enabled']!==1 || $globalEnabled!=='1') {
             $pdo->rollBack();
             api_problem('AI_DISABLED','当前账号未开放 AI 功能',403);
         }
         if ($mode==='client') {
-            $clientAllowed=client_sql('SELECT setting_value FROM phonehub_ai_settings WHERE setting_key=? FOR UPDATE',['client_key_enabled'])->fetchColumn();
+            $clientAllowed=ai_db_sql('SELECT setting_value FROM phonehub_ai_settings WHERE setting_key=? FOR UPDATE',['client_key_enabled'])->fetchColumn();
             if ($clientAllowed!=='1' || (int)$account['allow_client_ai_key']!==1) {
                 $pdo->rollBack();
                 api_problem('CLIENT_KEY_FORBIDDEN','管理员尚未允许此客户使用自带 API Key',403);
             }
         }
-        $minute=(int)client_sql('SELECT COUNT(*) FROM phonehub_ai_usage WHERE user_id=? AND created_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 MINUTE)',[$userId])->fetchColumn();
+        $minute=(int)ai_db_sql('SELECT COUNT(*) FROM phonehub_ai_usage WHERE user_id=? AND created_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 MINUTE)',[$userId])->fetchColumn();
         if ($minute >= $settings['requests_per_minute']) {
             $pdo->rollBack();
             api_problem('AI_RATE_LIMIT','AI 请求过于频繁，请稍后重试',429);
         }
-        $daily=(int)client_sql('SELECT COUNT(*) FROM phonehub_ai_usage WHERE user_id=? AND created_at>=UTC_DATE()',[$userId])->fetchColumn();
+        $daily=(int)ai_db_sql('SELECT COUNT(*) FROM phonehub_ai_usage WHERE user_id=? AND created_at>=UTC_DATE()',[$userId])->fetchColumn();
         if ((int)$account['ai_daily_limit']<1 || $daily >= (int)$account['ai_daily_limit']) {
             $pdo->rollBack();
             api_problem('AI_DAILY_LIMIT','当前账号 AI 每日额度已用完',429);
         }
-        client_sql('INSERT INTO phonehub_ai_usage(request_id,user_id,device_id,mode,model,status,created_at) VALUES(?,?,?,?,?,"pending",UTC_TIMESTAMP())',
+        ai_db_sql('INSERT INTO phonehub_ai_usage(request_id,user_id,device_id,mode,model,status,created_at) VALUES(?,?,?,?,?,"pending",UTC_TIMESTAMP())',
             [$requestId,$userId,$device,$mode,$model]);
         $pdo->commit();
         return $requestId;
@@ -180,7 +180,7 @@ function ai_reserve_request(int $userId,string $device,string $mode,string $mode
     }
 }
 function ai_finish_request(string $requestId,string $status,int $httpStatus,int $promptTokens,int $completionTokens,int $elapsedMs): void {
-    client_sql('UPDATE phonehub_ai_usage SET status=?,http_status=?,prompt_tokens=?,completion_tokens=?,elapsed_ms=? WHERE request_id=?',
+    ai_db_sql('UPDATE phonehub_ai_usage SET status=?,http_status=?,prompt_tokens=?,completion_tokens=?,elapsed_ms=? WHERE request_id=?',
         [$status,$httpStatus,max(0,$promptTokens),max(0,$completionTokens),max(0,$elapsedMs),$requestId]);
 }
 function api_ai_chat(array $input,array $session,int $userId): never {
