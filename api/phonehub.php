@@ -1,5 +1,7 @@
 <?php
 declare(strict_types=1);
+const APP_ROOT = __DIR__ . '/..';
+const APP_STORE = APP_ROOT . '/storage';
 // PhoneHub API 1 compatible gateway. This replaces the old /phonehub/api.php only after opt-in.
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -116,6 +118,8 @@ try {
             [$userId,$session['device_id'],$level,$event,$message]);
         api_out(['ok'=>true]);
     }
+    require_once __DIR__.'/extensions.php';
+    api_extra($action,$input,$session,$userId);
     if ($action==='package') {
         $id=(string)($input['package_id']??'douyin');
         if (!preg_match('/^[a-z0-9-]{1,32}$/D',$id) ||
