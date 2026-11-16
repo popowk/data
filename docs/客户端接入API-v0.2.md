@@ -1,6 +1,6 @@
-# PhoneHub 客户端 API v2 接入说明
+# PhoneHub 客户端 API v3 接入说明
 
-服务端版本：0.2.0。适配对象：PhoneHub 桌面 APP（此前为 0.7.1）。先完成服务端接口，客户端暂不需要改动。
+服务端版本：0.3.0。适配对象：PhoneHub 桌面 APP（此前为 0.7.1）。先完成服务端接口，客户端暂不需要改动。
 
 ## 一、地址与认证
 
@@ -179,7 +179,88 @@ login -> license_status -> mobile_list
 电脑换机：device_list/device_revoke 或登录的 replace_device_id。
 手机换机：mobile_unbind/mobile_bind。
 
-## 七、管理后台接口与上线开关
+## 七、AI 接口（v0.3.0）
+
+AI 默认由服务器中转，APP 不需要也不应该拿到服务器 DeepSeek Key。主管理员在后台「AI 接口管理」配置服务器 Key、默认模型和额度。默认模型为 \`deepseek-flash\`，请求固定发往 \`https://api.deepseek.com/chat/completions\`，不允许客户端自定义 URL、Host 或代理地址，防止 SSRF。
+
+### 7.1 查询 AI 可用状态
+
+\`POST ?action=ai_status\`，仅需通用的 \`device_id\` 和 Bearer Token。响应不包含任何密钥：
+
+~~~json
+{
+  "ok": true,
+  "enabled": true,
+  "provider": "deepseek",
+  "default_model": "deepseek-flash",
+  "server_mode_available": true,
+  "server_key_configured": true,
+  "client_key_allowed": false,
+  "allowed_models": ["deepseek-flash", "deepseek-v4-pro"],
+  "max_tokens": 4096,
+  "requests_per_minute": 10,
+  "daily_limit": 100,
+  "daily_used": 2,
+  "daily_remaining": 98
+}
+~~~
+
+### 7.2 默认服务器中转
+
+\`POST ?action=ai_chat\`。客户端不传 API Key，默认 \`credential_mode=server\`：
+
+~~~json
+{
+  "device_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "credential_mode": "server",
+  "messages": [
+    {"role": "system", "content": "你是一个专业的软件助手。"},
+    {"role": "user", "content": "帮我解释这个错误。"}
+  ],
+  "max_tokens": 2048,
+  "temperature": 0.7,
+  "top_p": 1,
+  "thinking": "disabled"
+}
+~~~
+
+成功响应采用 DeepSeek OpenAI 兼容 Chat Completions JSON 格式（包含 \`choices\`、\`usage\` 等字段）。APP 读取 \`choices[0].message.content\`。当前版本只支持非流式，\`stream=true\` 会返回 \`STREAM_UNSUPPORTED\`。
+
+### 7.3 客户端自带 Key（BYOK，可选）
+
+只有同时满足以下条件才允许：
+1. 主管理员在「AI 接口管理」打开全局「允许客户端自带 Key」。
+2. 客户账号编辑页对该客户单独勾选「允许该客户自带 Key」。
+3. 客户 AI 功能已开启、账号有效且额度未用尽。
+
+APP 先调用 \`ai_status\` 检查 \`client_key_allowed=true\`，然后才可发送：
+
+~~~json
+{
+  "device_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "credential_mode": "client",
+  "api_key": "客户自己在本地配置的 DeepSeek Key",
+  "messages": [
+    {"role": "user", "content": "你好"}
+  ]
+}
+~~~
+
+BYOK Key 仅随当前 HTTPS 请求转发给 DeepSeek，不写入 PhoneHub 数据库、日志或审计记录，也不会返回给客户端。建议 APP 安全保存在系统凭据库中。客户端不能指定 Provider、模型、URL 或代理；仍使用后台选定的模型。全局开关关闭或客户未获单独授权时，服务端返回 \`CLIENT_KEY_FORBIDDEN\`，即使客户端绕过界面自行提交 Key 也无效。
+
+### 7.4 服务端安全与限额
+
+- 服务端 Key 使用 PHP sodium secretbox 加密后存入设置表；加密主密钥位于 \`storage/ai-master.key\`，权限限制为仅服务器用户可读。数据库和该主密钥文件必须一起备份。主密钥丢失时不会自动生成替代密钥，以免原 Key 永久无法解密。
+- DeepSeek Provider 和 HTTPS API URL 固定，客户端不能构造任意 URL；TLS 证书校验开启、禁止重定向。
+- 每客户默认每分钟最多 10 次、每天最多 100 次；客户额度可在授权编辑页调整，0 表示关闭。主管理员可调整服务器最大输出 Token（256–8192）。
+- 每次调用先校验客户启用状态、授权有效期、AI 总开关、客户 AI 权限、Key 模式权限和额度；数据库锁避免并发请求绕过限额。
+- 消息最多 40 条；单条最多 32 KiB、总内容最多 128 KiB；整个 AI JSON 请求最多 256 KiB；上游响应最多 4 MiB；连接超时 10 秒、总超时 90 秒。
+- 不保存 Prompt、Completion、客户端 Key 或服务器 Key。只记录客户、设备、模式、模型、状态、HTTP 状态、Token 用量与耗时；服务商错误响应不原样透传。
+- AI 接口不提供流式传输；如后续 APP 需要 SSE，再单独增加带限额的流式代理。
+
+常见 AI 错误码：\`AI_DISABLED\`（未开放）、\`AI_NOT_CONFIGURED\`（服务器 Key 未配置）、\`CLIENT_KEY_FORBIDDEN\`（BYOK 未获双重授权）、\`AI_RATE_LIMIT\`（每分钟限额）、\`AI_DAILY_LIMIT\`（每日额度）、\`AI_UPSTREAM_AUTH\`（上游 Key 无效）、\`AI_UPSTREAM_RATE_LIMIT\`（服务商限流）、\`AI_UPSTREAM_UNAVAILABLE\`（上游不可用）。
+
+## 八、管理后台接口与上线开关
 
 管理后台 POST /license/index.php 使用 Cookie Session + CSRF，**不提供给客户 APP 使用**：
 
@@ -202,7 +283,7 @@ login -> license_status -> mobile_list
 
 Web 服务器必须禁止 HTTP 访问 /license/storage/，否则更新私钥、数据库配置、日志、备份可能泄露。首次部署和管理后台自身升级不自动修改 Nginx。网址 /license/ 请加末尾斜杠。
 
-## 八、已测试与未完成的部分
+## 九、已测试与未完成的部分
 
 已加入 PHP/JS 语法、MySQL 5.7 自动建表/迁移、手机绑定前后 package 访问控制、会话认证、日志上报、更新查询的 GitHub Actions 集成测试。
 
