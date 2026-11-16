@@ -96,8 +96,11 @@
       updateAvailable=!!info.available;
       if(button)button.disabled=!updateAvailable;
       if (button) button.textContent=info.repair ? '补齐缺失模块' : '下载并安装更新';
-      el.textContent=info.repair ? ('检测到首次升级尚缺少 '+(info.missing_modules?.length||0)+' 个模块，点击补齐即可，无需手工上传') :
-        (info.available ? ('发现新版本 v'+info.latest+'（当前 v'+info.current+'），可下载安装') : ('当前已是最新版本 v'+info.current));
+      const trustLabel=info.signature_verified
+        ? ' · Ed25519 独立签名验证通过'
+        : ' · 提醒：尚未配置固定签名公钥，目前仅校验 HTTPS 镜像';
+      el.textContent=(info.repair ? ('检测到首次升级尚缺少 '+(info.missing_modules?.length||0)+' 个模块，点击补齐即可，无需手工上传') :
+        (info.available ? ('发现新版本 v'+info.latest+'（当前 v'+info.current+'），可下载安装') : ('当前已是最新版本 v'+info.current)))+trustLabel;
     } catch(err){el.textContent='检查失败：'+err.message;toast(err.message,true);}
   }
   document.addEventListener('click',async event=>{
