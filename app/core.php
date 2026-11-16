@@ -58,6 +58,10 @@ function schema(PDO $db): void {
  * 迁移记录只在执行成功后写入；不重建、不删除已有授权数据。
  */
 function migrate(PDO $conn): void {
+    // A shared lock serializes schema migrations across concurrent web requests.
+    if ((int)$conn->query("SELECT GET_LOCK('phonehub_admin_schema_v1',15)")->fetchColumn()!==1)
+        throw new RuntimeException('数据库迁移繁忙，请稍后刷新');
+    try {
     $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_admin_migrations (version INT NOT NULL PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     $version=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
     if ($version < 1) {
@@ -99,6 +103,30 @@ function migrate(PDO $conn): void {
           INDEX idx_user_date(user_id,created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(2,UTC_TIMESTAMP())");
+    }
+    if ($version < 3) {
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_releases (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          platform VARCHAR(32) NOT NULL DEFAULT 'core',
+          channel VARCHAR(16) NOT NULL DEFAULT 'stable',
+          version VARCHAR(48) NOT NULL,
+          min_client VARCHAR(48) NOT NULL DEFAULT '0.0.0',
+          notes VARCHAR(1000) NOT NULL DEFAULT '',
+          filename VARCHAR(255) NOT NULL,
+          storage_name VARCHAR(90) NOT NULL,
+          size_bytes BIGINT UNSIGNED NOT NULL,
+          sha256 CHAR(64) NOT NULL,
+          manifest MEDIUMTEXT NOT NULL,
+          signature VARCHAR(128) NOT NULL,
+          enabled TINYINT NOT NULL DEFAULT 1,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY uq_release(platform,channel,version),
+          INDEX idx_lookup(platform,channel,enabled)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(3,UTC_TIMESTAMP())");
+    }
+    } finally {
+        $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
 }
 function sql(string $statement, array $params = []): PDOStatement {
