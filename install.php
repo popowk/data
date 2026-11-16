@@ -25,7 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         migrate($pdo);
         $count = (int)$pdo->query('SELECT COUNT(*) FROM phonehub_admins')->fetchColumn();
         if ($count !== 0) throw new RuntimeException('数据库已有管理员。为防止覆盖，请使用原有安装配置恢复访问');
-        $stmt = $pdo->prepare('INSERT INTO phonehub_admins(username,password_hash) VALUES(?,?)');
+        $stmt = $pdo->prepare("INSERT INTO phonehub_admins(username,password_hash,role,enabled) VALUES(?,?,'owner',1)");
         $stmt->execute([$admin,$hash]);
         if (!is_dir(APP_STORE) && !mkdir(APP_STORE, 0700, true) && !is_dir(APP_STORE)) throw new RuntimeException('无法创建 storage 目录，请赋予网站目录写入权限');
         $cfg = ['db_host'=>$host,'db_port'=>$port,'db_name'=>$name,'db_user'=>$user,'db_pass'=>$pass];
