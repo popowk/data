@@ -159,9 +159,7 @@
       const option=event.target.selectedOptions[0];
       const count=option?.dataset.members;
       const meta=$('#bulk-member-count');
-      const hidden=$('#bulk-group-hidden');
       if(meta)meta.textContent=event.target.value?(count+' 位客户将受到影响'):'尚未选择分组';
-      if(hidden)hidden.value=event.target.value;
     }
   });
   if ($('#update-status')) checkUpdate();
