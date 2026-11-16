@@ -1,0 +1,10 @@
+# Private runtime state must never be committed.
+storage/*
+!storage/.htaccess
+
+# Local editor/cache files
+.DS_Store
+*.swp
+*.tmp
+.idea/
+.vscode/
