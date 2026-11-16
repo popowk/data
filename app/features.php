@@ -109,10 +109,13 @@ function feature_action(string $action): never {
     }
     if ($action==='mobile_revoke') {
         if ($id<1) throw new RuntimeException('手机记录无效');
+        db()->beginTransaction();
         $record=sql('SELECT user_id FROM phonehub_mobile_devices WHERE id=?',[$id])->fetch();
         if(!$record)throw new RuntimeException('绑定记录不存在');
+        sql('SELECT id FROM phonehub_users WHERE id=? FOR UPDATE',[(int)$record['user_id']])->fetch();
         sql('UPDATE phonehub_mobile_devices SET enabled=0 WHERE id=?',[$id]);
         audit('mobile_revoke',(string)$id);
+        db()->commit();
         json_response(['ok'=>true,'message'=>'该手机绑定已撤销']);
     }
     if ($action==='gateway_install') {
