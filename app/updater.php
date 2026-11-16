@@ -5,7 +5,8 @@ const UPDATE_ARCHIVE = 'https://git.wksite.cn/popowk/data/archive/refs/heads/mai
 const UPDATE_MAX_BYTES = 16777216;
 const UPDATE_FILES = [
     'index.php','install.php','version.json','README.md','.htaccess',
-    'app/core.php','app/updater.php','assets/app.css','assets/app.js'
+    'app/core.php','app/updater.php','app/features.php','app/gateway.php',
+    'api/phonehub.php','assets/app.css','assets/app.js'
 ];
 
 function update_download(string $destination): void {
