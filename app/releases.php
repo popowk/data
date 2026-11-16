@@ -55,7 +55,7 @@ function valid_version(string $str): bool {
     return preg_match('/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/D',$str)===1 && strlen($str)<=48;
 }
 function release_platform(string $name): string {
-    if (!preg_match('/^[a-z0-9-]{1,32}$/D',$name)) throw new RuntimeException('发布目标名称无效');
+    if (!in_array($name,['core','douyin','xiaohongshu','mcp','skill'],true)) throw new RuntimeException('发布目标仅支持 core、douyin、xiaohongshu、mcp、skill');
     return $name;
 }
 function release_channel(string $channel): string {
