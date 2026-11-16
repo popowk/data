@@ -41,8 +41,8 @@ if($blacklistTable!==1) throw new RuntimeException('mobile blacklist table missi
 $identityMeta=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_mobile_identity_meta'")->fetchColumn();
 if($identityMeta!==1) throw new RuntimeException('mobile identity key metadata table missing');
 $featureFlags=$pdo->query("SELECT setting_key,setting_value FROM phonehub_feature_settings")->fetchAll(PDO::FETCH_KEY_PAIR);
-if(($featureFlags['mcp_enabled']??'1')!=='0' || ($featureFlags['skill_enabled']??'1')!=='0')
-    throw new RuntimeException('MCP/Skill must be globally disabled by default');
+foreach (['mcp_enabled','skill_enabled','mcp_codex_enabled','mcp_harness_enabled'] as $key)
+    if (($featureFlags[$key]??'1')!=='0') throw new RuntimeException('new cloud feature must default disabled: '.$key);
 $imei='490154203237519';
 $imeiHash=mobile_imei_hash($imei);
 if(!preg_match('/^[a-f0-9]{64}$/D',(string)$imeiHash) || hash_equals(hash('sha256',$imei),(string)$imeiHash))
@@ -60,7 +60,9 @@ $phoneId=str_repeat('c',64);
 $pdo->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES('imei_hash',?,?,1,0)")
     ->execute([$imeiHash,'CI blacklist test']);
 if(!mobile_blacklist_match($pdo,$phoneId,$imeiHash)) throw new RuntimeException('IMEI blacklist lookup failed');
-if(release_platform('mcp')!=='mcp' || release_platform('skill')!=='skill') throw new RuntimeException('MCP/Skill release targets unavailable');
+if(release_platform('mcp')!=='mcp' || release_platform('skill')!=='skill' ||
+   release_platform('mcp-codex')!=='mcp-codex' || release_platform('mcp-harness')!=='mcp-harness')
+    throw new RuntimeException('MCP/Skill subplatform release targets unavailable');
 $value='test-encryption-value-123456';
 $encrypted=ai_encrypt_secret($value);
 if($encrypted===$value || ai_decrypt_secret($encrypted)!==$value) throw new RuntimeException('AI encryption round trip failed');
