@@ -199,7 +199,7 @@ function feature_view(string $view): void {
         <div class="field"><label><input type="checkbox" name="apply_mobile_limit"> 修改安卓手机数量上限</label><input type="number" name="mobile_limit" min="0" max="1000" value="1"></div>
         <div class="field"><label><input type="checkbox" name="apply_enabled"> 批量设置客户状态</label><select name="enabled"><option value="1">启用</option><option value="0">停用</option></select></div>
         <div class="field"><label><input type="checkbox" name="apply_license_until"> 批量设置授权期限</label><input type="datetime-local" name="license_until" step="1"><span class="footnote">勾选且留空代表永久授权</span></div>
-        <div class="field span2"><label><input type="checkbox" name="apply_entitlements"> 批量修改平台权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked>抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu">小红书</label></div></div></div>
+        <div class="field span2"><label><input type="checkbox" name="apply_entitlements"> 批量修改平台与扩展权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked>抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu">小红书</label><label><input type="checkbox" name="entitlements[]" value="mcp">MCP</label><label><input type="checkbox" name="entitlements[]" value="skill">Skill</label></div><span class="footnote">MCP/Skill 还需开启云端总开关。</span></div></div>
         <p class="muted">修改电脑数量、账号状态、期限或平台权限时，为确保立即生效，会撤销该分组现有电脑会话；客户需要重新登录。</p>
         <button class="btn primary" data-confirm-submit="此操作将批量修改该分组全部客户的所选字段，是否继续？">批量保存配置</button></form></div><?php
     } elseif ($view==='mobiles') {
