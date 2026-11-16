@@ -1,0 +1,4 @@
+Options -Indexes
+<FilesMatch "^(README\.md|version\.json)$">
+Require all denied
+</FilesMatch>
