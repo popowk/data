@@ -236,7 +236,7 @@ function feature_view(string $view): void {
           <div class="field"><label>MCP 云端总开关</label><label class="check-row"><input type="checkbox" name="mcp_enabled" <?=$mcp?'checked':''?>> <?=$mcp?'允许已授权客户获取 MCP':'全局禁用 MCP'?></label><span class="footnote">关闭后，MCP 版本查询与下载均被服务端拒绝。</span></div>
           <div class="field"><label>Skill 云端总开关</label><label class="check-row"><input type="checkbox" name="skill_enabled" <?=$skill?'checked':''?>> <?=$skill?'允许已授权客户获取 Skill':'全局禁用 Skill'?></label><span class="footnote">关闭后，Skill 版本查询与下载均被服务端拒绝。</span></div>
         </div><div class="editor-actions"><button class="btn primary">保存云端开关</button></div></form></div>
-        <div class="card"><h2>开放条件</h2><p class="muted">客户必须同时满足：对应全局开关开启、客户授权中勾选 MCP/Skill、对应签名版本已发布且启用、客户账号有效。新客户默认不授予 MCP/Skill。关闭总开关不会删除客户授权或已发布文件，只会立即阻止后续查询与下载。</p></div><?php
+        <div class="card"><h2>开放条件</h2><p class="muted">客户必须同时满足：对应全局开关开启、客户授权中勾选 MCP/Skill、对应签名版本已发布且启用、客户账号有效。新客户默认不授予 MCP/Skill。关闭总开关不会删除客户授权或已发布文件，只会立即阻止后续查询与下载；已经下载到客户设备的本地副本不能由服务器远程擦除，客户端必须按 license_status/capabilities 返回的 mcp_available、skill_available 定期禁用本地调用。</p></div><?php
     } elseif($view==='gateway') {
         require_owner();
         require_once __DIR__.'/gateway.php';
