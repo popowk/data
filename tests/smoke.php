@@ -5,6 +5,7 @@ require dirname(__DIR__).'/app/ai.php';
 require dirname(__DIR__).'/app/mobile.php';
 require dirname(__DIR__).'/app/releases.php';
 require dirname(__DIR__).'/app/accounts.php';
+require dirname(__DIR__).'/app/updater.php';
 
 $pdo=new PDO('mysql:host=127.0.0.1;port=3306;dbname=phonehub_ci;charset=utf8mb4','root','ci_password',[
     PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_EMULATE_PREPARES=>false
@@ -89,6 +90,12 @@ if (strpos($cloudHtml,'MCP 连接能力')===false || strpos($cloudHtml,'Skill �
     throw new RuntimeException('cloud feature control page render failed');
 if (strpos($cloudHtml,'cloud-feature-card')===false || strpos($cloudHtml,'cloud-savebar')===false)
     throw new RuntimeException('redesigned cloud feature controls missing');
+$diagnostics=update_diagnostics();
+if (($diagnostics['summary']['errors']??-1)!==0)
+    throw new RuntimeException('runtime diagnostics returned errors in CI environment: '.json_encode($diagnostics,JSON_UNESCAPED_UNICODE));
+if (!array_filter($diagnostics['checks'],static fn($check)=>($check['name']??'')==='MySQL 数据库' && ($check['status']??'')==='ok'))
+    throw new RuntimeException('runtime diagnostics did not validate database connection');
+
 ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false)
     throw new RuntimeException('redesigned group bulk form render failed');
