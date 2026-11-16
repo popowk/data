@@ -34,6 +34,7 @@ try {
         global $pdo;
         $st=$pdo->prepare($sql);$st->execute($params);return $st;
     }
+    require_once dirname(__DIR__).'/app/mobile.php';
     if ($action==='login') {
         $name=(string)($input['username']??'');
         $password=(string)($input['password']??'');
@@ -96,23 +97,36 @@ try {
     if ($action==='mobile_bind') {
         $phone=strtolower((string)($input['phone_id']??''));
         $name=trim((string)($input['display_name']??''));
-        if (!preg_match('/^[a-f0-9]{64}$/D',$phone) || strlen($name)>360 || preg_match('/[\x00-\x1F]/',$name))
+        if (!preg_match('/^[a-f0-9]{64}$/D',$phone) || strlen($name)>120 || preg_match('/[\\x00-\\x1F]/',$name))
             api_error('手机设备指纹必须为 64 位 SHA-256，名称不能包含控制字符');
+        try {$imeiHash=mobile_imei_hash((string)($input['imei']??''));}
+        catch(Throwable $e) {api_error('IMEI 格式不正确，应为 14–16 位数字');}
         $pdo->beginTransaction();
         $meta=client_sql('SELECT u.id,COALESCE(m.mobile_limit,0) AS mobile_limit FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.id=? FOR UPDATE',[$userId])->fetch();
         $limit=(int)($meta['mobile_limit']??0);
         if ($limit<1) { $pdo->rollBack();api_error('当前授权未启用安卓手机名额',403); }
-        $existing=client_sql('SELECT enabled FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
+        if (mobile_blacklist_match($pdo,$phone,$imeiHash)) {
+            $pdo->rollBack();api_error('该手机指纹或 IMEI 已被管理员拉黑',403);
+        }
+        $existing=client_sql('SELECT enabled,imei_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=? FOR UPDATE',[$userId,$phone])->fetch();
+        if ($existing && $imeiHash!==null && !empty($existing['imei_hash']) && !hash_equals((string)$existing['imei_hash'],$imeiHash)) {
+            $pdo->rollBack();api_error('该手机指纹已绑定不同 IMEI，请联系管理员核验',403);
+        }
+        if ($imeiHash!==null) {
+            $other=client_sql('SELECT id FROM phonehub_mobile_devices WHERE imei_hash=? AND enabled=1 AND NOT(user_id=? AND phone_id=?) LIMIT 1 FOR UPDATE',[$imeiHash,$userId,$phone])->fetch();
+            if ($other) {$pdo->rollBack();api_error('该 IMEI 已绑定其他设备记录',403);}
+        }
         $count=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
         if ((!$existing || !(int)$existing['enabled']) && $count >= $limit) {
             $pdo->rollBack();api_error('安卓手机绑定数量已达上限，请联系管理员解绑',403);
         }
-        client_sql('INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,enabled,last_seen) VALUES(?,?,?,1,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),enabled=1,last_seen=UTC_TIMESTAMP()',[$userId,$phone,$name]);
+        client_sql('INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,imei_hash,enabled,last_seen) VALUES(?,?,?,?,1,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),imei_hash=COALESCE(VALUES(imei_hash),imei_hash),enabled=1,last_seen=UTC_TIMESTAMP()',[$userId,$phone,$name,$imeiHash]);
         $pdo->commit();
-        api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>true,'mobile_limit'=>$limit,'active_count'=>$count+(!$existing || !(int)$existing['enabled']?1:0)]);
+        $active=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
+        api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>true,'imei_bound'=>$imeiHash!==null || !empty($existing['imei_hash']),'mobile_limit'=>$limit,'active_count'=>$active]);
     }
     if ($action==='mobile_list') {
-        $devices=client_sql('SELECT phone_id,display_name,created_at,last_seen FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1 ORDER BY id',[$userId])->fetchAll();
+        $devices=client_sql('SELECT phone_id,display_name,created_at,last_seen,CASE WHEN imei_hash IS NULL THEN 0 ELSE 1 END AS imei_bound FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1 ORDER BY id',[$userId])->fetchAll();
         $limit=(int)client_sql('SELECT COALESCE(m.mobile_limit,0) FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetchColumn();
         api_out(['ok'=>true,'mobile_limit'=>$limit,'active_count'=>count($devices),'devices'=>$devices]);
     }
@@ -122,6 +136,10 @@ try {
         $id=(string)($input['package_id']??'douyin');
         if (!preg_match('/^[a-z0-9-]{1,32}$/D',$id) ||
             !in_array($id,(array)json_decode((string)$session['entitlements'],true),true)) api_error('没有此操作包的授权',403);
+        if (in_array($id,['mcp','skill'],true)) {
+            require_once __DIR__.'/extensions.php';
+            if (!api_cloud_feature_enabled($id)) api_problem('FEATURE_DISABLED',strtoupper($id).' 当前由管理员在云端禁用',403);
+        }
         $pdo->beginTransaction();
         try {
             client_sql('SELECT id FROM phonehub_users WHERE id=? FOR UPDATE',[$userId])->fetch();
