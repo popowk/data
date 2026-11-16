@@ -3,9 +3,14 @@ declare(strict_types=1);
 // Client core release publishing, kept separate from admin panel software self-updates.
 const CLIENT_RELEASE_LIMIT=52428800; // 50 MiB compressed
 function release_store(): string {
-    $path=APP_STORE.'/updates';
+    $root=realpath(APP_STORE);
+    if (!$root || is_link(APP_STORE)) throw new RuntimeException('服务器存储目录不可用');
+    $path=$root.'/updates';
+    if (is_link($path)) throw new RuntimeException('更新文件目录不能是符号链接');
     if (!is_dir($path) && !mkdir($path,0700,true)) throw new RuntimeException('更新文件目录不可写');
-    return $path;
+    $real=realpath($path);
+    if (!$real || dirname($real)!==$root) throw new RuntimeException('更新文件目录路径校验失败');
+    return $real;
 }
 function release_keypair(): array {
     if (!extension_loaded('sodium')) throw new RuntimeException('客户端签名发布需要 PHP sodium 扩展');
@@ -84,8 +89,11 @@ function release_publish(array $file,array $post): array {
     require_owner();
     if (!isset($file['error']) || (int)$file['error']!==UPLOAD_ERR_OK || !is_uploaded_file((string)($file['tmp_name']??'')))
         throw new RuntimeException('上传失败；请检查 PHP upload_max_filesize/post_max_size 与网站限制');
+    $tmp=(string)($file['tmp_name']??'');
+    $actualSize=is_file($tmp)?(int)filesize($tmp):0;
     $size=(int)($file['size']??0);
-    if ($size<=0 || $size>CLIENT_RELEASE_LIMIT) throw new RuntimeException('更新 ZIP 必须在 1 字节至 50MB 之间');
+    if ($size<=0 || $size>CLIENT_RELEASE_LIMIT || $actualSize!==$size)
+        throw new RuntimeException('更新 ZIP 大小不正确或超过 50MB 限制');
     $original=basename((string)($file['name']??''));
     if (!preg_match('/^[a-zA-Z0-9_.-]{1,160}\.zip$/iD',$original)) throw new RuntimeException('文件名称须为英文字母、数字或下划线，且后缀为 ZIP');
     $platform=release_platform((string)($post['platform']??'core'));
