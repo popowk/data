@@ -72,6 +72,9 @@
     form.elements.license_until.value=payload?.license_until || '';
     form.elements.notes.value=payload?.notes || '';
     form.elements.enabled.checked=payload?!!payload.enabled:true;
+    form.elements.ai_enabled.checked=payload?!!payload.ai_enabled:true;
+    form.elements.allow_client_ai_key.checked=payload?!!payload.allow_client_ai_key:false;
+    form.elements.ai_daily_limit.value=payload?.ai_daily_limit ?? 100;
     form.querySelectorAll('input[name="entitlements[]"]').forEach(el=>el.checked=payload ? payload.entitlements.includes(el.value) : el.value==='douyin');
     $('#editor-title').textContent=payload?'编辑客户授权':'创建客户';
     container.hidden=false;
