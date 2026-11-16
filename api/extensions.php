@@ -100,6 +100,7 @@ function api_latest_release(string $platform,string $channel): ?array {
     return $rows[0]??null;
 }
 function api_extra(string $action,array $input,array $session,int $userId): void {
+    global $pdo;
     $device=(string)$session['device_id'];
     if ($action==='log_upload') api_store_logs([$input],$userId,$device);
     if ($action==='log_batch') {
