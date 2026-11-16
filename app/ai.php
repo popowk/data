@@ -32,6 +32,7 @@ function ai_master_key(bool $create=true): string {
             throw new RuntimeException('AI 主密钥文件损坏');
         return $key;
     }
+    if (!$create) throw new RuntimeException('AI 主密钥文件丢失，禁止自动重建以免永久丢失原密钥');
     $key=random_bytes(SODIUM_CRYPTO_SECRETBOX_KEYBYTES);
     $fp=@fopen($path,'x+b');
     if (!$fp) {
