@@ -22,7 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_EMULATE_PREPARES => false
         ]);
         $pdo->exec("SET time_zone = '+00:00'");
-        schema($pdo);
+        migrate($pdo);
         $count = (int)$pdo->query('SELECT COUNT(*) FROM phonehub_admins')->fetchColumn();
         if ($count !== 0) throw new RuntimeException('数据库已有管理员。为防止覆盖，请使用原有安装配置恢复访问');
         $stmt = $pdo->prepare('INSERT INTO phonehub_admins(username,password_hash) VALUES(?,?)');
