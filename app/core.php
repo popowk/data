@@ -55,6 +55,8 @@ function schema(PDO $db): void {
 function sql(string $statement, array $params = []): PDOStatement {
     $s = db()->prepare($statement); $s->execute($params); return $s;
 }
+function utf8_length(string $value): int { return preg_match_all('/./us', $value) ?: 0; }
+function utf8_limit(string $value,int $limit): string { return implode('',array_slice(preg_split('//u',$value,-1,PREG_SPLIT_NO_EMPTY) ?: [],0,$limit)); }
 function h(mixed $text): string { return htmlspecialchars((string)$text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 function csrf(): string {
     if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(32));
@@ -70,7 +72,7 @@ function require_admin(): void {
 }
 function audit(string $action, string $target): void {
     sql('INSERT INTO phonehub_admin_audit(admin_id,action,target,ip) VALUES(?,?,?,?)',
-        [admin_id(), $action, mb_substr($target,0,150), (string)($_SERVER['REMOTE_ADDR'] ?? '')]);
+        [admin_id(), $action, utf8_limit($target,150), (string)($_SERVER['REMOTE_ADDR'] ?? '')]);
 }
 function json_response(array $data, int $status=200): never {
     http_response_code($status); header('Content-Type: application/json; charset=utf-8');
