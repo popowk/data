@@ -18,6 +18,20 @@ if($aiTable!==1) throw new RuntimeException('AI usage table missing');
 $value='test-encryption-value-123456';
 $encrypted=ai_encrypt_secret($value);
 if($encrypted===$value || ai_decrypt_secret($encrypted)!==$value) throw new RuntimeException('AI encryption round trip failed');
+if (!is_dir(APP_STORE)) mkdir(APP_STORE,0700,true);
+file_put_contents(APP_STORE.'/config.php',"<?php return ['db_host'=>'127.0.0.1','db_port'=>3306,'db_name'=>'phonehub_ci','db_user'=>'root','db_pass'=>'ci_password'];");
+$pdo->prepare("INSERT INTO phonehub_admins(username,password_hash,role,enabled,auth_version) VALUES(?,?, 'owner',1,1)")
+    ->execute(['ci_ai_owner',$hash??password_hash_safe('ci-owner-test-123456')]);
+$ownerId=(int)$pdo->lastInsertId();
+$_SESSION['admin_id']=$ownerId;$_SESSION['auth_version']=1;$_SESSION['admin_user']='ci_ai_owner';
+$settings=ai_settings();
+if (!$settings['enabled'] || $settings['model']!=='deepseek-flash' || $settings['client_key_enabled'] || $settings['server_key_configured'])
+    throw new RuntimeException('AI default settings incorrect');
+ob_start();ai_admin_view();$aiHtml=ob_get_clean();
+if (strpos($aiHtml,'AI 接口管理')===false || strpos($aiHtml,'remove_api_key')===false)
+    throw new RuntimeException('AI admin settings page render failed');
+unset($_SESSION['admin_id'],$_SESSION['auth_version'],$_SESSION['admin_user']);
+@unlink(APP_STORE.'/config.php');
 
 $hash=password_hash_safe('test-secret-123456');
 if (!password_verify('test-secret-123456',$hash)) throw new RuntimeException('password hash failed');
