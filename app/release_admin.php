@@ -6,7 +6,7 @@ function release_admin_action(string $action): never {
     require_owner();
     if ($action==='release_publish') {
         $r=release_publish($_FILES['file']??[],$_POST);
-        json_response(['ok'=>true,'message'=>'已发布签名更新包 '+$r['platform'].' v'.$r['version']]+$r);
+        json_response(['ok'=>true,'message'=>'已发布签名更新包 '.$r['platform'].' v'.$r['version']]+$r);
     }
     if ($action==='release_toggle') {
         $result=release_toggle((int)($_POST['id']??0));
