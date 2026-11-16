@@ -57,12 +57,23 @@ function api_extra(string $action,array $input,array $session,int $userId): void
             'mobile'=>$quota,
             'features'=>[
                 'mobile_bind'=>true,'mobile_unbind'=>true,'package_requires_mobile_binding'=>true,
-                'update_check'=>true,'update_download'=>true,'log_batch'=>true
+                'update_check'=>true,'update_download'=>true,'log_batch'=>true,'device_list'=>true,'device_revoke'=>true
             ],
             'settings'=>['session_check_seconds'=>120,'mobile_heartbeat_seconds'=>300,'log_batch_max'=>50]
         ]);
     }
-    if ($action==='mobile_check' || $action==='mobile_heartbeat') {
+    if ($action==='device_list') {
+        $rows=client_sql('SELECT device_id,MAX(expires_at) AS expires_at FROM phonehub_sessions WHERE user_id=? AND expires_at>UTC_TIMESTAMP() GROUP BY device_id ORDER BY expires_at DESC',[$userId])->fetchAll();
+        $devices=array_map(static fn($r)=>['device_id'=>$r['device_id'],'expires_at'=>strtotime($r['expires_at'].' UTC'),'current'=>$r['device_id']===$device],$rows);
+        api_out(['ok'=>true,'devices'=>$devices]);
+    }
+    if ($action==='device_revoke') {
+        $target=(string)($input['target_device_id']??'');
+        if (!preg_match('/^[a-f0-9]{64}$/D',$target)) api_problem('INVALID_DEVICE','目标电脑标识无效');
+        $affected=client_sql('DELETE FROM phonehub_sessions WHERE user_id=? AND device_id=?',[$userId,$target])->rowCount();
+        api_out(['ok'=>true,'revoked'=>$affected>0,'current_session_revoked'=>$target===$device]);
+    }
+        if ($action==='mobile_check' || $action==='mobile_heartbeat') {
         $phone=api_phone((string)($input['phone_id']??''));
         $found=client_sql('SELECT id,enabled,display_name FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
         $quota=api_mobile_quota($userId);
