@@ -36,6 +36,7 @@ function db(): PDO {
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, PDO::ATTR_EMULATE_PREPARES => false]
     );
     $conn->exec("SET time_zone = '+00:00'");
+    migrate($conn);
     return $conn;
 }
 function schema(PDO $db): void {
@@ -51,6 +52,18 @@ function schema(PDO $db): void {
         "CREATE TABLE IF NOT EXISTS phonehub_admin_attempts (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, bucket CHAR(64) NOT NULL, attempted_at DATETIME NOT NULL, INDEX idx_attempts(bucket,attempted_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
     ];
     foreach ($statements as $sql) $db->exec($sql);
+}
+/**
+ * 数据结构版本化迁移：新版本可在此加入版本 2、3 等迁移，不需手动运行 SQL。
+ * 迁移记录只在执行成功后写入；不重建、不删除已有授权数据。
+ */
+function migrate(PDO $conn): void {
+    $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_admin_migrations (version INT NOT NULL PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $version=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
+    if ($version < 1) {
+        schema($conn);
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(1,UTC_TIMESTAMP())");
+    }
 }
 function sql(string $statement, array $params = []): PDOStatement {
     $s = db()->prepare($statement); $s->execute($params); return $s;
