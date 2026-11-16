@@ -142,7 +142,6 @@ function apply_update(): array {
                 @chmod($temp,0644);
                 if (!rename($temp,$dest)) { @unlink($temp);throw new RuntimeException('替换文件失败：'.$path); }
                 $installed[]=$path;
-                if (function_exists('opcache_invalidate')) @opcache_invalidate($dest,true);
             }
             $cacheReset=update_reset_opcache();
             $message='更新成功，原文件已备份';
