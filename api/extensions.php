@@ -36,14 +36,19 @@ function api_mobile_quota(int $userId): array {
     return ['mobile_limit'=>(int)($meta['lim']??0),'active_count'=>$count];
 }
 function api_cloud_feature_enabled(string $feature): bool {
-    if (!in_array($feature,['mcp','skill'],true)) return false;
-    return client_sql('SELECT setting_value FROM phonehub_feature_settings WHERE setting_key=?',[$feature.'_enabled'])->fetchColumn()==='1';
+    if (!in_array($feature,['mcp','skill','mcp-codex','mcp-harness'],true)) return false;
+    if (in_array($feature,['mcp-codex','mcp-harness'],true) &&
+        client_sql('SELECT setting_value FROM phonehub_feature_settings WHERE setting_key=?',['mcp_enabled'])->fetchColumn()!=='1')
+        return false;
+    $flag=['mcp-codex'=>'mcp_codex_enabled','mcp-harness'=>'mcp_harness_enabled'][$feature]??($feature.'_enabled');
+    return client_sql('SELECT setting_value FROM phonehub_feature_settings WHERE setting_key=?',[$flag])->fetchColumn()==='1';
 }
 function api_require_cloud_feature(string $feature,array $session): void {
     if (!api_cloud_feature_enabled($feature))
         api_problem('FEATURE_DISABLED',strtoupper($feature).' 当前由管理员在云端禁用',403);
     $allowed=json_decode((string)$session['entitlements'],true);
-    if (!in_array($feature,is_array($allowed)?$allowed:[],true))
+    if (!in_array($feature,is_array($allowed)?$allowed:[],true) ||
+        (in_array($feature,['mcp-codex','mcp-harness'],true) && !in_array('mcp',is_array($allowed)?$allowed:[],true)))
         api_problem('NOT_ENTITLED','当前客户未获授权使用 '.strtoupper($feature),403);
 }
 function api_redact(string $message): string {
@@ -88,7 +93,7 @@ function api_store_logs(array $records,int $userId,string $device): never {
     api_out(['ok'=>true,'received'=>count($clean)]);
 }
 function api_require_release_permission(array $release,array $session): void {
-    if (in_array($release['platform'],['mcp','skill'],true))
+    if (in_array($release['platform'],['mcp','skill','mcp-codex','mcp-harness'],true))
         api_require_cloud_feature($release['platform'],$session);
     $allowed=json_decode((string)$session['entitlements'],true);
     if ($release['platform']!=='core' && !in_array($release['platform'],is_array($allowed)?$allowed:[],true))
@@ -125,7 +130,9 @@ function api_extra(string $action,array $input,array $session,int $userId): void
                 'mobile_bind'=>true,'mobile_unbind'=>true,'package_requires_mobile_binding'=>true,
                 'update_check'=>true,'update_download'=>true,'log_batch'=>true,'device_list'=>true,'device_revoke'=>true,
                 'mcp_available'=>api_cloud_feature_enabled('mcp') && in_array('mcp',$permitted,true),
-                'skill_available'=>api_cloud_feature_enabled('skill') && in_array('skill',$permitted,true)
+                'skill_available'=>api_cloud_feature_enabled('skill') && in_array('skill',$permitted,true),
+                'mcp_codex_available'=>api_cloud_feature_enabled('mcp-codex') && in_array('mcp',$permitted,true) && in_array('mcp-codex',$permitted,true),
+                'mcp_harness_available'=>api_cloud_feature_enabled('mcp-harness') && in_array('mcp',$permitted,true) && in_array('mcp-harness',$permitted,true)
             ],
             'settings'=>['session_check_seconds'=>120,'mobile_heartbeat_seconds'=>300,'log_batch_max'=>50]
         ]);
@@ -191,7 +198,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         foreach($rows as $row) {
             $pid=(string)$row['package_id'];
             if (!in_array($pid,$allowed,true) || isset($result[$pid])) continue;
-            if (in_array($pid,['mcp','skill'],true) && !api_cloud_feature_enabled($pid)) continue;
+            if (in_array($pid,['mcp','skill','mcp-codex','mcp-harness'],true) && !api_cloud_feature_enabled($pid)) continue;
             $result[$pid]=['package_id'=>$pid,'version'=>(int)$row['version'],'download_allowed'=>$ready];
         }
         api_out(['ok'=>true,'mobile_required'=>true,'mobile_ready'=>$ready,'packages'=>array_values($result)]);
@@ -200,7 +207,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         $id=(string)($input['package_id']??'douyin');
         if (!preg_match('/^[a-z0-9-]{1,32}$/D',$id)) api_problem('INVALID_PACKAGE','操作包 ID 无效');
         $allowed=json_decode((string)$session['entitlements'],true)?:[];
-        if (in_array($id,['mcp','skill'],true)) api_require_cloud_feature($id,$session);
+        if (in_array($id,['mcp','skill','mcp-codex','mcp-harness'],true)) api_require_cloud_feature($id,$session);
         if (!in_array($id,$allowed,true)) api_problem('NOT_ENTITLED','未授权此操作包',403);
         $row=client_sql('SELECT version FROM phonehub_packages WHERE package_id=? AND enabled=1 ORDER BY version DESC LIMIT 1',[$id])->fetch();
         if (!$row) api_problem('NOT_FOUND','未发布此操作包',404);
@@ -214,7 +221,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
             $channel=release_channel((string)($input['channel']??'stable'));
         } catch(Throwable $e) {api_problem('INVALID_PARAMETER',$e->getMessage());}
         $allowed=json_decode((string)$session['entitlements'],true)?:[];
-        if (in_array($platform,['mcp','skill'],true)) api_require_cloud_feature($platform,$session);
+        if (in_array($platform,['mcp','skill','mcp-codex','mcp-harness'],true)) api_require_cloud_feature($platform,$session);
         if ($platform!=='core' && !in_array($platform,$allowed,true)) api_problem('NOT_ENTITLED','未授权此更新目标',403);
         $rows=client_sql('SELECT * FROM phonehub_releases WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC LIMIT 30',[$platform,$channel])->fetchAll();
         usort($rows,static fn($a,$b)=>version_compare($b['version'],$a['version']));
@@ -228,7 +235,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         $current=(string)($input['current_version']??'0.0.0');
         if (!valid_version($current)) api_problem('INVALID_VERSION','当前版本号不正确');
         $allowed=json_decode((string)$session['entitlements'],true)?:[];
-        if (in_array($platform,['mcp','skill'],true)) api_require_cloud_feature($platform,$session);
+        if (in_array($platform,['mcp','skill','mcp-codex','mcp-harness'],true)) api_require_cloud_feature($platform,$session);
         if ($platform!=='core' && !in_array($platform,$allowed,true)) api_problem('NOT_ENTITLED','未授权此更新目标',403);
         $release=api_latest_release($platform,$channel);
         $available=$release && version_compare($release['version'],$current,'>');
