@@ -30,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if ($action === 'group_create') {
             $name = trim((string)($_POST['name'] ?? ''));
-            if ($name==='' || mb_strlen($name)>100) throw new RuntimeException('请输入 1–100 字的分组名称');
+            if ($name==='' || utf8_length($name)>100) throw new RuntimeException('请输入 1–100 字的分组名称');
             sql('INSERT INTO phonehub_groups(name) VALUES(?)',[$name]);
             audit('group_create',$name);
             json_response(['ok'=>true,'message'=>'分组已创建']);
@@ -56,7 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $entitlements=array_values(array_intersect(['douyin','xiaohongshu'],(array)($_POST['entitlements'] ?? [])));
             $until=input_to_utc(trim((string)($_POST['license_until'] ?? '')));
             $notes=trim((string)($_POST['notes'] ?? ''));
-            if (mb_strlen($notes)>500) throw new RuntimeException('备注不能超过 500 字');
+            if (utf8_length($notes)>500) throw new RuntimeException('备注不能超过 500 字');
             $pass=(string)($_POST['password'] ?? '');
             db()->beginTransaction();
             if ($id) {
@@ -138,7 +138,7 @@ $nav=['dashboard'=>['概览','▦'],'accounts'=>['客户授权','♙'],'groups'=
 <body><div class="app"><aside class="sidebar"><div class="brand"><span class="brand-mark">P</span><div><strong>PhoneHub</strong><small>授权管理中心</small></div></div>
 <nav><?php foreach ($nav as $route=>$item): ?><a class="<?= $view===$route?'active':'' ?>" href="?view=<?=h($route)?>"><span class="nav-icon"><?=h($item[1])?></span><?=h($item[0])?></a><?php endforeach ?></nav>
 <div class="sidebar-footer"><span class="status-dot"></span> 运行中 <small>v<?=h(app_version())?></small></div></aside>
-<div class="main"><header class="topbar"><div><span class="crumb">PhoneHub /</span> <?=h($nav[$view][0])?></div><div class="top-right"><span class="avatar"><?=h(mb_substr((string)($_SESSION['admin_user']??'A'),0,1))?></span><?=h($_SESSION['admin_user']??'管理员')?><button class="text-button" data-action="logout">退出</button></div></header>
+<div class="main"><header class="topbar"><div><span class="crumb">PhoneHub /</span> <?=h($nav[$view][0])?></div><div class="top-right"><span class="avatar"><?=h(substr((string)($_SESSION['admin_user']??'A'),0,1))?></span><?=h($_SESSION['admin_user']??'管理员')?><button class="text-button" data-action="logout">退出</button></div></header>
 <main id="content" class="content">
 <?php if ($view==='dashboard'):
     $total=count($accounts);$enabled=count(array_filter($accounts,fn($u)=>(int)$u['enabled']===1));$devices=array_sum(array_map(fn($u)=>(int)$u['active_devices'],$accounts));
