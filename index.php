@@ -157,7 +157,7 @@ if (!admin_id()) {
 <?php exit; }
 $view=(string)($_GET['view'] ?? 'dashboard');
 if (!in_array($view,['dashboard','accounts','groups','group_bulk','mobiles','sessions','packages','client_logs','releases','ai','update','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
-$adminRole=(string)sql('SELECT role FROM phonehub_admins WHERE id=?',[admin_id()])->fetchColumn();
+$adminRole=admin_role();
 if (in_array($view,['admins','gateway','update','releases','ai','cloud_features'],true) && $adminRole!=='owner') { http_response_code(403); exit('该页面仅主管理员可以访问'); }
 $groups=in_array($view,['dashboard','accounts','groups','group_bulk'],true) ? sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll() : [];
 $accounts=($view==='accounts'||$view==='dashboard') ? sql("SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,u.created_at,u.ai_enabled,u.allow_client_ai_key,u.ai_daily_limit,m.group_id,COALESCE(m.mobile_limit,0) AS mobile_limit,COALESCE(m.notes,'') AS notes,g.name AS group_name,(SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id LEFT JOIN phonehub_groups g ON g.id=m.group_id ORDER BY u.id DESC")->fetchAll() : [];
