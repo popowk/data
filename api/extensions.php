@@ -17,6 +17,16 @@ function api_phone(string $value): string {
     if (!preg_match('/^[0-9a-f]{64}$/D',$id)) api_problem('INVALID_PHONE_ID','手机标识必须为 SHA-256 小写十六进制文本');
     return $id;
 }
+function api_imei_hash_from_input(array $input): ?string {
+    $imei=trim((string)($input['imei']??''));
+    if ($imei==='') return null;
+    if (!preg_match('/^[0-9]{14,16}$/D',$imei)) api_problem('INVALID_IMEI','IMEI 格式不正确，应为 14–16 位数字');
+    try {return mobile_imei_hash($imei);}
+    catch(Throwable $e) {
+        error_log('PhoneHub IMEI HMAC key unavailable: '.get_class($e));
+        api_problem('IMEI_HASH_UNAVAILABLE','服务器设备身份密钥暂不可用',503);
+    }
+}
 function api_mobile_quota(int $userId): array {
     $meta=client_sql('SELECT COALESCE(m.mobile_limit,0) AS lim FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetch();
     $count=(int)client_sql("SELECT COUNT(*) FROM phonehub_mobile_devices d WHERE d.user_id=? AND d.enabled=1
@@ -132,8 +142,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
     }
     if ($action==='mobile_check' || $action==='mobile_heartbeat') {
         $phone=api_phone((string)($input['phone_id']??''));
-        try {$providedImeiHash=mobile_imei_hash((string)($input['imei']??''));}
-        catch(Throwable $e) {api_problem('INVALID_IMEI','IMEI 格式不正确，应为 14–16 位数字');}
+        $providedImeiHash=api_imei_hash_from_input($input);
         $found=client_sql('SELECT id,enabled,display_name,imei_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
         $quota=api_mobile_quota($userId);
         $knownImeiHash=$providedImeiHash??(($found && !empty($found['imei_hash']))?(string)$found['imei_hash']:null);
