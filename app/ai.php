@@ -13,14 +13,18 @@ function ai_setting(string $key,string $fallback=''): string {
     return $value===false?$fallback:(string)$value;
 }
 function ai_settings(): array {
+    $model=ai_setting('model',AI_DEFAULT_MODEL);
+    $cipher=ai_setting('api_key_ciphertext','');
+    $keyUsable=false;
+    if ($cipher!=='') { try {$keyUsable=ai_decrypt_secret($cipher)!=='';} catch(Throwable $e) {$keyUsable=false;} }
     return [
         'enabled'=>ai_setting('enabled','1')==='1',
         'provider'=>AI_DEFAULT_PROVIDER,
-        'model'=>in_array(ai_setting('model',AI_DEFAULT_MODEL),AI_ALLOWED_MODELS,true)?ai_setting('model',AI_DEFAULT_MODEL):AI_DEFAULT_MODEL,
+        'model'=>in_array($model,AI_ALLOWED_MODELS,true)?$model:AI_DEFAULT_MODEL,
         'client_key_enabled'=>ai_setting('client_key_enabled','0')==='1',
         'max_tokens'=>max(256,min(8192,(int)ai_setting('max_tokens','4096'))),
         'requests_per_minute'=>max(1,min(30,(int)ai_setting('requests_per_minute','10'))),
-        'server_key_configured'=>ai_setting('api_key_ciphertext','')!==''
+        'server_key_configured'=>$keyUsable
     ];
 }
 function ai_master_key(bool $create=true): string {
@@ -30,6 +34,11 @@ function ai_master_key(bool $create=true): string {
         $key=file_get_contents($path);
         if (!is_string($key) || strlen($key)!==SODIUM_CRYPTO_SECRETBOX_KEYBYTES)
             throw new RuntimeException('AI 主密钥文件损坏');
+        if (PHP_OS_FAMILY!=='Windows') {
+            $mode=fileperms($path);
+            if ($mode===false || (($mode & 0077)!==0 && !chmod($path,0600)))
+                throw new RuntimeException('AI 主密钥权限不安全，无法限制为仅服务器用户可读');
+        }
         return $key;
     }
     if (!$create) throw new RuntimeException('AI 主密钥文件丢失，禁止自动重建以免永久丢失原密钥');
