@@ -1,6 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "channel": "stable",
-  "released_at": "2026-11-16"
+  "released_at": "2026-11-16",
+  "notes": "修复 AI 管理页 HTTP 500：对已记录 v4 但缺失 AI 表/字段的部署自动补齐；增加 AI 页面错误日志编号；保持严格 CSP。"
 }
