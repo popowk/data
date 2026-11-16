@@ -194,17 +194,49 @@ function feature_view(string $view): void {
         <form data-ajax="owner_password" class="inline-form"><input name="action" type="hidden" value="owner_password"><input type="password" name="old_password" required placeholder="当前密码"><input type="password" name="new_password" required minlength="12" placeholder="新密码（至少12字节）"><button class="btn primary">修改密码</button></form></div><?php
     } elseif ($view==='group_bulk') {
         $groups=sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta WHERE group_id=g.id) AS cnt FROM phonehub_groups g ORDER BY name')->fetchAll();
-        ?><div class="page-title"><div><h1>分组批量配置</h1><p>只修改勾选的字段，其他客户数据保持不变</p></div></div>
-        <div class="card"><form data-ajax="group_bulk"><input name="action" type="hidden" value="group_bulk">
-        <div class="field"><label>目标客户分组（必选）</label><select name="group_id" required><option value="">选择分组</option><?php foreach($groups as $g): ?><option value="<?=(int)$g['id']?>"><?=h($g['name'])?>（<?=(int)$g['cnt']?> 位客户）</option><?php endforeach ?></select></div>
-        <div class="form-grid">
-        <div class="field"><label><input type="checkbox" name="apply_device_limit"> 修改电脑数量上限</label><input type="number" name="device_limit" min="1" max="100" value="3"></div>
-        <div class="field"><label><input type="checkbox" name="apply_mobile_limit"> 修改安卓手机数量上限</label><input type="number" name="mobile_limit" min="0" max="1000" value="1"></div>
-        <div class="field"><label><input type="checkbox" name="apply_enabled"> 批量设置客户状态</label><select name="enabled"><option value="1">启用</option><option value="0">停用</option></select></div>
-        <div class="field"><label><input type="checkbox" name="apply_license_until"> 批量设置授权期限</label><input type="datetime-local" name="license_until" step="1"><span class="footnote">勾选且留空代表永久授权</span></div>
-        <div class="field span2"><label><input type="checkbox" name="apply_entitlements"> 批量修改平台与扩展权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked>抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu">小红书</label><label><input type="checkbox" name="entitlements[]" value="mcp">MCP</label><label><input type="checkbox" name="entitlements[]" value="skill">Skill</label></div><span class="footnote">MCP/Skill 还需开启云端总开关。</span></div></div>
-        <p class="muted">修改电脑数量、账号状态、期限或平台权限时，为确保立即生效，会撤销该分组现有电脑会话；客户需要重新登录。</p>
-        <button class="btn primary" data-confirm-submit="此操作将批量修改该分组全部客户的所选字段，是否继续？">批量保存配置</button></form></div><?php
+        ?>
+        <div class="page-title"><div><h1>分组批量配置</h1><p>先选择客户分组，再勾选需要覆盖的配置；未勾选的字段不会改变。</p></div><a class="btn" href="?view=groups">返回客户分组</a></div>
+        <div class="bulk-intro"><div class="bulk-intro-icon">≡</div><div><strong>安全批量修改</strong><p>仅影响所选分组中的客户。涉及电脑会话权限的变更会自动撤销旧会话，确保新配置立即生效。</p></div></div>
+        <form id="group-bulk-form" data-ajax="group_bulk">
+        <input name="action" type="hidden" value="group_bulk">
+        <section class="card bulk-target-card">
+          <div class="bulk-section-head"><div><span class="bulk-step">01</span><div><h2>选择目标分组</h2><p>选择要统一调整授权的客户群组</p></div></div><span class="bulk-required">必选</span></div>
+          <div class="field"><label for="bulk-group">目标客户分组</label><select id="bulk-group" name="group_id" required><option value="">请选择客户分组</option><?php foreach($groups as $g): ?><option value="<?=(int)$g['id']?>" data-members="<?=(int)$g['cnt']?>"><?=h($g['name'])?>（<?=(int)$g['cnt']?> 位客户）</option><?php endforeach ?></select><div class="bulk-group-meta"><span id="bulk-member-count">尚未选择分组</span><span>只会修改该分组内的客户</span></div></div>
+        </section>
+        <div class="bulk-section-title"><div><span class="bulk-step">02</span><div><h2>选择要修改的授权字段</h2><p>打开对应选项后，才会应用下面的配置</p></div></div><span class="bulk-tip">未勾选 = 保持原值</span></div>
+        <div class="bulk-grid">
+          <section class="bulk-option">
+            <label class="bulk-option-head"><input class="bulk-option-toggle" type="checkbox" name="apply_device_limit"><span class="bulk-option-icon">PC</span><span><strong>电脑数量上限</strong><small>每个客户允许登录的电脑数量</small></span></label>
+            <div class="bulk-option-body"><label for="bulk-device">新的电脑名额</label><input id="bulk-device" data-bulk-field type="number" name="device_limit" min="1" max="100" value="3" disabled><small>允许范围：1–100 台</small></div>
+          </section>
+          <section class="bulk-option">
+            <label class="bulk-option-head"><input class="bulk-option-toggle" type="checkbox" name="apply_mobile_limit"><span class="bulk-option-icon">手机</span><span><strong>安卓手机数量上限</strong><small>每个客户允许绑定的手机数量</small></span></label>
+            <div class="bulk-option-body"><label for="bulk-mobile">新的手机名额</label><input id="bulk-mobile" data-bulk-field type="number" name="mobile_limit" min="0" max="1000" value="1" disabled><small>设置为 0 将禁止绑定手机</small></div>
+          </section>
+          <section class="bulk-option">
+            <label class="bulk-option-head"><input class="bulk-option-toggle" type="checkbox" name="apply_enabled"><span class="bulk-option-icon">状态</span><span><strong>客户账号状态</strong><small>统一启用或停用该分组客户</small></span></label>
+            <div class="bulk-option-body"><label for="bulk-enabled">设置为</label><select id="bulk-enabled" data-bulk-field name="enabled" disabled><option value="1">启用账号</option><option value="0">停用账号</option></select><small>停用后客户无法继续登录</small></div>
+          </section>
+          <section class="bulk-option">
+            <label class="bulk-option-head"><input class="bulk-option-toggle" type="checkbox" name="apply_license_until"><span class="bulk-option-icon">期限</span><span><strong>授权有效期</strong><small>统一修改客户授权截止时间</small></span></label>
+            <div class="bulk-option-body"><label for="bulk-expiry">新的授权截止时间（北京时间）</label><input id="bulk-expiry" data-bulk-field type="datetime-local" name="license_until" step="1" disabled><small>勾选后留空代表永久授权</small></div>
+          </section>
+          <section class="bulk-option bulk-option-wide">
+            <label class="bulk-option-head"><input class="bulk-option-toggle" type="checkbox" name="apply_entitlements"><span class="bulk-option-icon">权限</span><span><strong>平台与扩展权限</strong><small>勾选的权限将成为该分组客户的完整权限集合</small></span></label>
+            <div class="bulk-option-body">
+              <div class="bulk-entitlements">
+                <label><input data-bulk-field type="checkbox" name="entitlements[]" value="douyin" checked disabled> 抖音</label>
+                <label><input data-bulk-field type="checkbox" name="entitlements[]" value="xiaohongshu" disabled> 小红书</label>
+                <label><input data-bulk-field type="checkbox" name="entitlements[]" value="mcp" disabled> MCP</label>
+                <label><input data-bulk-field type="checkbox" name="entitlements[]" value="skill" disabled> Skill</label>
+              </div><small>未勾选的平台将从客户授权中移除；MCP/Skill 还需要主管理员开启云端总开关。</small>
+            </div>
+          </section>
+        </div>
+        <div class="bulk-impact"><strong>生效提示</strong><p>修改电脑名额、客户状态、授权期限或平台权限时，会撤销该分组客户现有的电脑会话。修改手机名额不会主动解绑已有手机。</p></div>
+        <div class="bulk-submit"><div><strong id="bulk-summary">尚未选择修改项</strong><small>提交前请再次确认目标分组和修改范围</small></div><button class="btn primary" type="submit" data-confirm-submit="此操作将批量修改所选分组的指定授权字段，确认继续？">应用批量配置</button></div>
+        </form>
+        <?php
     } elseif ($view==='mobiles') {
         $phones=sql("SELECT p.id,p.phone_id,p.imei_hash,p.display_name,p.enabled,p.last_seen,p.created_at,u.username,
           EXISTS(SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND
@@ -227,16 +259,29 @@ function feature_view(string $view): void {
         <?php foreach($blacklist as $b): ?><tr><td><?=h($b['identifier_type']==='imei_hash'?'IMEI 摘要':'手机指纹')?></td><td><code><?=h(substr($b['identifier_hash'],0,16))?>…</code></td><td><?=h($b['reason'])?></td><td><?=h(utc_to_cn($b['created_at']))?></td><td><?php if($isOwner): ?><button class="small-link" data-action="mobile-unblacklist" data-id="<?=(int)$b['id']?>">解除拉黑</button><?php else: ?><span class="muted">仅主管理员可操作</span><?php endif ?></td></tr><?php endforeach ?></tbody></table></div></div><?php
     } elseif ($view==='cloud_features') {
         require_owner();
-        $rows=sql('SELECT setting_key,setting_value FROM phonehub_feature_settings')->fetchAll();
+        $rows=sql("SELECT setting_key,setting_value FROM phonehub_feature_settings WHERE setting_key IN ('mcp_enabled','skill_enabled')")->fetchAll();
         $flags=[];foreach($rows as $row)$flags[$row['setting_key']]=$row['setting_value']==='1';
         $mcp=!empty($flags['mcp_enabled']);$skill=!empty($flags['skill_enabled']);
-        ?><div class="page-title"><div><h1>客户端能力控制</h1><p>MCP 与 Skill 由云端统一开关；默认关闭，开启后仍须给客户单独授权并发布对应版本</p></div></div>
-        <div class="card"><form data-ajax="cloud_features_save"><input type="hidden" name="action" value="cloud_features_save">
-        <div class="form-grid">
-          <div class="field"><label>MCP 云端总开关</label><label class="check-row"><input type="checkbox" name="mcp_enabled" <?=$mcp?'checked':''?>> <?=$mcp?'允许已授权客户获取 MCP':'全局禁用 MCP'?></label><span class="footnote">关闭后，MCP 版本查询与下载均被服务端拒绝。</span></div>
-          <div class="field"><label>Skill 云端总开关</label><label class="check-row"><input type="checkbox" name="skill_enabled" <?=$skill?'checked':''?>> <?=$skill?'允许已授权客户获取 Skill':'全局禁用 Skill'?></label><span class="footnote">关闭后，Skill 版本查询与下载均被服务端拒绝。</span></div>
-        </div><div class="editor-actions"><button class="btn primary">保存云端开关</button></div></form></div>
-        <div class="card"><h2>开放条件</h2><p class="muted">客户必须同时满足：对应全局开关开启、客户授权中勾选 MCP/Skill、对应签名版本已发布且启用、客户账号有效。新客户默认不授予 MCP/Skill。关闭总开关不会删除客户授权或已发布文件，只会立即阻止后续查询与下载；已经下载到客户设备的本地副本不能由服务器远程擦除，客户端必须按 license_status/capabilities 返回的 mcp_available、skill_available 定期禁用本地调用。</p></div><?php
+        ?><div class="page-title"><div><h1>客户端能力控制</h1><p>统一管理客户端扩展的云端开放状态，默认全部关闭</p></div><span class="cloud-live-indicator"><i></i> 云端策略生效中</span></div>
+        <div class="cloud-summary"><div><span class="cloud-summary-label">全局开放能力</span><strong><?=((int)$mcp+(int)$skill)?> <small>/ 2</small></strong></div><p>只有全局开关、客户单独授权、已启用签名版本三项同时满足，客户端才可以使用对应能力。</p></div>
+        <form data-ajax="cloud_features_save" class="cloud-feature-form"><input type="hidden" name="action" value="cloud_features_save">
+          <div class="cloud-feature-grid">
+            <section class="cloud-feature-card <?=$mcp?'is-enabled':'is-disabled'?>">
+              <div class="cloud-feature-top"><div class="cloud-feature-icon">M</div><span class="cloud-state"><?=$mcp?'全局已开放':'默认禁用'?></span></div>
+              <h2>MCP 连接能力</h2><p>允许已获授权的客户获取并使用 PhoneHub MCP 连接包。</p>
+              <label class="cloud-switch"><input type="checkbox" name="mcp_enabled" <?=$mcp?'checked':''?>><span class="cloud-switch-ui"></span><span><?=$mcp?'已开启':'关闭 MCP'?></span></label>
+              <ul><li>控制 MCP 版本查询与下载</li><li>客户还必须单独获得 MCP 授权</li><li>需要存在已启用的签名发布版本</li></ul>
+            </section>
+            <section class="cloud-feature-card <?=$skill?'is-enabled':'is-disabled'?>">
+              <div class="cloud-feature-top"><div class="cloud-feature-icon skill">S</div><span class="cloud-state"><?=$skill?'全局已开放':'默认禁用'?></span></div>
+              <h2>Skill 技能能力</h2><p>允许已获授权的客户获取并使用 PhoneHub Skill 技能包。</p>
+              <label class="cloud-switch"><input type="checkbox" name="skill_enabled" <?=$skill?'checked':''?>><span class="cloud-switch-ui"></span><span><?=$skill?'已开启':'关闭 Skill'?></span></label>
+              <ul><li>控制 Skill 版本查询与下载</li><li>客户还必须单独获得 Skill 授权</li><li>需要存在已启用的签名发布版本</li></ul>
+            </section>
+          </div>
+          <div class="cloud-savebar"><div><strong>修改云端开放策略</strong><small>保存后立即影响后续授权检查与下载请求</small></div><button class="btn primary" type="submit">保存设置</button></div>
+        </form>
+        <div class="cloud-warning"><strong>安全说明</strong><p>关闭总开关会立即阻止后续版本查询与下载，但不能远程删除客户已经下载的本地文件。桌面客户端必须定期查询 <code>license_status</code> / <code>capabilities</code>，在能力变为不可用时停止本地调用；离线设备在下次联网校验时收到撤销状态。</p></div><?php
     } elseif($view==='gateway') {
         require_owner();
         require_once __DIR__.'/gateway.php';
