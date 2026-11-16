@@ -241,7 +241,7 @@ $nav=[
     $errorRef=bin2hex(random_bytes(4));
     error_log('PhoneHub AI admin page ['.$errorRef.']: '.get_class($e).' '.$e->getMessage());
     http_response_code(500);
-    ?><div class="card"><h2>AI 管理页面暂时无法加载</h2><p class="muted">服务器已记录错误，请检查 PHP 错误日志。错误编号：<code><?=h($errorRef)?></code></p><button class="btn" onclick="location.reload()">重新加载</button></div><?php
+    ?><div class="card"><h2>AI 管理页面暂时无法加载</h2><p class="muted">服务器已记录错误，请检查 PHP 错误日志。错误编号：<code><?=h($errorRef)?></code></p><a class="btn" href="?view=ai">重新加载</a></div><?php
 } ?>
 <?php elseif (in_array($view,['admins','group_bulk','mobiles','gateway','client_logs'],true)): require __DIR__.'/app/features.php'; feature_view($view); ?>
 <?php endif ?>
