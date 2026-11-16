@@ -153,7 +153,7 @@ $nav=['dashboard'=>['概览','▦'],'accounts'=>['客户授权','♙'],'groups'=
 <div class="form-grid"><div class="field"><label>客户账号</label><input name="username" required minlength="3" maxlength="64"></div>
 <div class="field"><label>密码（新增必填，编辑留空不修改）</label><input name="password" type="password" autocomplete="new-password"></div>
 <div class="field"><label>客户分组</label><select name="group_id"><option value="0">未分组</option><?php foreach($groups as $g): ?><option value="<?=(int)$g['id']?>"><?=h($g['name'])?></option><?php endforeach ?></select></div>
-<div class="field"><label>授权截止时间（北京时间，留空永久）</label><input name="license_until" type="datetime-local"></div>
+<div class="field"><label>授权截止时间（北京时间，留空永久）</label><input name="license_until" type="datetime-local" step="1"></div>
 <div class="field"><label>电脑授权名额（1–100）</label><input name="device_limit" type="number" min="1" max="100" value="3"></div>
 <div class="field"><label>安卓手机名额（预留配置）</label><input name="mobile_limit" type="number" min="0" max="1000" value="0"></div>
 <div class="field"><label>平台权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked> 抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu"> 小红书（预留）</label></div></div>
