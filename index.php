@@ -45,6 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if ($action === 'account_save') {
             $id=(int)($_POST['id'] ?? 0);
+            $creating=$id===0;
             $name=trim((string)($_POST['username'] ?? ''));
             validate_user($name);
             $limit=(int)($_POST['device_limit'] ?? 3);
@@ -82,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 [$id,$group?:null,$mobile,$notes]);
             audit('account_save',$name);
             db()->commit();
-            json_response(['ok'=>true,'message'=>'授权已保存','id'=>$id]+($old ?? null ? [] : ['password'=>$pass,'username'=>$name]));
+            json_response(array_merge(['ok'=>true,'message'=>'授权已保存','id'=>$id],$creating?['password'=>$pass,'username'=>$name]:[]));
         }
         if ($action === 'reset_sessions') {
             $id=(int)($_POST['id'] ?? 0);
