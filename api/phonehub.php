@@ -116,19 +116,6 @@ try {
         $limit=(int)client_sql('SELECT COALESCE(m.mobile_limit,0) FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetchColumn();
         api_out(['ok'=>true,'mobile_limit'=>$limit,'active_count'=>count($devices),'devices'=>$devices]);
     }
-    if ($action==='log_upload') {
-        $level=(string)($input['level']??'info');
-        $event=(string)($input['event']??'general');
-        $message=(string)($input['message']??'');
-        if (!in_array($level,['info','warn','error'],true) || !preg_match('/^[a-zA-Z0-9_.-]{1,64}$/D',$event) || strlen($message)>2000 || $message==='' || !mb_check_encoding_safe($message))
-            api_error('日志级别、事件或内容不正确');
-        // Avoid retaining apparent Authorization headers and high-risk common secrets.
-        $message=preg_replace('/Bearer\s+[a-f0-9]{64}/i','Bearer [REDACTED]',$message);
-        $message=preg_replace('/\b(password|token|secret)\s*[:=]\s*[^\s,;]+/i','$1=[REDACTED]',$message);
-        client_sql('INSERT INTO phonehub_client_logs(user_id,device_id,level,event,message,created_at) VALUES(?,?,?,?,?,UTC_TIMESTAMP())',
-            [$userId,$session['device_id'],$level,$event,$message]);
-        api_out(['ok'=>true]);
-    }
     require_once __DIR__.'/extensions.php';
     api_extra($action,$input,$session,$userId);
     if ($action==='package') {
