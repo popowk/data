@@ -132,6 +132,32 @@ function ph_backup_create(string $destinationDir): array {
         if (!$done && is_file($tmp)) @unlink($tmp);
     }
 }
+/**
+ * Opt-in local retention. Never deletes unrecognized file names, symlinks,
+ * newest 3 completed backups, or backups before a successful new creation.
+ * Keep an independent off-server copy: pruning is NOT disaster recovery.
+ */
+function ph_backup_prune(string $directory,int $days): int {
+    if ($days<7 || $days>365) throw new RuntimeException('自动保留天数必须为 7–365');
+    $directory=ph_backup_safe_outdir($directory,true);
+    $entries=scandir($directory);
+    if (!is_array($entries)) throw new RuntimeException('无法读取备份目录');
+    $matches=[];
+    foreach($entries as $filename) {
+        if (!preg_match('/^phonehub-[0-9]{8}-[0-9]{6}-[a-f0-9]{10}\.phbk$/D',$filename)) continue;
+        $full=$directory.'/'.$filename;
+        if (is_link($full) || !is_file($full)) continue;
+        $matches[]=['path'=>$full,'mtime'=>(int)filemtime($full)];
+    }
+    usort($matches,static fn($a,$b)=>$b['mtime']<=>$a['mtime']);
+    $deleted=0;
+    foreach(array_slice($matches,3) as $item) {
+        if ($item['mtime']>=time()-$days*86400) continue;
+        if (!unlink($item['path'])) throw new RuntimeException('无法清理历史备份，请检查目录权限');
+        $deleted++;
+    }
+    return $deleted;
+}
 function ph_backup_restore(string $archive,string $privateFile,string $target): array {
     $target=ph_backup_safe_outdir($target,false);
     $private=ph_backup_key_file($privateFile,SODIUM_CRYPTO_BOX_SECRETKEYBYTES,true);
@@ -150,6 +176,12 @@ try {
     if ($mode==='create' && count($argv)===3) {
         $result=ph_backup_create($argv[2]);
         echo "Encrypted backup created: ".$result['filename']." (".$result['files']." files)\n";
+        $retention=getenv('PHONEHUB_BACKUP_RETENTION_DAYS');
+        if ($retention!==false && $retention!=='') {
+            if (!ctype_digit($retention)) throw new RuntimeException('备份保留天数设置无效');
+            $deleted=ph_backup_prune($argv[2],(int)$retention);
+            echo "Retention policy: ".$retention." days; removed ".$deleted." old backups (newest 3 always kept)\n";
+        }
     } elseif ($mode==='verify' && count($argv)===4) {
         $secret=ph_backup_key_file($argv[3],SODIUM_CRYPTO_BOX_SECRETKEYBYTES,true);
         $rows=ph_backup_decrypt($argv[2],$secret);
