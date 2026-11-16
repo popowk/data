@@ -144,9 +144,9 @@ try {
         $id=(string)($input['package_id']??'douyin');
         if (!preg_match('/^[a-z0-9-]{1,32}$/D',$id) ||
             !in_array($id,(array)json_decode((string)$session['entitlements'],true),true)) api_error('没有此操作包的授权',403);
-        if (in_array($id,['mcp','skill'],true)) {
+        if (in_array($id,['mcp','skill','mcp-codex','mcp-harness'],true)) {
             require_once __DIR__.'/extensions.php';
-            if (!api_cloud_feature_enabled($id)) api_problem('FEATURE_DISABLED',strtoupper($id).' 当前由管理员在云端禁用',403);
+            api_require_cloud_feature($id,$session);
         }
         $pdo->beginTransaction();
         try {
