@@ -64,6 +64,41 @@ function migrate(PDO $conn): void {
         schema($conn);
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(1,UTC_TIMESTAMP())");
     }
+    if ($version < 2) {
+        // MySQL 5.7 compatible migrations; DDL is idempotent to recover from interrupted updates.
+        $hasColumn = static function(string $name) use ($conn): bool {
+            $stmt=$conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_admins' AND COLUMN_NAME=?");
+            $stmt->execute([$name]); return (int)$stmt->fetchColumn() > 0;
+        };
+        if (!$hasColumn('role')) $conn->exec("ALTER TABLE phonehub_admins ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'admin'");
+        if (!$hasColumn('enabled')) $conn->exec("ALTER TABLE phonehub_admins ADD COLUMN enabled TINYINT NOT NULL DEFAULT 1");
+        // The earliest existing administrator becomes the immutable primary administrator.
+        $conn->exec("UPDATE phonehub_admins SET role='owner',enabled=1 WHERE id=(SELECT id FROM (SELECT MIN(id) AS id FROM phonehub_admins) AS first_admin)");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_mobile_devices (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          user_id BIGINT UNSIGNED NOT NULL, phone_id CHAR(64) NOT NULL,
+          display_name VARCHAR(120) NOT NULL DEFAULT '',
+          enabled TINYINT NOT NULL DEFAULT 1,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          last_seen DATETIME NULL,
+          UNIQUE KEY uniq_user_phone(user_id,phone_id),
+          INDEX idx_user_enabled(user_id,enabled)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_package_downloads (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          user_id BIGINT UNSIGNED NOT NULL, package_id VARCHAR(32) NOT NULL,
+          device_id CHAR(64) NOT NULL, downloaded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_user_date(user_id,downloaded_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_client_logs (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          user_id BIGINT UNSIGNED NOT NULL,device_id CHAR(64) NOT NULL,
+          level VARCHAR(12) NOT NULL,event VARCHAR(64) NOT NULL,
+          message VARCHAR(2000) NOT NULL,created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_user_date(user_id,created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(2,UTC_TIMESTAMP())");
+    }
 }
 function sql(string $statement, array $params = []): PDOStatement {
     $s = db()->prepare($statement); $s->execute($params); return $s;
