@@ -34,6 +34,49 @@ function update_validate_files(array $files): void {
     if (!is_array($manifest) || !is_string($manifest['version']??null))
         throw new RuntimeException('更新包 version.json 格式错误');
 }
+/**
+ * Owner-provisioned pinned trust root for signed server updates.
+ * Private signing key must remain OFF the web server and out of GitHub.
+ * Legacy installations may update without a pin; once installed, signatures
+ * are mandatory. This is not trust-on-first-use.
+ */
+function update_trust_public_key(string $store): ?string {
+    $path=rtrim($store,'/').'/self-update-trust.pub';
+    if (is_link($path)) throw new RuntimeException('更新信任公钥不能是符号链接');
+    if (!is_file($path)) return null;
+    if (!extension_loaded('sodium')) throw new RuntimeException('独立签名更新需要 PHP sodium 扩展');
+    $key=file_get_contents($path);
+    if (!is_string($key) || strlen($key)!==SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES)
+        throw new RuntimeException('更新签名信任公钥格式错误，已拒绝安装');
+    return $key;
+}
+function update_signed_manifest(array $files,string $version): string {
+    $hashes=[];
+    foreach(UPDATE_FILES as $path) {
+        if (!isset($files[$path]) || !is_string($files[$path]))
+            throw new RuntimeException('签名清单缺少程序文件：'.$path);
+        $hashes[$path]=hash('sha256',$files[$path]);
+    }
+    ksort($hashes,SORT_STRING);
+    return json_encode(['format'=>1,'version'=>$version,'files'=>$hashes],
+        JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+}
+function update_verify_signed_archive(array $files,string $version,?string $manifest,?string $signature,string $publicKey): void {
+    if (!extension_loaded('sodium')) throw new RuntimeException('独立签名更新需要 PHP sodium 扩展');
+    if (!is_string($manifest) || !is_string($signature) || $manifest==='' || $signature==='')
+        throw new RuntimeException('更新源缺少独立签名清单，已拒绝安装');
+    $sig=base64_decode(trim($signature),true);
+    if (!is_string($sig) || strlen($sig)!==SODIUM_CRYPTO_SIGN_BYTES ||
+        !sodium_crypto_sign_verify_detached($sig,$manifest,$publicKey))
+        throw new RuntimeException('更新包独立 Ed25519 签名不可信，已拒绝安装');
+    $decoded=json_decode($manifest,true);
+    if (!is_array($decoded) || ($decoded['format']??null)!==1 ||
+        ($decoded['version']??null)!==$version || !is_array($decoded['files']??null))
+        throw new RuntimeException('已签名更新清单版本或格式错误');
+    $expected=json_decode(update_signed_manifest($files,$version),true,512,JSON_THROW_ON_ERROR);
+    if ($decoded['files']!==$expected['files'])
+        throw new RuntimeException('更新内容与已签名文件摘要不一致，已拒绝安装');
+}
 function update_download(string $destination): void {
     if (!extension_loaded('curl') || !extension_loaded('zip')) throw new RuntimeException('请在 PHP 中启用 curl 与 zip 扩展');
     $url=UPDATE_ARCHIVE;
@@ -104,7 +147,16 @@ function update_archive(): array {
             $version=json_decode($files['version.json'],true);
             $number=(string)($version['version']??'');
             if (!preg_match('/^\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?$/D',$number)) throw new RuntimeException('远端版本号格式不正确');
-            return ['version'=>$number,'files'=>$files];
+            $trusted=update_trust_public_key(APP_STORE);
+            $verified=false;
+            if ($trusted!==null) {
+                $manifest=$zip->getFromName($prefix.'deploy/self-update-manifest.json');
+                $signature=$zip->getFromName($prefix.'deploy/self-update-manifest.sig');
+                update_verify_signed_archive($files,$number,
+                    is_string($manifest)?$manifest:null,is_string($signature)?$signature:null,$trusted);
+                $verified=true;
+            }
+            return ['version'=>$number,'files'=>$files,'signed'=>$verified,'signature_required'=>$trusted!==null];
         } finally {$zip->close();}
     } finally {@unlink($file);}
 }
@@ -123,6 +175,8 @@ function check_update(): array {
         'available'=>$newer || count($missing)>0,
         'repair'=>!$newer && count($missing)>0,
         'missing_modules'=>$missing,
+        'signature_verified'=>$archive['signed'],
+        'signature_required'=>$archive['signature_required'],
         'source'=>UPDATE_ARCHIVE
     ];
 }
@@ -154,6 +208,16 @@ function update_diagnostics(): array {
     } catch(Throwable $e) {
         error_log('PhoneHub runtime diagnostics database failure: '.get_class($e));
         $checks[]=['name'=>'MySQL 数据库','status'=>'error','detail'=>'数据库连接或迁移状态异常，请检查 PHP 错误日志'];
+    }
+    $signatureReady=false;
+    try { $signatureReady=update_trust_public_key(APP_STORE)!==null; }
+    catch (Throwable $e) {
+        error_log('PhoneHub update trust key invalid: '.get_class($e));
+        $checks[]=['name'=>'服务端更新签名','status'=>'error','detail'=>'固定信任公钥不正确，更新将被拒绝'];
+    }
+    if (!array_filter($checks,static fn($x)=>$x['name']==='服务端更新签名')) {
+        $checks[]=['name'=>'服务端更新签名','status'=>$signatureReady?'ok':'warning',
+            'detail'=>$signatureReady?'已配置固定 Ed25519 公钥，更新必须验签':'尚未配置独立信任公钥，仍为兼容模式的 HTTPS 镜像更新'];
     }
     $checks[]=['name'=>'Nginx 存储目录访问限制','status'=>'warning',
         'detail'=>'需在宝塔确认 /license/storage/ 被拒绝访问；本地文件检查无法证明公网访问控制'];
@@ -307,7 +371,8 @@ function apply_update(): array {
             ? '更新文件安装成功，但 PHP OPcache 未确认刷新；请重启 PHP-FPM 或 Web 服务'
             : '更新成功，已验证安装文件并保留备份';
         return ['message'=>$message,'version'=>$latest,'backup'=>$result['backup'],
-            'installed_count'=>$result['installed_count'],'cache_reset'=>$cacheReset];
+            'installed_count'=>$result['installed_count'],'cache_reset'=>$cacheReset,
+            'signature_verified'=>$archive['signed']];
     } finally {
         flock($lock,LOCK_UN);fclose($lock);
     }
