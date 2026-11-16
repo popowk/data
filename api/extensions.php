@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once dirname(__DIR__).'/app/releases.php';
+require_once dirname(__DIR__).'/app/ai.php';
 
 function api_problem(string $code,string $message,int $status=400): never {
     api_out(['ok'=>false,'error'=>$message,'error_code'=>$code],$status);
@@ -47,6 +48,8 @@ function api_latest_release(string $platform,string $channel): ?array {
 }
 function api_extra(string $action,array $input,array $session,int $userId): void {
     $device=(string)$session['device_id'];
+    if ($action==='ai_status') api_ai_status($userId);
+    if ($action==='ai_chat') api_ai_chat($input,$session,$userId);
     if (in_array($action,['license_status','capabilities','client_config','client_heartbeat'],true)) {
         $quota=api_mobile_quota($userId);
         $permitted=json_decode((string)$session['entitlements'],true)?:[];
