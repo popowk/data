@@ -55,8 +55,10 @@
       const result=await request(action,new FormData(form));
       if(action==='login'){location.href='index.php';return;}
       toast(result.message || '保存成功');
-      await refreshContent();
+      // Reveal one-time credentials before refreshing page content. If the refresh
+      // fails after the server committed the password reset, the secret must not be lost.
       if (result.password) showPassword(result.username || '客户', result.password);
+      await refreshContent();
     } catch(err){toast(err.message,true);}
     finally {if(submit)submit.disabled=false;}
   });
@@ -133,10 +135,34 @@
     try{
       const result=await request(operation,fields);
       if(operation==='logout'){location.href='index.php';return;}
-      toast(result.message||'操作成功');await refreshContent();
+      toast(result.message||'操作成功');
+      // Display one-time passwords before any non-critical page refresh.
       if(result.password)showPassword(result.username||'账号',result.password);
+      await refreshContent();
     }catch(err){toast(err.message,true);}
     finally{trigger.disabled=false;}
+  });
+  // Group bulk form: only submit values for options the administrator explicitly enables.
+  document.addEventListener('change',event=>{
+    const toggle=event.target.closest('.bulk-option-toggle');
+    if(toggle){
+      const option=toggle.closest('.bulk-option');
+      option?.classList.toggle('is-selected',toggle.checked);
+      option?.querySelectorAll('[data-bulk-field]').forEach(field=>{field.disabled=!toggle.checked;});
+      const summary=$('#bulk-summary');
+      if(summary){
+        const selected=[...document.querySelectorAll('.bulk-option-toggle:checked')].map(x=>x.closest('.bulk-option')?.querySelector('strong')?.textContent||'配置');
+        summary.textContent=selected.length?('将修改：'+selected.join('、')):'尚未选择修改项';
+      }
+    }
+    if(event.target.id==='bulk-group'){
+      const option=event.target.selectedOptions[0];
+      const count=option?.dataset.members;
+      const meta=$('#bulk-member-count');
+      const hidden=$('#bulk-group-hidden');
+      if(meta)meta.textContent=event.target.value?(count+' 位客户将受到影响'):'尚未选择分组';
+      if(hidden)hidden.value=event.target.value;
+    }
   });
   if ($('#update-status')) checkUpdate();
 })();
