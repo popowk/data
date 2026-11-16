@@ -4,6 +4,7 @@ require dirname(__DIR__).'/app/core.php';
 require dirname(__DIR__).'/app/ai.php';
 require dirname(__DIR__).'/app/mobile.php';
 require dirname(__DIR__).'/app/releases.php';
+require dirname(__DIR__).'/app/accounts.php';
 
 $pdo=new PDO('mysql:host=127.0.0.1;port=3306;dbname=phonehub_ci;charset=utf8mb4','root','ci_password',[
     PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_EMULATE_PREPARES=>false
@@ -86,9 +87,29 @@ require dirname(__DIR__).'/app/features.php';
 ob_start();feature_view('cloud_features');$cloudHtml=ob_get_clean();
 if (strpos($cloudHtml,'MCP 云端总开关')===false || strpos($cloudHtml,'Skill 云端总开关')===false)
     throw new RuntimeException('cloud feature control page render failed');
+if (strpos($cloudHtml,'cloud-feature-card')===false || strpos($cloudHtml,'cloud-savebar')===false)
+    throw new RuntimeException('redesigned cloud feature controls missing');
+ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
+if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false)
+    throw new RuntimeException('redesigned group bulk form render failed');
 ob_start();feature_view('mobiles');$mobileHtml=ob_get_clean();
 if (strpos($mobileHtml,'设备黑名单')===false || strpos($mobileHtml,'IMEI')===false)
     throw new RuntimeException('mobile device and blacklist page render failed');
+
+// Regression: resetting a customer password must commit the new hash, revoke sessions,
+// audit the operation, and return the one-time secret even if the later UI refresh fails.
+$resetPasswordHash=password_hash_safe('old-reset-password-123');
+$pdo->prepare('INSERT INTO phonehub_users(username,password_hash,entitlements) VALUES(?,?,?)')
+    ->execute(['phonehub_reset_ci_user',$resetPasswordHash,'["douyin"]']);
+$resetUserId=(int)$pdo->lastInsertId();
+$pdo->prepare('INSERT INTO phonehub_sessions(user_id,device_id,token_hash,expires_at) VALUES(?,?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR))')
+    ->execute([$resetUserId,str_repeat('d',64),hash('sha256','ci-reset-session-token')]);
+$resetResult=account_reset_password($resetUserId);
+$storedResetHash=(string)$pdo->query("SELECT password_hash FROM phonehub_users WHERE id=".(int)$resetUserId)->fetchColumn();
+$remainingSessions=(int)$pdo->query("SELECT COUNT(*) FROM phonehub_sessions WHERE user_id=".(int)$resetUserId)->fetchColumn();
+$auditCount=(int)$pdo->query("SELECT COUNT(*) FROM phonehub_admin_audit WHERE action='account_password' AND target='phonehub_reset_ci_user'")->fetchColumn();
+if ($resetResult['username']!=='phonehub_reset_ci_user' || !password_verify($resetResult['password'],$storedResetHash) || $remainingSessions!==0 || $auditCount<1)
+    throw new RuntimeException('customer password reset regression: hash/session/audit mismatch');
 unset($_SESSION['admin_id'],$_SESSION['auth_version'],$_SESSION['admin_user']);
 @unlink(APP_STORE.'/config.php');
 
