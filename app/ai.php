@@ -8,6 +8,11 @@ const AI_DEEPSEEK_CHAT_URL='https://api.deepseek.com/chat/completions';
 const AI_MAX_REQUEST_BYTES=262144;
 const AI_MAX_RESPONSE_BYTES=4194304;
 
+function ai_db_sql(string $statement,array $params=[]): PDOStatement {
+    if (function_exists('client_sql')) return ai_db_sql($statement,$params);
+    return sql($statement,$params);
+}
+
 function ai_setting(string $key,string $fallback=''): string {
     $value=client_sql('SELECT setting_value FROM phonehub_ai_settings WHERE setting_key=?',[$key])->fetchColumn();
     return $value===false?$fallback:(string)$value;
