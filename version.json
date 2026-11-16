@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "channel": "stable",
   "released_at": "2026-11-16",
-  "notes": "修复客户重置密码后刷新失败导致一次性密码未显示；密码重置事务化并撤销旧会话；兼容未编译 Argon2id 的 PHP 环境；优化管理员权限查询；重做分组批量配置与客户端能力控制界面；修复复选框样式；在线更新保留用户自定义 README.md；降低手机名额后按绑定先后限制超额设备通过授权检查。"
+  "notes": "修复在线升级后白屏风险：更新包强制校验 app/accounts.php 等运行必需文件；安装完成后统一刷新 PHP OPcache，并在无法刷新时明确提示重启 PHP-FPM/Web 服务；后台页面禁用 HTML 缓存，CSS/JS 按版本号更新，升级后使用防缓存地址重新打开；新增升级 ZIP 完整性 CI 检查。保留 storage 客户数据和用户自定义 README.md。"
 }
