@@ -26,15 +26,41 @@ function api_redact(string $message): string {
     $message=preg_replace('/\b(password|passwd|token|secret|authorization|api[_-]?key)\s*[:=]\s*[^\s,;]+/i','$1=[REDACTED]',$message) ?? $message;
     return $message;
 }
-function api_log_entry(array $entry,int $userId,string $device): void {
+function api_clean_log_entry(array $entry): array {
     $level=(string)($entry['level']??'info');
     $event=(string)($entry['event']??'general');
     $message=(string)($entry['message']??'');
     if (!in_array($level,['debug','info','warn','error'],true) || !preg_match('/^[A-Za-z0-9_.-]{1,64}$/D',$event)
         || strlen($message)>2000 || $message==='' || preg_match('//u',$message)!==1)
         api_problem('INVALID_LOG','日志级别、事件名称或内容不正确');
-    client_sql('INSERT INTO phonehub_client_logs(user_id,device_id,level,event,message,created_at) VALUES(?,?,?,?,?,UTC_TIMESTAMP())',
-        [$userId,$device,$level,$event,api_redact($message)]);
+    return [$level,$event,api_redact($message)];
+}
+function api_store_logs(array $records,int $userId,string $device): never {
+    if (count($records)<1 || count($records)>50) api_problem('INVALID_LOG_BATCH','每批次需上传 1–50 条日志');
+    $clean=[];
+    foreach($records as $entry) {
+        if (!is_array($entry)) api_problem('INVALID_LOG','日志项目结构不正确');
+        $clean[]=api_clean_log_entry($entry);
+    }
+    global $pdo;
+    $pdo->beginTransaction();
+    try {
+        client_sql('SELECT id FROM phonehub_users WHERE id=? FOR UPDATE',[$userId])->fetch();
+        $used=(int)client_sql('SELECT COUNT(*) FROM phonehub_client_logs WHERE user_id=? AND created_at>DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 HOUR)',[$userId])->fetchColumn();
+        if ($used+count($clean)>1000) {
+            $pdo->rollBack();
+            api_problem('LOG_RATE_LIMIT','日志已达到每小时 1000 条上限',429);
+        }
+        foreach($clean as [$level,$event,$message]) {
+            client_sql('INSERT INTO phonehub_client_logs(user_id,device_id,level,event,message,created_at) VALUES(?,?,?,?,?,UTC_TIMESTAMP())',
+                [$userId,$device,$level,$event,$message]);
+        }
+        $pdo->commit();
+    } catch(Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    api_out(['ok'=>true,'received'=>count($clean)]);
 }
 function api_require_release_permission(array $release,array $session): void {
     $allowed=json_decode((string)$session['entitlements'],true);
@@ -48,6 +74,12 @@ function api_latest_release(string $platform,string $channel): ?array {
 }
 function api_extra(string $action,array $input,array $session,int $userId): void {
     $device=(string)$session['device_id'];
+    if ($action==='log_upload') api_store_logs([$input],$userId,$device);
+    if ($action==='log_batch') {
+        $records=$input['logs']??null;
+        if (!is_array($records) || !array_is_list($records)) api_problem('INVALID_LOG_BATCH','logs 必须为数组');
+        api_store_logs($records,$userId,$device);
+    }
     if ($action==='ai_status') api_ai_status($userId);
     if ($action==='ai_chat') api_ai_chat($input,$session,$userId);
     if (in_array($action,['license_status','capabilities','client_config','client_heartbeat'],true)) {
@@ -186,25 +218,5 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         }
         fclose($fp);exit;
     }
-    if ($action==='log_upload') {
-        $used=(int)client_sql('SELECT COUNT(*) FROM phonehub_client_logs WHERE user_id=? AND created_at>DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 HOUR)',[$userId])->fetchColumn();
-        if ($used>=1000) api_problem('LOG_RATE_LIMIT','日志已达到每小时 1000 条上限',429);
-        api_log_entry($input,$userId,$device);
-        api_out(['ok'=>true,'received'=>1]);
-    }
-        if ($action==='log_batch') {
-        $records=$input['logs']??null;
-        if (!is_array($records) || !array_is_list($records) || count($records)<1 || count($records)>50)
-            api_problem('INVALID_LOG_BATCH','每批次需上传 1–50 条日志');
-        $used=(int)client_sql('SELECT COUNT(*) FROM phonehub_client_logs WHERE user_id=? AND created_at>DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 HOUR)',[$userId])->fetchColumn();
-        if ($used+count($records)>1000) api_problem('LOG_RATE_LIMIT','日志已达到每小时 1000 条上限',429);
-        global $pdo;
-        $pdo->beginTransaction();
-        foreach ($records as $entry) {
-            if (!is_array($entry)) api_problem('INVALID_LOG','日志项目结构不正确');
-            api_log_entry($entry,$userId,$device);
-        }
-        $pdo->commit();
-        api_out(['ok'=>true,'received'=>count($records)]);
-    }
+
 }
