@@ -221,8 +221,13 @@ function update_diagnostics(): array {
     }
     $checks[]=['name'=>'Nginx 存储目录访问限制','status'=>'warning',
         'detail'=>'需在宝塔确认 /license/storage/ 被拒绝访问；本地文件检查无法证明公网访问控制'];
-    $checks[]=['name'=>'数据库及密钥异地备份','status'=>'warning',
-        'detail'=>'未自动验证异地备份；请定期备份数据库、AI/IMEI/更新签名密钥并做恢复演练'];
+    $recipient=APP_STORE.'/backup-recipient.pub';
+    $backupKeyOk=is_file($recipient) && !is_link($recipient) &&
+        extension_loaded('sodium') && filesize($recipient)===SODIUM_CRYPTO_BOX_PUBLICKEYBYTES;
+    $checks[]=['name'=>'加密备份接收公钥','status'=>$backupKeyOk?'ok':'warning',
+        'detail'=>$backupKeyOk?'已配置 Curve25519 备份公钥；可由 CLI 工具生成加密备份':'未配置 32 字节备份公钥，或格式不正确；CLI 加密备份暂不可用'];
+    $checks[]=['name'=>'异地备份与恢复验证','status'=>'warning',
+        'detail'=>'无法通过网站判断宝塔任务或离线恢复是否成功；请检查定时任务、异地副本和恢复演练'];
     return ['checks'=>$checks,'summary'=>[
         'errors'=>count(array_filter($checks,static fn($x)=>$x['status']==='error')),
         'warnings'=>count(array_filter($checks,static fn($x)=>$x['status']==='warning'))
