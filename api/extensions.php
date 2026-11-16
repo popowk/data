@@ -189,7 +189,6 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         } catch(Throwable $e) {api_problem('INVALID_PARAMETER',$e->getMessage());}
         $allowed=json_decode((string)$session['entitlements'],true)?:[];
         if (in_array($platform,['mcp','skill'],true)) api_require_cloud_feature($platform,$session);
-        if (in_array($platform,['mcp','skill'],true)) api_require_cloud_feature($platform,$session);
         if ($platform!=='core' && !in_array($platform,$allowed,true)) api_problem('NOT_ENTITLED','未授权此更新目标',403);
         $rows=client_sql('SELECT * FROM phonehub_releases WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC LIMIT 30',[$platform,$channel])->fetchAll();
         usort($rows,static fn($a,$b)=>version_compare($b['version'],$a['version']));
@@ -203,6 +202,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         $current=(string)($input['current_version']??'0.0.0');
         if (!valid_version($current)) api_problem('INVALID_VERSION','当前版本号不正确');
         $allowed=json_decode((string)$session['entitlements'],true)?:[];
+        if (in_array($platform,['mcp','skill'],true)) api_require_cloud_feature($platform,$session);
         if ($platform!=='core' && !in_array($platform,$allowed,true)) api_problem('NOT_ENTITLED','未授权此更新目标',403);
         $release=api_latest_release($platform,$channel);
         $available=$release && version_compare($release['version'],$current,'>');
