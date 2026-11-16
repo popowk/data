@@ -2,6 +2,8 @@
 declare(strict_types=1);
 require __DIR__.'/app/core.php';
 require_once __DIR__.'/app/accounts.php';
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
 if (!installed()) { header('Location: install.php'); exit; }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -180,7 +182,7 @@ $nav=[
 ];
 ?>
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="csrf" content="<?=h(csrf())?>"><title>PhoneHub 管理控制台</title><link rel="stylesheet" href="assets/app.css"></head>
+<meta name="csrf" content="<?=h(csrf())?>"><title>PhoneHub 管理控制台</title><link rel="stylesheet" href="assets/app.css?v=<?=rawurlencode(app_version())?>"></head>
 <body><div class="app"><aside class="sidebar"><div class="brand"><span class="brand-mark">P</span><div><strong>PhoneHub</strong><small>授权管理中心</small></div></div>
 <nav><?php foreach ($nav as $route=>$item): if ($adminRole!=='owner' && in_array($route,['update','gateway','admins','releases','ai','cloud_features'],true)) continue; ?><a class="<?= $view===$route?'active':'' ?>" href="?view=<?=h($route)?>"><span class="nav-icon"><?=h($item[1])?></span><?=h($item[0])?></a><?php endforeach ?></nav>
 <div class="sidebar-footer"><span class="status-dot"></span> 运行中 <small>v<?=h(app_version())?></small></div></aside>
@@ -241,4 +243,4 @@ $nav=[
 } ?>
 <?php elseif (in_array($view,['admins','group_bulk','mobiles','gateway','client_logs','cloud_features'],true)): require __DIR__.'/app/features.php'; feature_view($view); ?>
 <?php endif ?>
-</main></div></div><div class="toast" id="toast" role="status" aria-live="polite"></div><script src="assets/app.js" defer></script></body></html>
+</main></div></div><div class="toast" id="toast" role="status" aria-live="polite"></div><script src="assets/app.js?v=<?=rawurlencode(app_version())?>" defer></script></body></html>
