@@ -103,10 +103,12 @@ function feature_action(string $action): never {
         if (!$u || !(int)$u['enabled']) throw new RuntimeException('客户不存在或已停用');
         if (mobile_blacklist_match(db(),$fingerprint,$imeiHash)) throw new RuntimeException('该手机指纹或 IMEI 已在设备黑名单中');
         $existing=sql('SELECT id,enabled,imei_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=? FOR UPDATE',[$user,$fingerprint])->fetch();
+        $knownImeiHash=$imeiHash??(($existing && !empty($existing['imei_hash']))?(string)$existing['imei_hash']:null);
+        if (mobile_blacklist_match(db(),$fingerprint,$knownImeiHash)) throw new RuntimeException('该手机指纹或 IMEI 已在设备黑名单中');
         if ($existing && $imeiHash!==null && !empty($existing['imei_hash']) && !hash_equals((string)$existing['imei_hash'],$imeiHash))
             throw new RuntimeException('该手机指纹已绑定不同 IMEI，请先由主管理员核对设备');
         if ($imeiHash!==null) {
-            $other=sql('SELECT id FROM phonehub_mobile_devices WHERE imei_hash=? AND enabled=1 AND NOT(user_id=? AND phone_id=?) LIMIT 1 FOR UPDATE',[$imeiHash,$user,$fingerprint])->fetch();
+            $other=sql('SELECT id FROM phonehub_mobile_devices WHERE imei_hash=? AND NOT(user_id=? AND phone_id=?) LIMIT 1 FOR UPDATE',[$imeiHash,$user,$fingerprint])->fetch();
             if ($other) throw new RuntimeException('该 IMEI 已绑定其他手机记录');
         }
         $active=(int)sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$user])->fetchColumn();
