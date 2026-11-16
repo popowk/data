@@ -72,6 +72,7 @@ function migrate(PDO $conn): void {
         };
         if (!$hasColumn('role')) $conn->exec("ALTER TABLE phonehub_admins ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'admin'");
         if (!$hasColumn('enabled')) $conn->exec("ALTER TABLE phonehub_admins ADD COLUMN enabled TINYINT NOT NULL DEFAULT 1");
+        if (!$hasColumn('auth_version')) $conn->exec("ALTER TABLE phonehub_admins ADD COLUMN auth_version INT NOT NULL DEFAULT 1");
         // The earliest existing administrator becomes the immutable primary administrator.
         $conn->exec("UPDATE phonehub_admins SET role='owner',enabled=1 WHERE id=(SELECT id FROM (SELECT MIN(id) AS id FROM phonehub_admins) AS first_admin)");
         $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_mobile_devices (
@@ -117,6 +118,22 @@ function check_csrf(): void {
 function admin_id(): int { return (int)($_SESSION['admin_id'] ?? 0); }
 function require_admin(): void {
     if (!admin_id()) throw new RuntimeException('登录已失效，请重新登录');
+    $s=db()->prepare('SELECT enabled,auth_version FROM phonehub_admins WHERE id=?');
+    $s->execute([admin_id()]);
+    $row=$s->fetch(PDO::FETCH_ASSOC);
+    if (!$row || !(int)$row['enabled'] || (int)$row['auth_version'] !== (int)($_SESSION['auth_version'] ?? 0))
+        throw new RuntimeException('管理员权限已变更，请重新登录');
+}
+function require_owner(): void {
+    require_admin();
+    $row=sql('SELECT role FROM phonehub_admins WHERE id=?',[admin_id()])->fetch();
+    if (!$row || $row['role'] !== 'owner') throw new RuntimeException('仅主管理员可以执行此操作');
+}
+function random_password(int $length=20): string {
+    $characters='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#%+-';
+    $out='';
+    for ($i=0;$i<$length;$i++) $out.=$characters[random_int(0,strlen($characters)-1)];
+    return $out;
 }
 function audit(string $action, string $target): void {
     sql('INSERT INTO phonehub_admin_audit(admin_id,action,target,ip) VALUES(?,?,?,?)',
