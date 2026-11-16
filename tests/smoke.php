@@ -34,7 +34,7 @@ if($blacklistTable!==1) throw new RuntimeException('mobile blacklist table missi
 $featureFlags=$pdo->query("SELECT setting_key,setting_value FROM phonehub_feature_settings")->fetchAll(PDO::FETCH_KEY_PAIR);
 if(($featureFlags['mcp_enabled']??'1')!=='0' || ($featureFlags['skill_enabled']??'1')!=='0')
     throw new RuntimeException('MCP/Skill must be globally disabled by default');
-$imei='490154203237518';
+$imei='490154203237519';
 $imeiHash=mobile_imei_hash($imei);
 if(!preg_match('/^[a-f0-9]{64}$/D',(string)$imeiHash) || hash_equals(hash('sha256',$imei),(string)$imeiHash))
     throw new RuntimeException('IMEI must be stored as keyed HMAC, not raw or plain SHA-256');
