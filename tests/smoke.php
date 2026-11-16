@@ -31,6 +31,8 @@ $mobileColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS W
 if(!in_array('imei_hash',$mobileColumns,true)) throw new RuntimeException('mobile IMEI hash column missing');
 $blacklistTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_mobile_blacklist'")->fetchColumn();
 if($blacklistTable!==1) throw new RuntimeException('mobile blacklist table missing');
+$identityMeta=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_mobile_identity_meta'")->fetchColumn();
+if($identityMeta!==1) throw new RuntimeException('mobile identity key metadata table missing');
 $featureFlags=$pdo->query("SELECT setting_key,setting_value FROM phonehub_feature_settings")->fetchAll(PDO::FETCH_KEY_PAIR);
 if(($featureFlags['mcp_enabled']??'1')!=='0' || ($featureFlags['skill_enabled']??'1')!=='0')
     throw new RuntimeException('MCP/Skill must be globally disabled by default');
@@ -38,6 +40,15 @@ $imei='490154203237519';
 $imeiHash=mobile_imei_hash($imei);
 if(!preg_match('/^[a-f0-9]{64}$/D',(string)$imeiHash) || hash_equals(hash('sha256',$imei),(string)$imeiHash))
     throw new RuntimeException('IMEI must be stored as keyed HMAC, not raw or plain SHA-256');
+$keyPath=APP_STORE.'/mobile-identity.key';
+$keyBackup=file_get_contents($keyPath);
+if (!is_string($keyBackup) || strlen($keyBackup)!==32 || !unlink($keyPath))
+    throw new RuntimeException('could not prepare IMEI key-loss test');
+$keyLossRejected=false;
+try {mobile_imei_hash($imei);} catch(RuntimeException $e) {$keyLossRejected=str_contains($e->getMessage(),'密钥丢失');}
+file_put_contents($keyPath,$keyBackup,LOCK_EX);
+if (PHP_OS_FAMILY!=='Windows') chmod($keyPath,0600);
+if (!$keyLossRejected) throw new RuntimeException('missing IMEI HMAC key must fail closed, not rotate');
 $phoneId=str_repeat('c',64);
 $pdo->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES('imei_hash',?,?,1,0)")
     ->execute([$imeiHash,'CI blacklist test']);
