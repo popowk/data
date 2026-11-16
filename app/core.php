@@ -97,13 +97,15 @@ function utc_to_cn(?string $utc): string {
 }
 function input_to_utc(string $local): ?string {
     if ($local === '') return null;
-    $t = DateTimeImmutable::createFromFormat('!Y-m-d\TH:i', $local, new DateTimeZone('Asia/Shanghai'));
-    if (!$t || $t->format('Y-m-d\TH:i') !== $local) throw new RuntimeException('授权截止时间格式错误');
-    return $t->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+    foreach (['Y-m-d\TH:i:s','Y-m-d\TH:i'] as $format) {
+        $t = DateTimeImmutable::createFromFormat('!'.$format, $local, new DateTimeZone('Asia/Shanghai'));
+        if ($t && $t->format($format) === $local) return $t->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+    }
+    throw new RuntimeException('授权截止时间格式错误');
 }
 function utc_to_input(?string $utc): string {
     if (!$utc) return '';
-    return (new DateTimeImmutable($utc, new DateTimeZone('UTC')))->setTimezone(new DateTimeZone('Asia/Shanghai'))->format('Y-m-d\TH:i');
+    return (new DateTimeImmutable($utc, new DateTimeZone('UTC')))->setTimezone(new DateTimeZone('Asia/Shanghai'))->format('Y-m-d\TH:i:s');
 }
 function validate_user(string $name): void {
     if (!preg_match('/^[A-Za-z0-9_-]{3,64}$/D', $name)) throw new RuntimeException('账号名需为 3–64 位字母、数字、下划线或短横线');
