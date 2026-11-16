@@ -121,7 +121,16 @@ function api_extra(string $action,array $input,array $session,int $userId): void
     }
     if ($action==='mobile_unbind') {
         $phone=api_phone((string)($input['phone_id']??''));
-        $count=client_sql('UPDATE phonehub_mobile_devices SET enabled=0 WHERE user_id=? AND phone_id=? AND enabled=1',[$userId,$phone])->rowCount();
+        global $pdo;
+        $pdo->beginTransaction();
+        try {
+            client_sql('SELECT id FROM phonehub_users WHERE id=? FOR UPDATE',[$userId])->fetch();
+            $count=client_sql('UPDATE phonehub_mobile_devices SET enabled=0 WHERE user_id=? AND phone_id=? AND enabled=1',[$userId,$phone])->rowCount();
+            $pdo->commit();
+        } catch(Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
+        }
         api_out(['ok'=>true,'phone_id'=>$phone,'unbound'=>$count>0]);
     }
     if ($action==='package_list') {
