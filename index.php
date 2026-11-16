@@ -66,9 +66,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $enabled=isset($_POST['enabled']) ? 1 : 0;
             if ($limit<1 || $limit>100 || $mobile<0 || $mobile>1000) throw new RuntimeException('电脑限额为 1–100，手机限额为 0–1000');
             if ($group && !(int)sql('SELECT COUNT(*) FROM phonehub_groups WHERE id=?',[$group])->fetchColumn()) throw new RuntimeException('分组不存在');
-            $entitlements=array_values(array_intersect(['douyin','xiaohongshu','mcp','skill'],(array)($_POST['entitlements'] ?? [])));
+            $entitlements=array_values(array_intersect(['douyin','xiaohongshu','mcp','skill','mcp-codex','mcp-harness'],(array)($_POST['entitlements'] ?? [])));
+            if (array_intersect($entitlements,['mcp-codex','mcp-harness']) && !in_array('mcp',$entitlements,true))
+                throw new RuntimeException('Codex、DeepSeek Harness MCP 必须同时授予 MCP 上级权限');
             $previousEntitlements=$id?(json_decode((string)sql('SELECT entitlements FROM phonehub_users WHERE id=?',[$id])->fetchColumn(),true)?:[]):[];
-            if (array_diff(array_intersect(['mcp','skill'],$entitlements),$previousEntitlements)) require_owner();
+            if (array_diff(array_intersect(['mcp','skill','mcp-codex','mcp-harness'],$entitlements),$previousEntitlements)) require_owner();
             $until=input_to_utc(trim((string)($_POST['license_until'] ?? '')));
             $notes=trim((string)($_POST['notes'] ?? ''));
             if (utf8_length($notes)>500) throw new RuntimeException('备注不能超过 500 字');
@@ -205,7 +207,7 @@ $nav=[
 <div class="field"><label>授权截止时间（北京时间，留空永久）</label><input name="license_until" type="datetime-local" step="1"></div>
 <div class="field"><label>电脑授权名额（1–100）</label><input name="device_limit" type="number" min="1" max="100" value="3"></div>
 <div class="field"><label>安卓手机名额（0 表示禁止绑定）</label><input name="mobile_limit" type="number" min="0" max="1000" value="1"></div>
-<div class="field span2"><label>平台与扩展权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked> 抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu"> 小红书</label><label><input type="checkbox" name="entitlements[]" value="mcp"> MCP</label><label><input type="checkbox" name="entitlements[]" value="skill"> Skill</label></div><span class="footnote">MCP/Skill 还需在「客户端能力控制」打开全局开关；新客户默认不授权。</span></div>
+<div class="field span2"><label>平台与扩展权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked> 抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu"> 小红书</label><label><input type="checkbox" name="entitlements[]" value="mcp"> MCP</label><label><input type="checkbox" name="entitlements[]" value="mcp-codex"> Codex MCP</label><label><input type="checkbox" name="entitlements[]" value="mcp-harness"> DeepSeek Harness MCP</label><label><input type="checkbox" name="entitlements[]" value="skill"> Skill</label></div><span class="footnote">MCP/Skill 还需在「客户端能力控制」打开全局开关；新客户默认不授权。</span></div>
 <div class="field"><label>账号状态</label><label class="check-row"><input type="checkbox" name="enabled" checked> 启用账号</label></div>
 <div class="field"><label>AI 功能</label><label class="check-row"><input type="checkbox" name="ai_enabled" checked> 允许使用 AI</label></div>
 <div class="field"><label>AI 每日请求额度（0–5000）</label><input name="ai_daily_limit" type="number" min="0" max="5000" value="100"></div>
@@ -215,7 +217,7 @@ $nav=[
 <div class="card"><div class="card-head"><h2>全部客户</h2><span class="count"><?=count($accounts)?> 个账号</span></div>
 <div class="table-scroll"><table><thead><tr><th>客户账号</th><th>分组</th><th>电脑名额</th><th>手机额度</th><th>授权截止（北京时间）</th><th>平台权限</th><th>状态</th><th>操作</th></tr></thead><tbody>
 <?php foreach($accounts as $a): $payload=['id'=>(int)$a['id'],'username'=>$a['username'],'group_id'=>(int)$a['group_id'],'device_limit'=>(int)$a['device_limit'],'mobile_limit'=>(int)$a['mobile_limit'],'license_until'=>utc_to_input($a['license_until']),'entitlements'=>json_decode((string)$a['entitlements'],true)?:[],'notes'=>$a['notes'],'enabled'=>(bool)$a['enabled'],'ai_enabled'=>(bool)$a['ai_enabled'],'allow_client_ai_key'=>(bool)$a['allow_client_ai_key'],'ai_daily_limit'=>(int)$a['ai_daily_limit']]; ?>
-<tr><td><b><?=h($a['username'])?></b></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?= (int)$a['mobile_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><?=h(implode('、',array_map(static fn($x)=>['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP','skill'=>'Skill'][$x]??$x,json_decode((string)$a['entitlements'],true)?:[])))?></td>
+<tr><td><b><?=h($a['username'])?></b></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?= (int)$a['mobile_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><?=h(implode('、',array_map(static fn($x)=>['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP','skill'=>'Skill','mcp-codex'=>'Codex MCP','mcp-harness'=>'DeepSeek Harness MCP'][$x]??$x,json_decode((string)$a['entitlements'],true)?:[])))?></td>
 <td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td><td class="actions">
 <button class="small-link" data-edit="<?=h(json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP|JSON_HEX_TAG))?>">编辑</button>
 <button class="small-link" data-action="reset-account-password" data-id="<?=(int)$a['id']?>">重置密码</button>
