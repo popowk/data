@@ -109,11 +109,15 @@ try {
             $pdo->rollBack();api_error('该手机指纹或 IMEI 已被管理员拉黑',403);
         }
         $existing=client_sql('SELECT enabled,imei_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=? FOR UPDATE',[$userId,$phone])->fetch();
+        $knownImeiHash=$imeiHash??(($existing && !empty($existing['imei_hash']))?(string)$existing['imei_hash']:null);
+        if (mobile_blacklist_match($pdo,$phone,$knownImeiHash)) {
+            $pdo->rollBack();api_error('该手机指纹或 IMEI 已被管理员拉黑',403);
+        }
         if ($existing && $imeiHash!==null && !empty($existing['imei_hash']) && !hash_equals((string)$existing['imei_hash'],$imeiHash)) {
             $pdo->rollBack();api_error('该手机指纹已绑定不同 IMEI，请联系管理员核验',403);
         }
         if ($imeiHash!==null) {
-            $other=client_sql('SELECT id FROM phonehub_mobile_devices WHERE imei_hash=? AND enabled=1 AND NOT(user_id=? AND phone_id=?) LIMIT 1 FOR UPDATE',[$imeiHash,$userId,$phone])->fetch();
+            $other=client_sql('SELECT id FROM phonehub_mobile_devices WHERE imei_hash=? AND NOT(user_id=? AND phone_id=?) LIMIT 1 FOR UPDATE',[$imeiHash,$userId,$phone])->fetch();
             if ($other) {$pdo->rollBack();api_error('该 IMEI 已绑定其他设备记录',403);}
         }
         $count=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
