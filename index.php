@@ -50,6 +50,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             validate_user($name);
             $limit=(int)($_POST['device_limit'] ?? 3);
             $mobile=(int)($_POST['mobile_limit'] ?? 1);
+            $aiEnabled=isset($_POST['ai_enabled'])?1:0;
+            $allowClientAiKey=isset($_POST['allow_client_ai_key'])?1:0;
+            $aiDailyLimit=(int)($_POST['ai_daily_limit']??100);
+            if ($aiDailyLimit<0 || $aiDailyLimit>5000) throw new RuntimeException('AI 每日请求额度必须为 0–5000');
+            if ($allowClientAiKey && !$aiEnabled) throw new RuntimeException('关闭 AI 功能时不能单独开放客户端自带 Key');
             $group=(int)($_POST['group_id'] ?? 0);
             $enabled=isset($_POST['enabled']) ? 1 : 0;
             if ($limit<1 || $limit>100 || $mobile<0 || $mobile>1000) throw new RuntimeException('电脑限额为 1–100，手机限额为 0–1000');
@@ -65,18 +70,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$old) throw new RuntimeException('账号不存在');
                 if ($pass!=='') {
                     $hash=password_hash_safe($pass);
-                    sql('UPDATE phonehub_users SET username=?,password_hash=?,enabled=?,device_limit=?,license_until=?,entitlements=? WHERE id=?',
-                        [$name,$hash,$enabled,$limit,$until,json_encode($entitlements),$id]);
+                    sql('UPDATE phonehub_users SET username=?,password_hash=?,enabled=?,device_limit=?,license_until=?,entitlements=?,ai_enabled=?,allow_client_ai_key=?,ai_daily_limit=? WHERE id=?',
+                        [$name,$hash,$enabled,$limit,$until,json_encode($entitlements),$aiEnabled,$allowClientAiKey,$aiDailyLimit,$id]);
                 } else {
-                    sql('UPDATE phonehub_users SET username=?,enabled=?,device_limit=?,license_until=?,entitlements=? WHERE id=?',
-                        [$name,$enabled,$limit,$until,json_encode($entitlements),$id]);
+                    sql('UPDATE phonehub_users SET username=?,enabled=?,device_limit=?,license_until=?,entitlements=?,ai_enabled=?,allow_client_ai_key=?,ai_daily_limit=? WHERE id=?',
+                        [$name,$enabled,$limit,$until,json_encode($entitlements),$aiEnabled,$allowClientAiKey,$aiDailyLimit,$id]);
                 }
                 if (!$enabled || $pass!=='' || $limit<(int)$old['device_limit']) sql('DELETE FROM phonehub_sessions WHERE user_id=?',[$id]);
             } else {
                 $pass=random_password();
                 $hash=password_hash_safe($pass);
-                sql('INSERT INTO phonehub_users(username,password_hash,enabled,device_limit,license_until,entitlements) VALUES(?,?,?,?,?,?)',
-                    [$name,$hash,$enabled,$limit,$until,json_encode($entitlements)]);
+                sql('INSERT INTO phonehub_users(username,password_hash,enabled,device_limit,license_until,entitlements,ai_enabled,allow_client_ai_key,ai_daily_limit) VALUES(?,?,?,?,?,?,?,?,?)',
+                    [$name,$hash,$enabled,$limit,$until,json_encode($entitlements),$aiEnabled,$allowClientAiKey,$aiDailyLimit]);
                 $id=(int)db()->lastInsertId();
             }
             sql('INSERT INTO phonehub_user_meta(user_id,group_id,mobile_limit,notes) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE group_id=VALUES(group_id),mobile_limit=VALUES(mobile_limit),notes=VALUES(notes)',
@@ -152,7 +157,7 @@ if (!in_array($view,['dashboard','accounts','groups','group_bulk','mobiles','ses
 $adminRole=(string)sql('SELECT role FROM phonehub_admins WHERE id=?',[admin_id()])->fetchColumn();
 if (in_array($view,['admins','gateway','update','releases'],true) && $adminRole!=='owner') { http_response_code(403); exit('该页面仅主管理员可以访问'); }
 $groups=sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll();
-$accounts=($view==='accounts'||$view==='dashboard') ? sql("SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,u.created_at,m.group_id,COALESCE(m.mobile_limit,0) AS mobile_limit,COALESCE(m.notes,'') AS notes,g.name AS group_name,(SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id LEFT JOIN phonehub_groups g ON g.id=m.group_id ORDER BY u.id DESC")->fetchAll() : [];
+$accounts=($view==='accounts'||$view==='dashboard') ? sql("SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,u.created_at,u.ai_enabled,u.allow_client_ai_key,u.ai_daily_limit,m.group_id,COALESCE(m.mobile_limit,0) AS mobile_limit,COALESCE(m.notes,'') AS notes,g.name AS group_name,(SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id LEFT JOIN phonehub_groups g ON g.id=m.group_id ORDER BY u.id DESC")->fetchAll() : [];
 $nav=[
 'dashboard'=>['概览','▦'],
 'accounts'=>['客户授权','♙'],
@@ -194,11 +199,14 @@ $nav=[
 <div class="field"><label>安卓手机名额（预留配置）</label><input name="mobile_limit" type="number" min="0" max="1000" value="1"></div>
 <div class="field"><label>平台权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked> 抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu"> 小红书（预留）</label></div></div>
 <div class="field"><label>账号状态</label><label class="check-row"><input type="checkbox" name="enabled" checked> 启用账号</label></div>
+<div class="field"><label>AI 功能</label><label class="check-row"><input type="checkbox" name="ai_enabled" checked> 允许使用 AI</label></div>
+<div class="field"><label>AI 每日请求额度（0–5000）</label><input name="ai_daily_limit" type="number" min="0" max="5000" value="100"></div>
+<div class="field span2"><label>客户端自带 API Key</label><label class="check-row"><input type="checkbox" name="allow_client_ai_key"> 允许该客户自带 Key（还需主管理员开启全局开关）</label></div>
 <div class="field span2"><label>内部备注</label><input name="notes" maxlength="500" placeholder="可填写客户联系方式、购买产品等"></div>
 </div><div class="editor-actions"><button class="btn primary">保存授权</button></div></form></div>
 <div class="card"><div class="card-head"><h2>全部客户</h2><span class="count"><?=count($accounts)?> 个账号</span></div>
 <div class="table-scroll"><table><thead><tr><th>客户账号</th><th>分组</th><th>电脑名额</th><th>手机额度</th><th>授权截止（北京时间）</th><th>平台权限</th><th>状态</th><th>操作</th></tr></thead><tbody>
-<?php foreach($accounts as $a): $payload=['id'=>(int)$a['id'],'username'=>$a['username'],'group_id'=>(int)$a['group_id'],'device_limit'=>(int)$a['device_limit'],'mobile_limit'=>(int)$a['mobile_limit'],'license_until'=>utc_to_input($a['license_until']),'entitlements'=>json_decode((string)$a['entitlements'],true)?:[],'notes'=>$a['notes'],'enabled'=>(bool)$a['enabled']]; ?>
+<?php foreach($accounts as $a): $payload=['id'=>(int)$a['id'],'username'=>$a['username'],'group_id'=>(int)$a['group_id'],'device_limit'=>(int)$a['device_limit'],'mobile_limit'=>(int)$a['mobile_limit'],'license_until'=>utc_to_input($a['license_until']),'entitlements'=>json_decode((string)$a['entitlements'],true)?:[],'notes'=>$a['notes'],'enabled'=>(bool)$a['enabled'],'ai_enabled'=>(bool)$a['ai_enabled'],'allow_client_ai_key'=>(bool)$a['allow_client_ai_key'],'ai_daily_limit'=>(int)$a['ai_daily_limit']]; ?>
 <tr><td><b><?=h($a['username'])?></b></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?= (int)$a['mobile_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><?=h(implode('、',json_decode((string)$a['entitlements'],true)?:[]))?></td>
 <td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td><td class="actions">
 <button class="small-link" data-edit="<?=h(json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP|JSON_HEX_TAG))?>">编辑</button>
