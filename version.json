@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "channel": "stable",
   "released_at": "2026-11-16",
-  "notes": "修复 AI 管理页 HTTP 500：对已记录 v4 但缺失 AI 表/字段的部署自动补齐；增加 AI 页面错误日志编号；保持严格 CSP。"
+  "notes": "操作记录性能优化与游标分页；手机设备指纹增加可选 IMEI HMAC 绑定和全局黑名单；MCP/Skill 云端总开关默认关闭并支持客户级授权；补齐 v0.4 API 文档和集成测试。"
 }
