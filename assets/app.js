@@ -2,6 +2,24 @@
   const $ = (selector, root=document) => root.querySelector(selector);
   const token = () => $('meta[name="csrf"]')?.content || '';
   let updateAvailable = false;
+  function showPassword(username, password) {
+    const overlay=document.createElement('div');overlay.className='secret-overlay';
+    const dialog=document.createElement('section');dialog.className='secret-dialog';
+    dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
+    const title=document.createElement('h2');title.textContent='随机密码（仅显示一次）';
+    const description=document.createElement('p');description.textContent='账号：'+username+'。请立即复制并安全交付，关闭后无法再次查看原密码。';
+    const secret=document.createElement('code');secret.className='secret-value';secret.textContent=password;
+    const actions=document.createElement('div');actions.className='secret-buttons';
+    const copy=document.createElement('button');copy.type='button';copy.className='btn primary';copy.textContent='复制密码';
+    const close=document.createElement('button');close.type='button';close.className='btn';close.textContent='已保存，关闭';
+    copy.addEventListener('click',async()=> {
+      try { await navigator.clipboard.writeText(password);toast('密码已复制');}
+      catch(e) { toast('复制失败，请手动选择密码复制',true); }
+    });
+    close.addEventListener('click',()=>overlay.remove());
+    actions.append(copy,close);dialog.append(title,description,secret,actions);overlay.append(dialog);document.body.append(overlay);
+    close.focus();
+  }
   function toast(message, error=false) {
     const el = $('#toast');
     if (!el) { const hint=$('#message'); if (hint) hint.textContent=message; return; }
@@ -28,6 +46,8 @@
   document.addEventListener('submit',async event=>{
     const form=event.target.closest('form[data-ajax]');if (!form)return;
     event.preventDefault();
+    const confirmMessage=form.querySelector('[data-confirm-submit]')?.dataset.confirmSubmit;
+    if(confirmMessage && !confirm(confirmMessage))return;
     const action=form.dataset.ajax;
     const submit=$('button[type="submit"],button:not([type])',form);
     if(submit)submit.disabled=true;
@@ -36,6 +56,7 @@
       if(action==='login'){location.href='index.php';return;}
       toast(result.message || '保存成功');
       await refreshContent();
+      if (result.password) showPassword(result.username || '客户', result.password);
     } catch(err){toast(err.message,true);}
     finally {if(submit)submit.disabled=false;}
   });
@@ -47,7 +68,7 @@
     form.elements.password.value='';
     form.elements.group_id.value=payload?.group_id || 0;
     form.elements.device_limit.value=payload?.device_limit || 3;
-    form.elements.mobile_limit.value=payload?.mobile_limit ?? 0;
+    form.elements.mobile_limit.value=payload?.mobile_limit ?? 1;
     form.elements.license_until.value=payload?.license_until || '';
     form.elements.notes.value=payload?.notes || '';
     form.elements.enabled.checked=payload?!!payload.enabled:true;
@@ -84,7 +105,18 @@
       finally{trigger.disabled=false;}
       return;
     }
-    const map={'logout':['logout',{},false],'revoke-account':['reset_sessions',{id},true],'revoke-session':['revoke_session',{id},true],'delete-group':['group_delete',{id},true]};
+    const map={
+      'logout':['logout',{},false],
+      'revoke-account':['reset_sessions',{id},true],
+      'reset-account-password':['account_password',{id},true],
+      'revoke-session':['revoke_session',{id},true],
+      'delete-group':['group_delete',{id},true],
+      'admin-reset':['admin_reset',{id},true],
+      'admin-toggle':['admin_toggle',{id},true],
+      'admin-delete':['admin_delete',{id},true],
+      'mobile-revoke':['mobile_revoke',{id},true],
+      'gateway-install':['gateway_install',{},true]
+    };
     if(!map[action])return;
     const [operation,fields,confirmNeeded]=map[action];
     if(confirmNeeded && !confirm('确定执行此操作吗？'))return;
@@ -93,6 +125,7 @@
       const result=await request(operation,fields);
       if(operation==='logout'){location.href='index.php';return;}
       toast(result.message||'操作成功');await refreshContent();
+      if(result.password)showPassword(result.username||'账号',result.password);
     }catch(err){toast(err.message,true);}
     finally{trigger.disabled=false;}
   });
