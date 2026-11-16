@@ -128,7 +128,7 @@ function api_ai_status(int $userId): never {
         'daily_remaining'=>$user['daily_limit']===0?0:max(0,$user['daily_limit']-$used)
     ]);
 }
-function ai_reserve_request(int $userId,string $device,string $mode,string $model,array $settings,array $policy): string {
+function ai_reserve_request(int $userId,string $device,string $mode,string $model,array $settings): string {
     global $pdo;
     $requestId=bin2hex(random_bytes(16));
     $pdo->beginTransaction();
@@ -147,9 +147,15 @@ function ai_reserve_request(int $userId,string $device,string $mode,string $mode
             }
         }
         $minute=(int)client_sql('SELECT COUNT(*) FROM phonehub_ai_usage WHERE user_id=? AND created_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 MINUTE)',[$userId])->fetchColumn();
-        if ($minute >= $settings['requests_per_minute']) api_problem('AI_RATE_LIMIT','AI 请求过于频繁，请稍后重试',429);
+        if ($minute >= $settings['requests_per_minute']) {
+            $pdo->rollBack();
+            api_problem('AI_RATE_LIMIT','AI 请求过于频繁，请稍后重试',429);
+        }
         $daily=(int)client_sql('SELECT COUNT(*) FROM phonehub_ai_usage WHERE user_id=? AND created_at>=UTC_DATE()',[$userId])->fetchColumn();
-        if ((int)$account['ai_daily_limit']<1 || $daily >= (int)$account['ai_daily_limit']) api_problem('AI_DAILY_LIMIT','当前账号 AI 每日额度已用完',429);
+        if ((int)$account['ai_daily_limit']<1 || $daily >= (int)$account['ai_daily_limit']) {
+            $pdo->rollBack();
+            api_problem('AI_DAILY_LIMIT','当前账号 AI 每日额度已用完',429);
+        }
         client_sql('INSERT INTO phonehub_ai_usage(request_id,user_id,device_id,mode,model,status,created_at) VALUES(?,?,?,?,?,"pending",UTC_TIMESTAMP())',
             [$requestId,$userId,$device,$mode,$model]);
         $pdo->commit();
@@ -205,7 +211,7 @@ function api_ai_chat(array $input,array $session,int $userId): never {
     $thinking=(string)($input['thinking']??'disabled');
     if (!in_array($thinking,['enabled','disabled'],true)) api_problem('INVALID_PARAMETER','thinking 仅支持 enabled 或 disabled');
     $model=$settings['model'];
-    $requestId=ai_reserve_request($userId,(string)$session['device_id'],$mode,$model,$settings,$policy);
+    $requestId=ai_reserve_request($userId,(string)$session['device_id'],$mode,$model,$settings);
     $payload=[
         'model'=>$model,'messages'=>$clean,'max_tokens'=>$maxTokens,
         'temperature'=>(float)$temperature,'top_p'=>(float)$topP,'stream'=>false,
