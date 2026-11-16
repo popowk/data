@@ -237,7 +237,12 @@ $nav=[
 <?php elseif($view==='audit'): $audits=sql("SELECT a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id ORDER BY a.id DESC LIMIT 100")->fetchAll(); ?>
 <div class="page-title"><div><h1>管理员操作记录</h1><p>记录授权、分组、设备与更新操作</p></div></div><div class="card"><div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div></div>
 <?php elseif ($view==='releases'): require __DIR__.'/app/release_admin.php'; release_admin_view(); ?>
-<?php elseif ($view==='ai'): require __DIR__.'/app/ai.php'; ai_admin_view(); ?>
+<?php elseif ($view==='ai'): require __DIR__.'/app/ai.php'; try { ai_admin_view(); } catch (Throwable $e) {
+    $errorRef=bin2hex(random_bytes(4));
+    error_log('PhoneHub AI admin page ['.$errorRef.']: '.get_class($e).' '.$e->getMessage());
+    http_response_code(500);
+    ?><div class="card"><h2>AI 管理页面暂时无法加载</h2><p class="muted">服务器已记录错误，请检查 PHP 错误日志。错误编号：<code><?=h($errorRef)?></code></p><button class="btn" onclick="location.reload()">重新加载</button></div><?php
+} ?>
 <?php elseif (in_array($view,['admins','group_bulk','mobiles','gateway','client_logs'],true)): require __DIR__.'/app/features.php'; feature_view($view); ?>
 <?php endif ?>
 </main></div></div><div class="toast" id="toast" role="status" aria-live="polite"></div><script src="assets/app.js" defer></script></body></html>
