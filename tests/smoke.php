@@ -15,6 +15,15 @@ $aiColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE
 foreach(['ai_enabled','allow_client_ai_key','ai_daily_limit'] as $column) if(!in_array($column,$aiColumns,true)) throw new RuntimeException('missing AI account column '.$column);
 $aiTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_ai_usage'")->fetchColumn();
 if($aiTable!==1) throw new RuntimeException('AI usage table missing');
+// Simulate a partially upgraded v0.3 deployment whose migration marker exists but AI objects are missing.
+$pdo->exec("DROP TABLE phonehub_ai_usage");
+$pdo->exec("DROP TABLE phonehub_ai_settings");
+foreach(['ai_enabled','allow_client_ai_key','ai_daily_limit'] as $column) $pdo->exec("ALTER TABLE phonehub_users DROP COLUMN ".$column);
+migrate($pdo);
+$aiTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_ai_usage'")->fetchColumn();
+if($aiTable!==1) throw new RuntimeException('AI schema self-repair failed');
+$aiColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_users'")->fetchAll(PDO::FETCH_COLUMN);
+foreach(['ai_enabled','allow_client_ai_key','ai_daily_limit'] as $column) if(!in_array($column,$aiColumns,true)) throw new RuntimeException('AI schema self-repair missed '.$column);
 $value='test-encryption-value-123456';
 $encrypted=ai_encrypt_secret($value);
 if($encrypted===$value || ai_decrypt_secret($encrypted)!==$value) throw new RuntimeException('AI encryption round trip failed');
