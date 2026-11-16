@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=6) return;
+        if ($ready>=7) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -238,6 +238,13 @@ function migrate(PDO $conn): void {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $conn->exec("INSERT IGNORE INTO phonehub_mobile_identity_meta(meta_key,meta_value) VALUES('hmac_key_fingerprint','')");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(6,UTC_TIMESTAMP())");
+    }
+    if ($version < 7) {
+        // Existing legacy 'mcp' permissions remain unchanged; new subplatforms
+        // always start disabled until individually enabled by the primary owner.
+        $conn->exec("INSERT IGNORE INTO phonehub_feature_settings(setting_key,setting_value) VALUES
+          ('mcp_codex_enabled','0'),('mcp_harness_enabled','0')");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(7,UTC_TIMESTAMP())");
     }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
