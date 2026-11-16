@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=5) return;
+        if ($ready>=6) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -229,6 +229,15 @@ function migrate(PDO $conn): void {
         $conn->exec("INSERT IGNORE INTO phonehub_feature_settings(setting_key,setting_value) VALUES
           ('mcp_enabled','0'),('skill_enabled','0')");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(5,UTC_TIMESTAMP())");
+    }
+    if ($version < 6) {
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_mobile_identity_meta (
+          meta_key VARCHAR(64) NOT NULL PRIMARY KEY,
+          meta_value VARCHAR(128) NOT NULL DEFAULT '',
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_mobile_identity_meta(meta_key,meta_value) VALUES('hmac_key_fingerprint','')");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(6,UTC_TIMESTAMP())");
     }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
