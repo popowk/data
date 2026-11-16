@@ -63,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $enabled=isset($_POST['enabled']) ? 1 : 0;
             if ($limit<1 || $limit>100 || $mobile<0 || $mobile>1000) throw new RuntimeException('电脑限额为 1–100，手机限额为 0–1000');
             if ($group && !(int)sql('SELECT COUNT(*) FROM phonehub_groups WHERE id=?',[$group])->fetchColumn()) throw new RuntimeException('分组不存在');
-            $entitlements=array_values(array_intersect(['douyin','xiaohongshu'],(array)($_POST['entitlements'] ?? [])));
+            $entitlements=array_values(array_intersect(['douyin','xiaohongshu','mcp','skill'],(array)($_POST['entitlements'] ?? [])));
             $until=input_to_utc(trim((string)($_POST['license_until'] ?? '')));
             $notes=trim((string)($_POST['notes'] ?? ''));
             if (utf8_length($notes)>500) throw new RuntimeException('备注不能超过 500 字');
@@ -161,10 +161,10 @@ if (!admin_id()) {
 <button class="btn primary full">登录</button></form><p id="message" class="footnote"></p></main><script src="assets/app.js" defer></script></body></html>
 <?php exit; }
 $view=(string)($_GET['view'] ?? 'dashboard');
-if (!in_array($view,['dashboard','accounts','groups','group_bulk','mobiles','sessions','packages','client_logs','releases','ai','update','gateway','admins','audit'],true)) $view='dashboard';
+if (!in_array($view,['dashboard','accounts','groups','group_bulk','mobiles','sessions','packages','client_logs','releases','ai','update','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
 $adminRole=(string)sql('SELECT role FROM phonehub_admins WHERE id=?',[admin_id()])->fetchColumn();
-if (in_array($view,['admins','gateway','update','releases','ai'],true) && $adminRole!=='owner') { http_response_code(403); exit('该页面仅主管理员可以访问'); }
-$groups=sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll();
+if (in_array($view,['admins','gateway','update','releases','ai','cloud_features'],true) && $adminRole!=='owner') { http_response_code(403); exit('该页面仅主管理员可以访问'); }
+$groups=in_array($view,['dashboard','accounts','groups','group_bulk'],true) ? sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll() : [];
 $accounts=($view==='accounts'||$view==='dashboard') ? sql("SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,u.created_at,u.ai_enabled,u.allow_client_ai_key,u.ai_daily_limit,m.group_id,COALESCE(m.mobile_limit,0) AS mobile_limit,COALESCE(m.notes,'') AS notes,g.name AS group_name,(SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id LEFT JOIN phonehub_groups g ON g.id=m.group_id ORDER BY u.id DESC")->fetchAll() : [];
 $nav=[
 'dashboard'=>['概览','▦'],
@@ -177,6 +177,7 @@ $nav=[
 'client_logs'=>['客户端日志','☷'],
 'releases'=>['核心更新发布','⇧'],
 'ai'=>['AI 接口管理','✧'],
+'cloud_features'=>['客户端能力控制','⚙'],
 'update'=>['系统更新','⟳'],
 'gateway'=>['客户端接口接管','↪'],
 'admins'=>['管理员管理','♧'],
@@ -186,7 +187,7 @@ $nav=[
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="csrf" content="<?=h(csrf())?>"><title>PhoneHub 管理控制台</title><link rel="stylesheet" href="assets/app.css"></head>
 <body><div class="app"><aside class="sidebar"><div class="brand"><span class="brand-mark">P</span><div><strong>PhoneHub</strong><small>授权管理中心</small></div></div>
-<nav><?php foreach ($nav as $route=>$item): if ($adminRole!=='owner' && in_array($route,['update','gateway','admins','releases','ai'],true)) continue; ?><a class="<?= $view===$route?'active':'' ?>" href="?view=<?=h($route)?>"><span class="nav-icon"><?=h($item[1])?></span><?=h($item[0])?></a><?php endforeach ?></nav>
+<nav><?php foreach ($nav as $route=>$item): if ($adminRole!=='owner' && in_array($route,['update','gateway','admins','releases','ai','cloud_features'],true)) continue; ?><a class="<?= $view===$route?'active':'' ?>" href="?view=<?=h($route)?>"><span class="nav-icon"><?=h($item[1])?></span><?=h($item[0])?></a><?php endforeach ?></nav>
 <div class="sidebar-footer"><span class="status-dot"></span> 运行中 <small>v<?=h(app_version())?></small></div></aside>
 <div class="main"><header class="topbar"><div><span class="crumb">PhoneHub /</span> <?=h($nav[$view][0])?></div><div class="top-right"><span class="avatar"><?=h(substr((string)($_SESSION['admin_user']??'A'),0,1))?></span><?=h($_SESSION['admin_user']??'管理员')?><button class="text-button" data-action="logout">退出</button></div></header>
 <main id="content" class="content">
@@ -234,8 +235,8 @@ $nav=[
 <div class="card update-card"><div class="update-icon">⟳</div><h2>当前版本 v<?=h(app_version())?></h2><p class="muted">更新源：<code>https://git.wksite.cn/popowk/data</code></p><p class="muted">仅更新管理程序文件，自动跳过 storage 内的数据库配置和运行数据。</p>
 <div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button></div><p id="update-status" class="update-status">正在等待检查…</p></div>
 <div class="card"><h2>更新说明</h2><p class="muted">安装前自动备份原文件。下载、解压、写入或校验失败会报错；写入阶段失败将尝试自动回滚。更新过程不删除客户、会话和数据库。镜像站需要支持 GitHub 源码 ZIP 下载接口。</p></div>
-<?php elseif($view==='audit'): $audits=sql("SELECT a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id ORDER BY a.id DESC LIMIT 100")->fetchAll(); ?>
-<div class="page-title"><div><h1>管理员操作记录</h1><p>记录授权、分组、设备与更新操作</p></div></div><div class="card"><div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div></div>
+<?php elseif($view==='audit'): $before=max(0,(int)($_GET['before']??0)); $auditSql="SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id ORDER BY a.id DESC LIMIT 51"; $audits=$before>0?sql("SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id WHERE a.id<? ORDER BY a.id DESC LIMIT 51",[$before])->fetchAll():sql($auditSql)->fetchAll(); $hasOlder=count($audits)>50; if($hasOlder)array_pop($audits); $nextBefore=$audits?(int)$audits[count($audits)-1]['id']:0; ?>
+<div class="page-title"><div><h1>管理员操作记录</h1><p>按时间倒序展示，每页 50 条；可继续加载更早记录</p></div><?php if($before>0): ?><a class="btn" href="?view=audit">返回最新记录</a><?php endif ?></div><div class="card"><div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div><?php if($hasOlder && $nextBefore>0): ?><div class="editor-actions"><a class="btn" href="?view=audit&amp;before=<?=$nextBefore?>">更早记录</a></div><?php endif ?></div>
 <?php elseif ($view==='releases'): require __DIR__.'/app/release_admin.php'; release_admin_view(); ?>
 <?php elseif ($view==='ai'): require __DIR__.'/app/ai.php'; try { ai_admin_view(); } catch (Throwable $e) {
     $errorRef=bin2hex(random_bytes(4));
