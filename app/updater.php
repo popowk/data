@@ -132,53 +132,145 @@ function update_reset_opcache(): ?bool {
     if (!$enabled) return null;
     return @opcache_reset();
 }
-function apply_update(): array {
-    $lock=fopen(APP_STORE.'/update.lock','c+');
-    if (!$lock || !flock($lock,LOCK_EX|LOCK_NB)) throw new RuntimeException('另一个更新任务正在执行');
+/**
+ * Build every replacement in protected storage and back up every existing
+ * destination before changing any live PHP file. Every destination is renamed
+ * individually (atomic per file), so full zero-downtime multi-file atomics
+ * still require a release-directory/symlink deployment outside this updater.
+ *
+ * The optional callback is a test-only failure injection point.
+ */
+function update_install_files(array $files,string $root,string $store,?callable $beforeReplace=null): array {
+    update_validate_files($files);
+    $root=rtrim($root,'/');
+    $store=rtrim($store,'/');
+    $nonce=bin2hex(random_bytes(6));
+    $stage=$store.'/update-stage-'.$nonce;
+    $backup=$store.'/backups/'.gmdate('Ymd-His').'-'.$nonce;
+    if (!is_dir($store) || !mkdir($stage,0700))
+        throw new RuntimeException('更新暂存目录不可写');
+    $installed=[];$changed=[];
     try {
-        $archive=update_archive();$latest=$archive['version'];$current=app_version();
+        // Pre-stage and verify the full archive before any live replacement.
+        foreach ($files as $path=>$bytes) {
+            if (!in_array($path,UPDATE_FILES,true)) throw new RuntimeException('更新文件不在白名单内');
+            $dest=$root.'/'.$path;
+            if (is_link($dest) || is_link(dirname($dest)))
+                throw new RuntimeException('更新路径包含符号链接：'.$path);
+            if (file_exists($dest) && !is_file($dest))
+                throw new RuntimeException('更新目标不是普通文件：'.$path);
+            $parent=dirname($dest);
+            if (!is_dir($parent) && !is_dir(dirname($parent)))
+                throw new RuntimeException('更新目标父目录不存在：'.$path);
+            if (!is_writable(is_dir($parent)?$parent:dirname($parent)))
+                throw new RuntimeException('更新目标目录不可写：'.$path);
+            $source=$stage.'/'.$path;
+            if (!is_dir(dirname($source)) && !mkdir(dirname($source),0700,true))
+                throw new RuntimeException('创建更新暂存目录失败：'.$path);
+            if (file_put_contents($source,$bytes,LOCK_EX)!==strlen($bytes) ||
+                !hash_equals(hash('sha256',$bytes),(string)hash_file('sha256',$source)))
+                throw new RuntimeException('更新文件暂存校验失败：'.$path);
+        }
+
+        if (!mkdir($backup,0700,true))
+            throw new RuntimeException('无法创建更新备份目录');
+        foreach ($files as $path=>$bytes) {
+            $dest=$root.'/'.$path;
+            if (!is_file($dest)) { $changed[$path]=false;continue; }
+            $backupFile=$backup.'/'.$path;
+            if (!is_dir(dirname($backupFile)) && !mkdir(dirname($backupFile),0700,true))
+                throw new RuntimeException('创建更新备份目录失败：'.$path);
+            if (!copy($dest,$backupFile) ||
+                !hash_equals((string)hash_file('sha256',$dest),(string)hash_file('sha256',$backupFile)))
+                throw new RuntimeException('更新备份校验失败：'.$path);
+            $changed[$path]=$backupFile;
+        }
+
+        // Install the version manifest last so an interrupted installation
+        // cannot appear fully upgraded based on version.json alone.
+        $ordered=$files;
+        $version=$ordered['version.json'];unset($ordered['version.json']);
+        $ordered['version.json']=$version;
+        foreach ($ordered as $path=>$bytes) {
+            if ($beforeReplace!==null) $beforeReplace($path,count($installed));
+            $dest=$root.'/'.$path;
+            $dir=dirname($dest);
+            if (!is_dir($dir) && !mkdir($dir,0755,true))
+                throw new RuntimeException('无法创建更新目标目录：'.$path);
+            $tmp=tempnam($dir,'.phup-');
+            if ($tmp===false) throw new RuntimeException('创建更新目标临时文件失败：'.$path);
+            try {
+                if (!copy($stage.'/'.$path,$tmp) ||
+                    !hash_equals(hash('sha256',$bytes),(string)hash_file('sha256',$tmp)))
+                    throw new RuntimeException('更新目标写入校验失败：'.$path);
+                @chmod($tmp,0644);
+                if (!rename($tmp,$dest)) throw new RuntimeException('更新文件替换失败：'.$path);
+                $installed[]=$path;
+            } finally {
+                if (is_file($tmp)) @unlink($tmp);
+            }
+        }
+        foreach ($ordered as $path=>$bytes) {
+            if (!is_file($root.'/'.$path) ||
+                !hash_equals(hash('sha256',$bytes),(string)hash_file('sha256',$root.'/'.$path)))
+                throw new RuntimeException('更新安装后校验失败：'.$path);
+        }
+        return ['backup'=>basename($backup),'installed_count'=>count($installed)];
+    } catch(Throwable $e) {
+        $restored=true;
+        foreach (array_reverse($installed) as $path) {
+            $dest=$root.'/'.$path;
+            if (($changed[$path]??false)===false) {
+                if (is_file($dest) && !@unlink($dest)) $restored=false;
+                continue;
+            }
+            $tmp=@tempnam(dirname($dest),'.phrb-');
+            if ($tmp===false) { $restored=false;continue; }
+            try {
+                if (!@copy($changed[$path],$tmp) ||
+                    !@rename($tmp,$dest) ||
+                    !hash_equals((string)hash_file('sha256',$changed[$path]),(string)hash_file('sha256',$dest)))
+                    $restored=false;
+            } finally {
+                if (is_file($tmp)) @unlink($tmp);
+            }
+        }
+        throw new RuntimeException($e->getMessage().($restored?'；已恢复升级前程序文件':'；自动恢复未完成，请检查备份目录'),0,$e);
+    } finally {
+        if (is_dir($stage)) {
+            $iter=new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($stage,FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::CHILD_FIRST
+            );
+            foreach ($iter as $item) {
+                if ($item->isDir() && !$item->isLink()) @rmdir($item->getPathname());
+                else @unlink($item->getPathname());
+            }
+            @rmdir($stage);
+        }
+    }
+}
+function apply_update(): array {
+    if (!is_dir(APP_STORE)) throw new RuntimeException('storage 目录不存在');
+    $lock=fopen(APP_STORE.'/update.lock','c+');
+    if (!$lock || !flock($lock,LOCK_EX|LOCK_NB))
+        throw new RuntimeException('另一个更新任务正在执行');
+    try {
+        $archive=update_archive();
+        $latest=$archive['version'];$current=app_version();
         $missing=missing_runtime_modules();
         if (!version_compare($latest,$current,'>') && !$missing)
             return ['message'=>'当前已经是最新版本','version'=>$current];
-        $backup=APP_STORE.'/backups/'.gmdate('Ymd-His').'-'.bin2hex(random_bytes(4));
-        if (!mkdir($backup,0700,true)) throw new RuntimeException('无法创建更新备份目录');
-        $changed=[];$installed=[];
-        try {
-            foreach (array_keys($archive['files']) as $path) {
-                $target=APP_ROOT.'/'.$path;
-                if (is_link($target)) throw new RuntimeException('更新目标包含符号链接，已拒绝');
-                if (!is_file($target)) { $changed[$path]=false; continue; }
-                $dst=$backup.'/'.$path;
-                if (!is_dir(dirname($dst)) && !mkdir(dirname($dst),0700,true)) throw new RuntimeException('备份目录不可写');
-                if (!copy($target,$dst)) throw new RuntimeException('备份失败：'.$path);
-                $changed[$path]=$dst;
-            }
-            // version.json 最后写入，尽可能避免半更新版本误判。
-            $files=$archive['files'];$version=$files['version.json'];unset($files['version.json']);$files['version.json']=$version;
-            foreach ($files as $path=>$bytes) {
-                $dest=APP_ROOT.'/'.$path;$dir=dirname($dest);
-                if (!is_dir($dir) && !mkdir($dir,0755,true)) throw new RuntimeException('无法创建目录：'.$path);
-                $temp=tempnam($dir,'.phup-');
-                if ($temp===false) throw new RuntimeException('无法写入更新临时文件：'.$path);
-                if (file_put_contents($temp,$bytes,LOCK_EX)===false) { @unlink($temp);throw new RuntimeException('写入文件失败：'.$path); }
-                @chmod($temp,0644);
-                if (!rename($temp,$dest)) { @unlink($temp);throw new RuntimeException('替换文件失败：'.$path); }
-                $installed[]=$path;
-            }
-            $cacheReset=update_reset_opcache();
-            $message='更新成功，原文件已备份';
-            if ($cacheReset===false) $message='更新文件已安装，但 PHP OPcache 未能确认刷新；请重启 PHP-FPM 或 Web 服务后再访问';
-            return ['message'=>$message,'version'=>$latest,'backup'=>basename($backup),'cache_reset'=>$cacheReset];
-        } catch (Throwable $e) {
-            $restored=true;
-            foreach (array_reverse($installed) as $path) {
-                $dest=APP_ROOT.'/'.$path;
-                if ($changed[$path]===false) { if (!@unlink($dest)) $restored=false; }
-                elseif (!@copy($changed[$path],$dest)) $restored=false;
-            }
-            $cacheReset=update_reset_opcache();
-            $cacheWarning=$cacheReset===false?'；OPcache 刷新未确认，请重启 PHP-FPM 或 Web 服务':'';
-            throw new RuntimeException($e->getMessage().($restored?'；已尝试恢复原文件':'；回滚未完成，请使用备份目录手工恢复').$cacheWarning);
-        }
-    } finally {flock($lock,LOCK_UN);fclose($lock);}
+        if (version_compare($latest,$current,'<'))
+            throw new RuntimeException('远端更新版本低于当前版本，已拒绝降级');
+        $result=update_install_files($archive['files'],APP_ROOT,APP_STORE);
+        $cacheReset=update_reset_opcache();
+        $message=$cacheReset===false
+            ? '更新文件安装成功，但 PHP OPcache 未确认刷新；请重启 PHP-FPM 或 Web 服务'
+            : '更新成功，已验证安装文件并保留备份';
+        return ['message'=>$message,'version'=>$latest,'backup'=>$result['backup'],
+            'installed_count'=>$result['installed_count'],'cache_reset'=>$cacheReset];
+    } finally {
+        flock($lock,LOCK_UN);fclose($lock);
+    }
 }
