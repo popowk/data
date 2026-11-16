@@ -31,6 +31,24 @@ after=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$after" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and "envelope" in j,j'
 listed=$(api mobile_list "{\"device_id\":\"$DEVICE\"}")
 TEST_RESPONSE="$listed" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["active_count"]==1 and j["devices"][0]["imei_bound"],j'
+# Lowering a mobile quota must prevent excess, newer devices from passing mobile_check.
+php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$p->exec("UPDATE phonehub_user_meta SET mobile_limit=1 WHERE user_id=1");
+$s=$p->prepare("INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,enabled,last_seen) VALUES(1,?,?,1,UTC_TIMESTAMP())");
+$s->execute([str_repeat("c",64),"CI excess phone"]);
+'
+firstAllowed=$(api mobile_check "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\"}")
+TEST_RESPONSE="$firstAllowed" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"],j'
+excessDenied=$(api mobile_check "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$(printf 'c%.0s' {1..64})\"}")
+TEST_RESPONSE="$excessDenied" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and not j["bound"],j'
+php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$p->exec("UPDATE phonehub_user_meta SET mobile_limit=8 WHERE user_id=1");
+$p->exec("DELETE FROM phonehub_mobile_devices WHERE phone_id=REPEAT(CHAR(99),64)");
+'
 mcpDisabled=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"mcp\",\"channel\":\"stable\",\"current_version\":\"0.0.0\"}")
 TEST_RESPONSE="$mcpDisabled" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="FEATURE_DISABLED",j'
 aiStatus=$(api ai_status "{\"device_id\":\"$DEVICE\"}")
