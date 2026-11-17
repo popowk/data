@@ -136,3 +136,7 @@ input[readonly]{background:#f7f8fb;color:#9099a6}
 .diagnostic-check-group.error h3{color:#b44343}.diagnostic-check-group.warning h3{color:#a77916}
 @media(max-width:1100px){.account-filter-form{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:650px){.account-filter-form{grid-template-columns:repeat(2,minmax(0,1fr))}.account-pagination{justify-content:center}}
+
+/* Viewer/operator role selection (v0.5.8). */
+.admin-create-form{max-width:900px;flex-wrap:wrap}
+.admin-create-form select{min-height:42px;border:1px solid #dce3ef;border-radius:8px;padding:10px;color:#263c55;background:#fff;flex:1;min-width:220px}
