@@ -1,6 +1,6 @@
-# PhoneHub 客户端 API 接入说明 v0.5.0
+# PhoneHub 客户端 API 接入说明 v0.5.2
 
-服务端版本：0.5.1。协议字段 `api=1` 保持兼容。适配对象：PhoneHub 桌面 APP（此前为 0.7.1）。本版增加手机 IMEI 辅助绑定、设备黑名单，以及 MCP/Skill 云端默认关闭的授权控制。
+服务端版本：0.5.2。协议字段 `api=1` 保持兼容。适配对象：PhoneHub 桌面 APP（此前为 0.7.1）。本版增加手机 IMEI 辅助绑定、设备黑名单，以及 MCP/Skill 云端默认关闭的授权控制。
 
 ## 一、地址与认证
 
@@ -56,7 +56,7 @@ Authorization: Bearer <登录令牌>
 | client_heartbeat | 无 | 同 license_status |
 | device_list | 无 | 当前账号占用名额的电脑会话及到期时间 |
 | device_revoke | target_device_id | 踢掉指定电脑，返回 revoked |
-| mobile_bind | phone_id, 可选 display_name、imei | 绑定安卓手机；IMEI 可选，返回 imei_bound 与手机额度 |
+| mobile_bind | phone_id, 可选 display_name、imei、phone_model、phone_number | 绑定安卓手机；IMEI 可选，返回 imei_bound 与手机额度 |
 | mobile_list | 无 | 当前用户的手机列表、mobile_limit、active_count、每台设备的 imei_bound |
 | mobile_check | phone_id, 可选 imei | 检查绑定状态与黑名单，返回 bound/imei_bound |
 | mobile_heartbeat | phone_id, 可选 imei | 绑定检查并刷新 last_seen；黑名单设备拒绝心跳 |
@@ -76,6 +76,11 @@ Authorization: Bearer <登录令牌>
 除 login 和 health 外，以上表格省略了每个 JSON 请求都必填的 device_id。未知 action 返回 404。
 
 ## 三、手机绑定（APP 接入重点）
+
+v0.5.2 服务端可选接收 `phone_model`（手机型号，最多 120 字）、`imei`（14～16 位数字）和 `phone_number`（国际号码形式，例如 `+8613912345678`）。原始 IMEI 与手机号以可逆密文保存，管理员默认只看掩码；主管理员按需查看全文并写入审计。旧 API 和未上传这些字段的客户端仍可运行，后台显示“未获取”。
+
+详见 [统一设备管理与独立黑名单说明](设备管理与签名-v0.5.2.md)。服务端无法在没有客户端上报时自行读取手机的 SIM 电话号码；号码存在性及真实性未经运营商核验。
+
 
 phone_id 格式：64 位小写十六进制 SHA-256，作为主要设备指纹，建议由稳定且非个人敏感的 Android 标识推导；不能使用手机号，也不能让用户输入任意数字充当设备证明。它是授权标识，不等于可信硬件远程认证。IMEI 是可选辅助标识，不替代 phone_id。
 
