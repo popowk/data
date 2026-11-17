@@ -28,7 +28,7 @@ curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=diagnostics'
 grep -q '复制完整报告' "$adminHtml"
 reportJson=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=diagnostic_report")
-TEST_RESPONSE="$reportJson" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); r=j.get("report",""); assert j["ok"] and "PhoneHub 故障诊断报告" in r and "MySQL 版本" in r and len(r)<8000,j'
+TEST_RESPONSE="$reportJson" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); r=j.get("report",""); assert j["ok"] and "PhoneHub 故障诊断报告" in r and "MySQL 版本" in r and len(r)<8000 and isinstance(j.get("checks"),list),j'
 planCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
   --data-urlencode "username=ci_open_plan_user" --data-urlencode "opening_plan=personal" \
@@ -82,6 +82,70 @@ disabledPlanAttempt=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:1876
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
   --data-urlencode "username=ci_disabled_plan_user" --data-urlencode "opening_plan=$planCode")
 TEST_RESPONSE="$disabledPlanAttempt" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and "套餐" in j["error"],j'
+# Filtered customer listing: real server SQL filtering, not a browser-only hide.
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&q=ci_open_plan_user&plan=personal' -o "$adminHtml"
+grep -q 'ci_open_plan_user' "$adminHtml"
+grep -q '每页 30 位' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&q=ci_nonexistent_user' -o "$adminHtml"
+grep -q '没有符合条件的客户' "$adminHtml"
+
+# Bulk authorization: server preview, reject stale member snapshot, then apply
+# the same request after fresh preview. No production data is used.
+groupCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=group_create" \
+  --data-urlencode "name=CI Bulk Preview Group")
+TEST_RESPONSE="$groupCreated" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
+groupId=$(php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$s=$p->query("SELECT id FROM phonehub_groups WHERE name=CHAR(67,73,32,66,117,108,107,32,80,114,101,118,105,101,119,32,71,114,111,117,112)");
+echo $s->fetchColumn();
+')
+GROUP_ID="$groupId" php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$s=$p->prepare("UPDATE phonehub_user_meta m JOIN phonehub_users u ON u.id=m.user_id SET m.group_id=? WHERE u.username=?");
+$s->execute([(int)getenv("GROUP_ID"),"ci_open_plan_user"]);
+'
+preview=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=group_bulk_preview" \
+  --data-urlencode "group_id=$groupId" --data-urlencode "apply_device_limit=on" --data-urlencode "device_limit=6")
+snapshot=$(TEST_RESPONSE="$preview" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["members"]==1 and "电脑名额" in j["fields"] and len(j["snapshot"])==64,j; print(j["snapshot"])')
+# Change membership between preview and apply: must reject and not update.
+GROUP_ID="$groupId" php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$s=$p->prepare("UPDATE phonehub_user_meta m JOIN phonehub_users u ON u.id=m.user_id SET m.group_id=? WHERE u.username=?");
+$s->execute([(int)getenv("GROUP_ID"),"ci_dynamic_plan_user"]);
+'
+stale=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=group_bulk" \
+  --data-urlencode "group_id=$groupId" --data-urlencode "apply_device_limit=on" \
+  --data-urlencode "device_limit=6" --data-urlencode "preview_snapshot=$snapshot")
+TEST_RESPONSE="$stale" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and "分组成员" in j["error"],j'
+php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$r=$p->query("SELECT username,device_limit FROM phonehub_users WHERE username IN (CHAR(99,105,95,111,112,101,110,95,112,108,97,110,95,117,115,101,114),CHAR(99,105,95,100,121,110,97,109,105,99,95,112,108,97,110,95,117,115,101,114)) ORDER BY username")->fetchAll(PDO::FETCH_KEY_PAIR);
+if ((int)$r["ci_open_plan_user"]!==1 || (int)$r["ci_dynamic_plan_user"]!==7) exit(3);
+'
+fresh=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=group_bulk_preview" \
+  --data-urlencode "group_id=$groupId" --data-urlencode "apply_device_limit=on" --data-urlencode "device_limit=6")
+freshSnapshot=$(TEST_RESPONSE="$fresh" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["members"]==2,j; print(j["snapshot"])')
+applied=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=group_bulk" \
+  --data-urlencode "group_id=$groupId" --data-urlencode "apply_device_limit=on" \
+  --data-urlencode "device_limit=6" --data-urlencode "preview_snapshot=$freshSnapshot")
+TEST_RESPONSE="$applied" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and "2" in j["message"],j'
+GROUP_ID="$groupId" php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$s=$p->prepare("SELECT u.device_limit FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE m.group_id=?");
+$s->execute([(int)getenv("GROUP_ID")]);
+$v=$s->fetchAll(PDO::FETCH_COLUMN);
+if(count($v)!==2 || array_filter($v,static fn($x)=>(int)$x!==6)) exit(4);
+'
 # A backup decryption key can be downloaded only once by the owner.
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=backup_keys' -o "$adminHtml"
 grep -q 'Curve25519' "$adminHtml"
