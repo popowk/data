@@ -239,7 +239,20 @@ $nav=[
 <div class="page-title"><div><h1>系统更新</h1><p>从国内镜像获取 GitHub 仓库最新代码，完成备份后在线安装</p></div></div>
 <div class="card update-card"><div class="update-icon">⟳</div><h2>当前版本 v<?=h(app_version())?></h2><p class="muted">更新源：<code>https://git.wksite.cn/popowk/data</code></p><p class="muted">仅更新管理程序文件，自动跳过 storage 内的数据库配置和运行数据。</p>
 <div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
-<?php require_once __DIR__.'/app/signing_admin.php'; $signing=signing_status(); ?>
+<?php
+$signingModuleReady=is_file(__DIR__.'/app/signing_admin.php');
+if ($signingModuleReady) {
+    require_once __DIR__.'/app/signing_admin.php';
+    $signing=signing_status();
+} else {
+    $signing=['state'=>'unavailable'];
+}
+?>
+<?php if (!$signingModuleReady): ?>
+<div class="card"><h2>更新模块尚未补齐</h2>
+<p class="muted">当前程序缺少 app/signing_admin.php。此前版本的更新清单可能未包含新增模块。请先在上方点击「检查更新」，再执行「补齐缺失模块」。该操作不会清空客户数据或 storage。</p>
+</div>
+<?php else: ?>
 <div class="card">
  <div class="card-head"><h2>Ed25519 签名密钥管理</h2><span class="pill <?=$signing['state']==='active'?'ok':'off'?>"><?=$signing['state']==='active'?'强制验签已启用':($signing['state']==='pending'?'等待发布签名':'尚未初始化')?></span></div>
  <p class="muted">主管理员在这里直接初始化签名密钥，服务器生成 Ed25519 私钥并加密传入 GitHub Actions Secret，随后擦除本次服务器内存中的私钥；只保留固定公钥。使用 GitHub 一次性 Token，不保存 Token、私钥或签名明文在数据库。</p>
@@ -257,6 +270,7 @@ $nav=[
  <p class="muted">今后每次后台安装更新都必须先通过独立 Ed25519 签名和完整文件摘要校验，不允许重新生成新密钥覆盖当前信任链。</p>
  <?php endif ?>
  </div>
+<?php endif ?>
 <div class="card"><h2>更新说明</h2><p class="muted">安装前自动备份原文件。下载、解压、写入或校验失败会报错；写入阶段失败将尝试自动回滚。更新过程不删除客户、会话和数据库。镜像站需要支持 GitHub 源码 ZIP 下载接口。</p></div>
 <?php elseif($view==='audit'): $before=max(0,(int)($_GET['before']??0)); $auditSql="SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id ORDER BY a.id DESC LIMIT 51"; $audits=$before>0?sql("SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id WHERE a.id < ? ORDER BY a.id DESC LIMIT 51",[$before])->fetchAll():sql($auditSql)->fetchAll(); $hasOlder=count($audits)>50; if($hasOlder)array_pop($audits); $nextBefore=$audits?(int)$audits[count($audits)-1]['id']:0; ?>
 <div class="page-title"><div><h1>管理员操作记录</h1><p>按时间倒序展示，每页 50 条；可继续加载更早记录</p></div><?php if($before>0): ?><a class="btn" href="?view=audit">返回最新记录</a><?php endif ?></div><div class="card"><div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div><?php if($hasOlder && $nextBefore>0): ?><div class="editor-actions"><a class="btn" href="?view=audit&amp;before=<?=$nextBefore?>">更早记录</a></div><?php endif ?></div>
