@@ -272,11 +272,6 @@ function update_diagnostic_report(): array {
             if (preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$/D',$time))
                 $recent[]=$time.' '.$action;
         }
-        $lastSuccess=null;
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $event) {
-            // This fallback path remains empty when records were already fetched.
-            if ((string)$event['action']==='system_update') { $lastSuccess=(string)$event['created_at'];break; }
-        }
         $lastSuccessQuery=$pdo->query("SELECT MAX(created_at) FROM phonehub_admin_audit WHERE action='system_update'")->fetchColumn();
         $lastSuccess=is_string($lastSuccessQuery)?$lastSuccessQuery:null;
         $lines[]='最近一次升级成功记录：'.($lastSuccess??'未找到').'（仅代表接口成功返回；不判断后续生产可用性）';
