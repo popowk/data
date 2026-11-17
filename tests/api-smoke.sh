@@ -305,9 +305,13 @@ $p->exec("UPDATE phonehub_mobile_blacklist SET enabled=0 WHERE identifier_type=\
 php -r '
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
-$p->exec("UPDATE phonehub_user_meta SET mobile_limit=1 WHERE user_id=1");
-$s=$p->prepare("INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,enabled,last_seen) VALUES(1,?,?,1,UTC_TIMESTAMP())");
-$s->execute([str_repeat("c",64),"CI excess phone"]);
+$account=$p->prepare("SELECT id FROM phonehub_users WHERE username=?");
+$account->execute(["phonehub_ci_user"]);
+$customerId=(int)$account->fetchColumn();
+if($customerId<1) exit(2);
+$p->prepare("UPDATE phonehub_user_meta SET mobile_limit=1 WHERE user_id=?")->execute([$customerId]);
+$s=$p->prepare("INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,enabled,last_seen) VALUES(?,?,?,1,UTC_TIMESTAMP())");
+$s->execute([$customerId,str_repeat("c",64),"CI excess phone"]);
 '
 firstAllowed=$(api mobile_check "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\"}")
 TEST_RESPONSE="$firstAllowed" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"],j'
@@ -320,8 +324,12 @@ TEST_RESPONSE="$batchQuota" python3 -c 'import os,json; j=json.loads(os.environ[
 php -r '
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
-$p->exec("UPDATE phonehub_user_meta SET mobile_limit=8 WHERE user_id=1");
-$p->exec("DELETE FROM phonehub_mobile_devices WHERE phone_id=REPEAT(CHAR(99),64)");
+$account=$p->prepare("SELECT id FROM phonehub_users WHERE username=?");
+$account->execute(["phonehub_ci_user"]);
+$customerId=(int)$account->fetchColumn();
+if($customerId<1) exit(2);
+$p->prepare("UPDATE phonehub_user_meta SET mobile_limit=8 WHERE user_id=?")->execute([$customerId]);
+$p->prepare("DELETE FROM phonehub_mobile_devices WHERE phone_id=? AND user_id=?")->execute([str_repeat("c",64),$customerId]);
 '
 # Capability discovery returns only true-valued fields; disabled keys are omitted.
 for action in license_status capabilities client_config client_heartbeat; do
