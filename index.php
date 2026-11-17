@@ -55,6 +55,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             validate_user($name);
             $limit=(int)($_POST['device_limit'] ?? 3);
             $mobile=(int)($_POST['mobile_limit'] ?? 1);
+            // Opening preset applies only to new accounts; existing customer's
+            // limits remain editable without changing their original plan label.
+            $openingPlan=null;
+            if ($creating) {
+                $openingPlan=(string)($_POST['opening_plan']??'');
+                $plans=phonehub_opening_plans();
+                if ($openingPlan!=='custom' && !isset($plans[$openingPlan]))
+                    throw new RuntimeException('创建客户时请选择开户套餐');
+                if ($openingPlan!=='custom') {
+                    $limit=(int)$plans[$openingPlan]['device_limit'];
+                    $mobile=(int)$plans[$openingPlan]['mobile_limit'];
+                }
+            }
             $aiEnabled=isset($_POST['ai_enabled'])?1:0;
             $allowClientAiKey=isset($_POST['allow_client_ai_key'])?1:0;
             if ($allowClientAiKey) {
@@ -97,8 +110,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     [$name,$hash,$enabled,$limit,$until,json_encode($entitlements),$aiEnabled,$allowClientAiKey,$aiDailyLimit]);
                 $id=(int)db()->lastInsertId();
             }
-            sql('INSERT INTO phonehub_user_meta(user_id,group_id,mobile_limit,notes) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE group_id=VALUES(group_id),mobile_limit=VALUES(mobile_limit),notes=VALUES(notes)',
-                [$id,$group?:null,$mobile,$notes]);
+            sql('INSERT INTO phonehub_user_meta(user_id,group_id,mobile_limit,notes,opening_plan_code) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE group_id=VALUES(group_id),mobile_limit=VALUES(mobile_limit),notes=VALUES(notes),opening_plan_code=COALESCE(VALUES(opening_plan_code),opening_plan_code)',
+                [$id,$group?:null,$mobile,$notes,$openingPlan]);
             audit('account_save',$name);
             db()->commit();
             json_response(array_merge(['ok'=>true,'message'=>'授权已保存','id'=>$id],$creating?['password'=>$pass,'username'=>$name]:[]));
@@ -179,7 +192,7 @@ if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','pac
 $adminRole=admin_role();
 if (in_array($view,['admins','gateway','update','releases','ai','cloud_features'],true) && $adminRole!=='owner') { http_response_code(403); exit('该页面仅主管理员可以访问'); }
 $groups=in_array($view,['dashboard','accounts','groups','group_bulk'],true) ? sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll() : [];
-$accounts=($view==='accounts'||$view==='dashboard') ? sql("SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,u.created_at,u.ai_enabled,u.allow_client_ai_key,u.ai_daily_limit,m.group_id,COALESCE(m.mobile_limit,0) AS mobile_limit,COALESCE(m.notes,'') AS notes,g.name AS group_name,(SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id LEFT JOIN phonehub_groups g ON g.id=m.group_id ORDER BY u.id DESC")->fetchAll() : [];
+$accounts=($view==='accounts'||$view==='dashboard') ? sql("SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,u.created_at,u.ai_enabled,u.allow_client_ai_key,u.ai_daily_limit,m.group_id,COALESCE(m.mobile_limit,0) AS mobile_limit,m.opening_plan_code,COALESCE(m.notes,'') AS notes,g.name AS group_name,(SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id LEFT JOIN phonehub_groups g ON g.id=m.group_id ORDER BY u.id DESC")->fetchAll() : [];
 $nav=[
 'dashboard'=>['概览','▦'],
 'accounts'=>['客户授权','♙'],
@@ -214,7 +227,9 @@ $nav=[
 <div class="page-title"><div><h1>客户授权</h1><p>新增客户自动生成随机密码；安卓手机额度需要接管客户端接口后才能强制执行</p></div><button class="btn primary" data-action="new-account">+ 创建客户</button></div>
 <div class="card editor" id="account-editor" hidden><div class="card-head"><h2 id="editor-title">创建客户</h2><button class="text-button" data-action="close-editor">关闭</button></div>
 <form data-ajax="account_save"><input name="action" type="hidden" value="account_save"><input name="id" type="hidden" value="0">
-<div class="form-grid"><div class="field"><label>客户账号</label><input name="username" required minlength="3" maxlength="64"></div>
+<div class="form-grid">
+<div class="field span2" id="opening-plan-field"><label for="opening-plan">开户套餐（仅创建客户时选择）</label><select id="opening-plan" name="opening_plan" required><option value="">请选择开户套餐</option><?php foreach(phonehub_opening_plans() as $code=>$plan): ?><option value="<?=h($code)?>" data-pc="<?=(int)$plan['device_limit']?>" data-mobile="<?=(int)$plan['mobile_limit']?>"><?=h($plan['label'])?> · <?=(int)$plan['device_limit']?> 台电脑 / <?=(int)$plan['mobile_limit']?> 台手机</option><?php endforeach ?><option value="custom">自定义授权额度</option></select><span class="footnote">只预设电脑与手机额度，不产生订单或费用记录；其他平台、AI 权限按下方独立配置。创建后仍可编辑授权额度。</span></div>
+<div class="field"><label>客户账号</label><input name="username" required minlength="3" maxlength="64"></div>
 <div class="field"><label>客户密码</label><input name="password" type="password" autocomplete="new-password" placeholder="新建自动生成；编辑留空保持不变" readonly tabindex="-1"><span class="footnote">需要修改密码时，请在客户列表点击“重置密码”，随机生成后只显示一次。</span></div>
 <div class="field"><label>客户分组</label><select name="group_id"><option value="0">未分组</option><?php foreach($groups as $g): ?><option value="<?=(int)$g['id']?>"><?=h($g['name'])?></option><?php endforeach ?></select></div>
 <div class="field"><label>授权截止时间（北京时间，留空永久）</label><input name="license_until" type="datetime-local" step="1"></div>
@@ -228,9 +243,9 @@ $nav=[
 <div class="field span2"><label>内部备注</label><input name="notes" maxlength="500" placeholder="可填写客户联系方式、购买产品等"></div>
 </div><div class="editor-actions"><button class="btn primary">保存授权</button></div></form></div>
 <div class="card"><div class="card-head"><h2>全部客户</h2><span class="count"><?=count($accounts)?> 个账号</span></div>
-<div class="table-scroll"><table><thead><tr><th>客户账号</th><th>分组</th><th>电脑名额</th><th>手机额度</th><th>授权截止（北京时间）</th><th>平台权限</th><th>状态</th><th>操作</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>客户账号</th><th>开户套餐</th><th>分组</th><th>电脑名额</th><th>手机额度</th><th>授权截止（北京时间）</th><th>平台权限</th><th>状态</th><th>操作</th></tr></thead><tbody>
 <?php foreach($accounts as $a): $payload=['id'=>(int)$a['id'],'username'=>$a['username'],'group_id'=>(int)$a['group_id'],'device_limit'=>(int)$a['device_limit'],'mobile_limit'=>(int)$a['mobile_limit'],'license_until'=>utc_to_input($a['license_until']),'entitlements'=>json_decode((string)$a['entitlements'],true)?:[],'notes'=>$a['notes'],'enabled'=>(bool)$a['enabled'],'ai_enabled'=>(bool)$a['ai_enabled'],'allow_client_ai_key'=>(bool)$a['allow_client_ai_key'],'ai_daily_limit'=>(int)$a['ai_daily_limit']]; ?>
-<tr><td><b><?=h($a['username'])?></b></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?= (int)$a['mobile_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><?=h(implode('、',array_map(static fn($x)=>['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP','skill'=>'Skill','mcp-codex'=>'Codex MCP','mcp-harness'=>'DeepSeek Harness MCP'][$x]??$x,json_decode((string)$a['entitlements'],true)?:[])))?></td>
+<tr><td><b><?=h($a['username'])?></b></td><td><?=h(phonehub_plan_label($a['opening_plan_code']??null))?></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?= (int)$a['mobile_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><?=h(implode('、',array_map(static fn($x)=>['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP','skill'=>'Skill','mcp-codex'=>'Codex MCP','mcp-harness'=>'DeepSeek Harness MCP'][$x]??$x,json_decode((string)$a['entitlements'],true)?:[])))?></td>
 <td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td><td class="actions">
 <button class="small-link" data-edit="<?=h(json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP|JSON_HEX_TAG))?>">编辑</button>
 <button class="small-link" data-action="reset-account-password" data-id="<?=(int)$a['id']?>">重置密码</button>
