@@ -210,14 +210,14 @@ TEST_RESPONSE="$inactivePlanEdit" python3 -c 'import os,json; j=json.loads(os.en
 customPlanEdit=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
   --data-urlencode "id=$planSwitchId" --data-urlencode "username=ci_open_plan_user" \
-  --data-urlencode "opening_plan=custom" --data-urlencode "device_limit=6" \
+  --data-urlencode "opening_plan=custom" --data-urlencode "device_limit=2" \
   --data-urlencode "mobile_limit=8" --data-urlencode "enabled=on" \
   --data-urlencode "entitlements[]=douyin")
 TEST_RESPONSE="$customPlanEdit" python3 -c 'import os,json; assert json.loads(os.environ["TEST_RESPONSE"])["ok"]'
 PLAN_USER_ID="$planSwitchId" php -r '
 $cfg=require "storage/config.php";$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
 $s=$p->prepare("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.id=?");$s->execute([(int)getenv("PLAN_USER_ID")]);$r=$s->fetch(PDO::FETCH_ASSOC);
-if(!$r || (int)$r["device_limit"]!==6 || (int)$r["mobile_limit"]!==8 || $r["opening_plan_code"]!=="custom")exit(2);
+if(!$r || (int)$r["device_limit"]!==2 || (int)$r["mobile_limit"]!==8 || $r["opening_plan_code"]!=="custom")exit(2);
 '
 
 # Bulk authorization: server preview, reject stale member snapshot, then apply
@@ -258,7 +258,7 @@ php -r '
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
 $r=$p->query("SELECT username,device_limit FROM phonehub_users WHERE username IN (CHAR(99,105,95,111,112,101,110,95,112,108,97,110,95,117,115,101,114),CHAR(99,105,95,100,121,110,97,109,105,99,95,112,108,97,110,95,117,115,101,114)) ORDER BY username")->fetchAll(PDO::FETCH_KEY_PAIR);
-if ((int)$r["ci_open_plan_user"]!==1 || (int)$r["ci_dynamic_plan_user"]!==7) exit(3);
+if ((int)$r["ci_open_plan_user"]!==2 || (int)$r["ci_dynamic_plan_user"]!==7) exit(3);
 '
 fresh=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=group_bulk_preview" \
