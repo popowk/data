@@ -46,6 +46,35 @@ if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
     $openingPlans['standard']['mobile_limit']!==5 || $openingPlans['team']['device_limit']!==10 ||
     phonehub_plan_label(null)!=='原有授权')
     throw new RuntimeException('opening plan presets invalid');
+// Owner/admin/viewer are explicit, deny-by-default console roles.
+$allowedViews=[
+    'owner'=>['dashboard','accounts','groups','group_bulk','devices','packages',
+      'plans','backup_keys','client_logs','releases','ai','update','diagnostics',
+      'gateway','admins','audit','cloud_features'],
+    'admin'=>['dashboard','accounts','groups','group_bulk','devices','packages','client_logs','audit'],
+    'viewer'=>['dashboard','accounts','groups','packages']
+];
+foreach ($allowedViews as $role=>$allowed)
+    foreach ($allowedViews['owner'] as $page)
+        if (phonehub_role_can_view($role,$page)!==in_array($page,$allowed,true))
+            throw new RuntimeException('role page policy failed: '.$role.' / '.$page);
+foreach (['owner','admin','viewer','not_a_role'] as $role) {
+    if (phonehub_role_can_view($role,'unregistered_view') ||
+        phonehub_role_can_action($role,'unregistered_action'))
+        throw new RuntimeException('unknown backend permission was granted');
+}
+foreach (['viewer','not_a_role'] as $role)
+    foreach (['group_create','account_save','group_bulk_preview','plan_save',
+      'backup_key_generate','update_apply','device_reveal','admin_create',
+      'cloud_features_save','mobile_revoke'] as $action)
+        if (phonehub_role_can_action($role,$action))
+            throw new RuntimeException('read-only/invalid role may mutate data: '.$action);
+if (!phonehub_role_can_action('viewer','logout') ||
+    !phonehub_role_can_action('admin','account_save') ||
+    phonehub_role_can_action('admin','plan_save') ||
+    !phonehub_role_can_action('owner','backup_key_generate') ||
+    phonehub_role_label('viewer')!=='只读管理员')
+    throw new RuntimeException('role action policy mismatch');
 // Parameterized filters: input cannot turn into SQL clauses or LIKE wildcards.
 $filter=phonehub_account_filters([
   'q'=>'ci_test_01','group'=>'none','status'=>'enabled',
