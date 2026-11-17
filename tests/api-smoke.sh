@@ -78,7 +78,7 @@ if(!$row || (int)$row["device_limit"]!==7 || (int)$row["mobile_limit"]!==11 || $
 planToggle=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=plan_toggle" --data-urlencode "id=$planId")
 TEST_RESPONSE="$planToggle" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
-disabledPlanAttempt=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+disabledPlanAttempt=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
   --data-urlencode "username=ci_disabled_plan_user" --data-urlencode "opening_plan=$planCode")
 TEST_RESPONSE="$disabledPlanAttempt" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and "套餐" in j["error"],j'
