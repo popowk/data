@@ -163,6 +163,45 @@
     if (action==='new-account'){openEditor(null);return;}
     if (action==='close-editor'){$('#account-editor').hidden=true;return;}
     if (action==='check-update'){await checkUpdate();return;}
+    if (action==='generate-diagnostic') {
+      const area=$('#diagnostic-report-text');
+      const copy=$('#copy-diagnostic');
+      const status=$('#diagnostic-status');
+      if(!area || !copy) return;
+      trigger.disabled=true;copy.disabled=true;
+      area.value='';
+      if(status)status.textContent='正在检查服务端状态…';
+      try {
+        const data=await request('diagnostic_report');
+        if(typeof data.report!=='string' || !data.report.startsWith('PhoneHub 故障诊断报告'))
+          throw new Error('服务器未返回有效诊断报告');
+        area.value=data.report;
+        copy.disabled=false;
+        if(status)status.textContent='报告已生成，可点击复制';
+      } catch(err) {
+        if(status)status.textContent='诊断生成失败；请检查 PHP 错误日志';
+        toast(err.message,true);
+      } finally {trigger.disabled=false;}
+      return;
+    }
+    if (action==='copy-diagnostic') {
+      const area=$('#diagnostic-report-text');
+      if(!area?.value)return;
+      try {
+        if(navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(area.value);
+        } else {
+          area.focus();area.select();
+          if(!document.execCommand('copy')) throw new Error('无法自动复制');
+          area.setSelectionRange(0,0);
+        }
+        toast('已复制脱敏诊断报告，可以直接粘贴到聊天中');
+      } catch(err) {
+        area.focus();area.select();
+        toast('自动复制不可用，诊断内容已选中，可使用 ⌘C / Ctrl+C',true);
+      }
+      return;
+    }
     if (action==='diagnose-update'){
       const target=$('#update-diagnostics');
       trigger.disabled=true;
