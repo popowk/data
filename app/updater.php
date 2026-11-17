@@ -6,7 +6,7 @@ const UPDATE_MAX_BYTES = 16777216;
 const UPDATE_FILES = [
     'index.php','install.php','version.json','.htaccess',
     'app/core.php','app/accounts.php','app/updater.php','app/features.php','app/gateway.php',
-    'app/devices.php','app/device_admin.php','app/signing_admin.php',
+    'app/devices.php','app/device_admin.php','app/signing_admin.php','app/plan_admin.php','app/backup_admin.php',
     'app/releases.php','app/release_admin.php','app/ai.php','app/mobile.php',
     'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','docs/客户端接入API-v0.5.md','docs/运维备份与升级.md','docs/设备管理与签名-v0.5.2.md','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','tools/bootstrap-self-update.php','assets/app.css','assets/app.js'
 ];
@@ -205,7 +205,7 @@ function update_diagnostics(): array {
         'detail'=>$canBackup?'具备写入备份的条件':'备份目录不可写'];
     try {
         $migrations=(int)db()->query('SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations')->fetchColumn();
-        $checks[]=['name'=>'MySQL 数据库','status'=>$migrations>=9?'ok':'warning',
+        $checks[]=['name'=>'MySQL 数据库','status'=>$migrations>=10?'ok':'warning',
             'detail'=>'连接正常；数据结构版本 '.$migrations];
     } catch(Throwable $e) {
         error_log('PhoneHub runtime diagnostics database failure: '.get_class($e));
@@ -228,8 +228,10 @@ function update_diagnostics(): array {
         extension_loaded('sodium') && filesize($recipient)===SODIUM_CRYPTO_BOX_PUBLICKEYBYTES;
     $checks[]=['name'=>'加密备份接收公钥','status'=>$backupKeyOk?'ok':'warning',
         'detail'=>$backupKeyOk?'已配置 Curve25519 备份公钥；可由 CLI 工具生成加密备份':'未配置 32 字节备份公钥，或格式不正确；CLI 加密备份暂不可用'];
-    $checks[]=['name'=>'异地备份与恢复验证','status'=>'warning',
-        'detail'=>'无法通过网站判断宝塔任务或离线恢复是否成功；请检查定时任务、异地副本和恢复演练'];
+    $checks[]=['name'=>'备份加密工具','status'=>is_file(APP_ROOT.'/tools/backup-server.php') &&
+        is_file(APP_ROOT.'/tools/backup-crypto.php')?'ok':'error',
+        'detail'=>is_file(APP_ROOT.'/tools/backup-server.php') &&
+        is_file(APP_ROOT.'/tools/backup-crypto.php')?'命令行加密备份工具文件存在（未执行数据库导出）':'加密备份工具文件不完整'];
     return ['checks'=>$checks,'summary'=>[
         'errors'=>count(array_filter($checks,static fn($x)=>$x['status']==='error')),
         'warnings'=>count(array_filter($checks,static fn($x)=>$x['status']==='warning'))
@@ -270,6 +272,14 @@ function update_diagnostic_report(): array {
             if (preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$/D',$time))
                 $recent[]=$time.' '.$action;
         }
+        $lastSuccess=null;
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $event) {
+            // This fallback path remains empty when records were already fetched.
+            if ((string)$event['action']==='system_update') { $lastSuccess=(string)$event['created_at'];break; }
+        }
+        $lastSuccessQuery=$pdo->query("SELECT MAX(created_at) FROM phonehub_admin_audit WHERE action='system_update'")->fetchColumn();
+        $lastSuccess=is_string($lastSuccessQuery)?$lastSuccessQuery:null;
+        $lines[]='最近一次升级成功记录：'.($lastSuccess??'未找到').'（仅代表接口成功返回；不判断后续生产可用性）';
         $lines[]='近期更新动作（仅类型与时间）：'.($recent?implode('；',$recent):'无记录');
     } catch (Throwable $e) {
         // No PDO exception message or SQL statements leave the server.
@@ -291,6 +301,7 @@ function update_diagnostic_report(): array {
     } catch (Throwable $e) {
         $lines[]='自更新签名：信任公钥状态异常';
     }
+    $lines[]='备份检查范围：仅验证接收公钥与 CLI 工具；未监控备份任务或异地同步';
     $lines[]='检查摘要：'.(int)($health['summary']['errors']??0).' 项错误、'.(int)($health['summary']['warnings']??0).' 项需要确认';
     foreach (($health['checks']??[]) as $check) {
         if (!in_array($check['status']??'',['ok','warning','error'],true)) continue;
