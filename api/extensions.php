@@ -43,6 +43,12 @@ function api_cloud_feature_enabled(string $feature): bool {
     $flag=['mcp-codex'=>'mcp_codex_enabled','mcp-harness'=>'mcp_harness_enabled'][$feature]??($feature.'_enabled');
     return client_sql('SELECT setting_value FROM phonehub_feature_settings WHERE setting_key=?',[$flag])->fetchColumn()==='1';
 }
+function api_true_features(array $flags): array {
+    // Capability discovery is positive-only. Absence means no usable capability.
+    // Do not apply this to protocol booleans such as ok/bound/available:
+    // callers rely on their explicit states and the server always enforces policy.
+    return array_filter($flags,static fn($allowed): bool => $allowed === true);
+}
 function api_require_cloud_feature(string $feature,array $session): void {
     if (!api_cloud_feature_enabled($feature))
         api_problem('FEATURE_DISABLED',strtoupper($feature).' 当前由管理员在云端禁用',403);
@@ -120,20 +126,21 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         $permitted=json_decode((string)$session['entitlements'],true)?:[];
         $account=client_sql('SELECT device_limit FROM phonehub_users WHERE id=?',[$userId])->fetch();
         $pcUsed=(int)client_sql('SELECT COUNT(DISTINCT device_id) FROM phonehub_sessions WHERE user_id=? AND expires_at>UTC_TIMESTAMP()',[$userId])->fetchColumn();
-        api_out([
-            'ok'=>true,'username'=>$session['username'],'server_time'=>time(),
-            'session_expires_at'=>strtotime($session['expires_at'].' UTC'),
-            'license_until'=>$session['license_until'],'entitlements'=>$permitted,
-            'mobile'=>$quota,
-            'computer'=>['device_limit'=>(int)($account['device_limit']??0),'used'=>$pcUsed],
-            'features'=>[
+        $features=api_true_features([
                 'mobile_bind'=>true,'mobile_unbind'=>true,'package_requires_mobile_binding'=>true,
                 'update_check'=>true,'update_download'=>true,'log_batch'=>true,'device_list'=>true,'device_revoke'=>true,
                 'mcp_available'=>api_cloud_feature_enabled('mcp') && in_array('mcp',$permitted,true),
                 'skill_available'=>api_cloud_feature_enabled('skill') && in_array('skill',$permitted,true),
                 'mcp_codex_available'=>api_cloud_feature_enabled('mcp-codex') && in_array('mcp',$permitted,true) && in_array('mcp-codex',$permitted,true),
                 'mcp_harness_available'=>api_cloud_feature_enabled('mcp-harness') && in_array('mcp',$permitted,true) && in_array('mcp-harness',$permitted,true)
-            ],
+        ]);
+        api_out([
+            'ok'=>true,'username'=>$session['username'],'server_time'=>time(),
+            'session_expires_at'=>strtotime($session['expires_at'].' UTC'),
+            'license_until'=>$session['license_until'],'entitlements'=>$permitted,
+            'mobile'=>$quota,
+            'computer'=>['device_limit'=>(int)($account['device_limit']??0),'used'=>$pcUsed],
+            'features'=>$features,
             'settings'=>['session_check_seconds'=>120,'mobile_heartbeat_seconds'=>300,'log_batch_max'=>50]
         ]);
     }
