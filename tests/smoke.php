@@ -34,6 +34,14 @@ $aiTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE 
 if($aiTable!==1) throw new RuntimeException('AI schema self-repair failed');
 $aiColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_users'")->fetchAll(PDO::FETCH_COLUMN);
 foreach(['ai_enabled','allow_client_ai_key','ai_daily_limit'] as $column) if(!in_array($column,$aiColumns,true)) throw new RuntimeException('AI schema self-repair missed '.$column);
+$metaColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_user_meta'")->fetchAll(PDO::FETCH_COLUMN);
+if (!in_array('opening_plan_code',$metaColumns,true))
+    throw new RuntimeException('opening plan migration missing');
+$openingPlans=phonehub_opening_plans();
+if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
+    $openingPlans['standard']['mobile_limit']!==5 || $openingPlans['team']['device_limit']!==10 ||
+    phonehub_plan_label(null)!=='原有授权')
+    throw new RuntimeException('opening plan presets invalid');
 $mobileColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_mobile_devices'")->fetchAll(PDO::FETCH_COLUMN);
 foreach (['imei_hash','imei_encrypted','phone_number_encrypted','phone_number_hash','phone_model'] as $column)
     if(!in_array($column,$mobileColumns,true)) throw new RuntimeException('mobile identity column missing: '.$column);
