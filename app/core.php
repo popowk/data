@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=9) return;
+        if ($ready>=10) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -280,6 +280,27 @@ function migrate(PDO $conn): void {
             $conn->exec("ALTER TABLE phonehub_user_meta ADD COLUMN opening_plan_code VARCHAR(24) NULL DEFAULT NULL");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(9,UTC_TIMESTAMP())");
     }
+    if ($version < 10) {
+        // Only opening quotas, no product catalog, price, payment or orders.
+        // Existing account entitlements and opening_plan_code stay untouched.
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_plan_templates (
+          id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          plan_code VARCHAR(24) NOT NULL UNIQUE,
+          name VARCHAR(64) NOT NULL,
+          device_limit INT NOT NULL,
+          mobile_limit INT NOT NULL,
+          enabled TINYINT NOT NULL DEFAULT 1,
+          sort_order INT NOT NULL DEFAULT 0,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_plan_templates
+          (plan_code,name,device_limit,mobile_limit,enabled,sort_order) VALUES
+          ('personal','单机版',1,1,1,10),
+          ('standard','标准版',3,5,1,20),
+          ('team','团队版',10,20,1,30)");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(10,UTC_TIMESTAMP())");
+    }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
@@ -325,19 +346,26 @@ function require_owner(): void {
     require_admin();
     if (admin_role()!=='owner') throw new RuntimeException('仅主管理员可以执行此操作');
 }
-function phonehub_opening_plans(): array {
-    // Fixed quotas only. Cloud permissions, AI, pricing and orders are not
-    // inferred from a plan; owners select those privileges independently.
-    return [
-        'personal'=>['label'=>'单机版','device_limit'=>1,'mobile_limit'=>1],
-        'standard'=>['label'=>'标准版','device_limit'=>3,'mobile_limit'=>5],
-        'team'=>['label'=>'团队版','device_limit'=>10,'mobile_limit'=>20]
-    ];
+function phonehub_opening_plans(bool $activeOnly=true): array {
+    // Opening quota templates are managed by the primary administrator.
+    // Never derive AI/MCP access or billing permissions from a template.
+    $rows=sql('SELECT plan_code,name,device_limit,mobile_limit,enabled
+        FROM phonehub_plan_templates '.($activeOnly?'WHERE enabled=1 ':'').'ORDER BY sort_order,id')->fetchAll(PDO::FETCH_ASSOC);
+    $out=[];
+    foreach ($rows as $row) {
+        $out[(string)$row['plan_code']]=[
+            'label'=>(string)$row['name'],
+            'device_limit'=>(int)$row['device_limit'],
+            'mobile_limit'=>(int)$row['mobile_limit'],
+            'enabled'=>(int)$row['enabled']
+        ];
+    }
+    return $out;
 }
 function phonehub_plan_label(?string $code): string {
     if ($code===null || $code==='') return '原有授权';
     if ($code==='custom') return '自定义';
-    return phonehub_opening_plans()[$code]['label']??'未知套餐';
+    return phonehub_opening_plans(false)[$code]['label']??'已停用或未知套餐';
 }
 function random_password(int $length=20): string {
     $characters='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#%+-';
