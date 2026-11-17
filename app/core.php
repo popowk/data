@@ -342,9 +342,67 @@ function admin_role(): string {
         $roles[$id]=(string)sql('SELECT role FROM phonehub_admins WHERE id=?',[$id])->fetchColumn();
     return $roles[$id];
 }
+/**
+ * Single-product admin roles. Fail closed for unknown roles, routes/actions.
+ * This does NOT enforce reseller tenancy or customer data ownership.
+ */
+final class PhoneHubPermissionException extends RuntimeException {}
+function phonehub_role_can_view(string $role,string $view): bool {
+    $viewer=['dashboard','accounts','groups','packages'];
+    $admin=array_merge($viewer,['group_bulk','devices','client_logs','audit']);
+    $owner=array_merge($admin,[
+        'plans','backup_keys','releases','ai','cloud_features','update',
+        'diagnostics','gateway','admins'
+    ]);
+    return match($role) {
+        'owner'=>in_array($view,$owner,true),
+        'admin'=>in_array($view,$admin,true),
+        'viewer'=>in_array($view,$viewer,true),
+        default=>false
+    };
+}
+function phonehub_role_can_action(string $role,string $action): bool {
+    $viewer=['logout'];
+    $admin=array_merge($viewer,[
+        'group_create','group_delete','account_save','reset_sessions',
+        'revoke_session','account_password','group_bulk','group_bulk_preview',
+        'mobile_add','mobile_revoke'
+    ]);
+    $owner=array_merge($admin,[
+        'signing_generate','signing_activate','plan_save','plan_toggle',
+        'backup_key_generate','diagnostic_report','update_check','update_apply',
+        'update_diagnostics','release_publish','release_toggle','logs_purge',
+        'ai_settings_save','admin_create','admin_toggle','admin_reset',
+        'admin_delete','owner_password','device_reveal','device_blacklist_add',
+        'mobile_blacklist','mobile_unblacklist','cloud_features_save',
+        'gateway_install'
+    ]);
+    return match($role) {
+        'owner'=>in_array($action,$owner,true),
+        'admin'=>in_array($action,$admin,true),
+        'viewer'=>in_array($action,$viewer,true),
+        default=>false
+    };
+}
+function phonehub_role_label(string $role): string {
+    return match($role) {
+        'owner'=>'主管理员', 'admin'=>'普通管理员',
+        'viewer'=>'只读管理员', default=>'无效角色'
+    };
+}
+function phonehub_require_view(string $view): void {
+    require_admin();
+    if (!phonehub_role_can_view(admin_role(),$view))
+        throw new PhoneHubPermissionException('当前管理员无权访问此页面');
+}
+function phonehub_require_action(string $action): void {
+    require_admin();
+    if (!phonehub_role_can_action(admin_role(),$action))
+        throw new PhoneHubPermissionException('当前管理员无权执行此操作');
+}
 function require_owner(): void {
     require_admin();
-    if (admin_role()!=='owner') throw new RuntimeException('仅主管理员可以执行此操作');
+    if (admin_role()!=='owner') throw new PhoneHubPermissionException('仅主管理员可以执行此操作');
 }
 /**
  * Build bounded, parameterized customer list filters. No untrusted GET field
