@@ -105,7 +105,10 @@ function signing_generate_and_publish(string $githubToken): array {
             audit('self_update_signing_prepare',substr(hash('sha256',$public),0,16));
             return ['message'=>'签名密钥已自动生成并安全提交 GitHub Actions；等待镜像同步签名后点击验证启用',
                 'state'=>'pending','fingerprint'=>hash('sha256',$public)];
-        } finally {sodium_memzero($private);}
+        } finally {
+            sodium_memzero($private);
+            sodium_memzero($keypair);
+        }
     } finally {flock($lock,LOCK_UN);fclose($lock);}
 }
 function signing_activate_trust(): array {
@@ -116,7 +119,6 @@ function signing_activate_trust(): array {
     $pub=file_get_contents(APP_STORE.'/self-update-pending.pub');
     if (!is_string($pub) || strlen($pub)!==32) throw new RuntimeException('待启用公钥格式错误');
     // Validate a freshly downloaded archive, not server source or cached data.
-    $archive=update_archive(); // malformed ZIP and missing program files fail here
     $temp=tempnam(APP_STORE,'verify-signed-');
     if ($temp===false) throw new RuntimeException('无法建立签名验证缓存');
     try {
