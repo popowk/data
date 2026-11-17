@@ -82,6 +82,12 @@
     event.preventDefault();
     const confirmMessage=form.querySelector('[data-confirm-submit]')?.dataset.confirmSubmit;
     const action=form.dataset.ajax;
+    if(action==='account_save' && Number(form.elements.id?.value)>0) {
+      const chosen=form.elements.opening_plan?.value||'';
+      if(chosen && chosen!==form.dataset.originalPlan &&
+         !confirm('修改客户套餐将更新该客户的电脑和手机授权名额，可能导致超额设备立即不可用。确认继续？'))
+        return;
+    }
     if(action!=='group_bulk' && confirmMessage && !confirm(confirmMessage))return;
     const submit=$('button[type="submit"],button:not([type])',form);
     if(submit)submit.disabled=true;
@@ -131,29 +137,50 @@
     const submit=$('button[type="submit"]',form);
     if(submit)submit.disabled=true;
   },true);
-  function applyOpeningPlan(form) {
+  function applyOpeningPlan(form,changed=false) {
     const picker=form.elements.opening_plan;
     if(!picker) return;
     const code=picker.value;
     const option=picker.selectedOptions[0];
-    const preset=code && code!=='custom';
+    const original=form.dataset.originalPlan||'';
+    const preset=!!code && code!=='custom' &&
+      (!Number(form.elements.id.value) || code!==original);
     if(preset && option?.dataset.pc && option?.dataset.mobile) {
       form.elements.device_limit.value=option.dataset.pc;
       form.elements.mobile_limit.value=option.dataset.mobile;
+    } else if(changed && Number(form.elements.id.value) && code===original) {
+      form.elements.device_limit.value=form.dataset.originalDeviceLimit;
+      form.elements.mobile_limit.value=form.dataset.originalMobileLimit;
     }
-    // The backend enforces preset quotas; read-only prevents an accidental
-    // mismatch between displayed numbers and the account's actual limits.
-    form.elements.device_limit.readOnly=!!preset;
-    form.elements.mobile_limit.readOnly=!!preset;
+    // A changed preset is read-only; existing same-plan manual quotas remain
+    // editable and are not reset to later template revisions.
+    form.elements.device_limit.readOnly=preset;
+    form.elements.mobile_limit.readOnly=preset;
   }
   function openEditor(payload) {
     const container=$('#account-editor');if(!container)return;
     const form=$('form',container);form.reset();
-    const openingField=$('#opening-plan-field',container);
-    if(openingField)openingField.hidden=!!payload;
-    if(form.elements.opening_plan) {
-      form.elements.opening_plan.disabled=!!payload;
-      form.elements.opening_plan.value='';
+    const picker=form.elements.opening_plan;
+    const original=payload?.opening_plan_code||'';
+    form.dataset.originalPlan=original;
+    form.dataset.originalDeviceLimit=String(payload?.device_limit??3);
+    form.dataset.originalMobileLimit=String(payload?.mobile_limit??1);
+    if(picker) {
+      picker.required=!payload;
+      picker.querySelectorAll('option[data-unknown-plan]').forEach(option=>option.remove());
+      [...picker.options].forEach(option=>{
+        if(option.dataset.enabled==='0') option.disabled=option.value!==original;
+      });
+      if(original && ![...picker.options].some(option=>option.value===original)) {
+        const unknown=document.createElement('option');
+        unknown.value=original;
+        unknown.textContent='历史套餐（已删除，保留原配额）';
+        unknown.dataset.unknownPlan='1';
+        picker.append(unknown);
+      }
+      picker.options[0].textContent=payload?'原有授权（不变更套餐）':'请选择客户套餐';
+      picker.value=original;
+      picker.disabled=false;
     }
     form.elements.id.value=payload?.id || 0;
     form.elements.username.value=payload?.username || '';
@@ -389,7 +416,7 @@
   document.addEventListener('change',event=>{
     if(event.target.id==='opening-plan') {
       const editor=$('#account-editor form');
-      if(editor) applyOpeningPlan(editor);
+      if(editor) applyOpeningPlan(editor,true);
       return;
     }
     const toggle=event.target.closest('.bulk-option-toggle');

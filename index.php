@@ -55,17 +55,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             validate_user($name);
             $limit=(int)($_POST['device_limit'] ?? 3);
             $mobile=(int)($_POST['mobile_limit'] ?? 1);
-            // Opening preset applies only to new accounts; existing customer's
-            // limits remain editable without changing their original plan label.
+            // Explicit plan reassignment for existing customers; omitted/blank
+            // opening_plan keeps the old label and all manually edited quotas.
             $openingPlan=null;
+            $rawPlan=$_POST['opening_plan']??'';
+            if (!is_string($rawPlan) || strlen($rawPlan)>24 ||
+                ($rawPlan!=='' && !preg_match('/^[A-Za-z0-9_-]{1,24}$/D',$rawPlan)))
+                throw new RuntimeException('客户套餐参数格式不正确');
+            $requestedPlan=$rawPlan;
+            $planChanged=false;
             if ($creating) {
-                $openingPlan=(string)($_POST['opening_plan']??'');
-                $plans=phonehub_opening_plans();
-                if ($openingPlan!=='custom' && !isset($plans[$openingPlan]))
-                    throw new RuntimeException('创建客户时请选择开户套餐');
-                if ($openingPlan!=='custom') {
-                    $limit=(int)$plans[$openingPlan]['device_limit'];
-                    $mobile=(int)$plans[$openingPlan]['mobile_limit'];
+                if ($requestedPlan==='') throw new RuntimeException('创建客户时请选择开户套餐');
+                if ($requestedPlan==='custom') $openingPlan='custom';
+                else {
+                    $plans=phonehub_opening_plans();
+                    if (!isset($plans[$requestedPlan])) throw new RuntimeException('开户套餐不存在或已停用');
+                    $openingPlan=$requestedPlan;
+                    $limit=(int)$plans[$requestedPlan]['device_limit'];
+                    $mobile=(int)$plans[$requestedPlan]['mobile_limit'];
                 }
             }
             $aiEnabled=isset($_POST['ai_enabled'])?1:0;
@@ -94,6 +101,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($id) {
                 $old=sql('SELECT username,enabled,device_limit FROM phonehub_users WHERE id=? FOR UPDATE',[$id])->fetch();
                 if (!$old) throw new RuntimeException('账号不存在');
+                $oldMeta=sql('SELECT opening_plan_code FROM phonehub_user_meta WHERE user_id=? FOR UPDATE',[$id])->fetch();
+                $previousPlan=$oldMeta?($oldMeta['opening_plan_code']??null):null;
+                if ($requestedPlan!=='' && $requestedPlan!==$previousPlan) {
+                    if ($requestedPlan!=='custom') {
+                        // Lock the currently enabled preset; never trust a
+                        // browser-supplied quota or a disabled plan code.
+                        $preset=sql('SELECT device_limit,mobile_limit FROM phonehub_plan_templates WHERE plan_code=? AND enabled=1 FOR UPDATE',[$requestedPlan])->fetch();
+                        if (!$preset) throw new RuntimeException('目标套餐不存在或已停用，请刷新后重新选择');
+                        $limit=(int)$preset['device_limit'];
+                        $mobile=(int)$preset['mobile_limit'];
+                    }
+                    $openingPlan=$requestedPlan;
+                    $planChanged=true;
+                }
+                if ($limit<1 || $limit>100 || $mobile<0 || $mobile>1000)
+                    throw new RuntimeException('套餐额度无效，请联系管理员检查套餐配置');
                 if ($pass!=='') {
                     $hash=password_hash_safe($pass);
                     sql('UPDATE phonehub_users SET username=?,password_hash=?,enabled=?,device_limit=?,license_until=?,entitlements=?,ai_enabled=?,allow_client_ai_key=?,ai_daily_limit=? WHERE id=?',
@@ -113,6 +136,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             sql('INSERT INTO phonehub_user_meta(user_id,group_id,mobile_limit,notes,opening_plan_code) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE group_id=VALUES(group_id),mobile_limit=VALUES(mobile_limit),notes=VALUES(notes),opening_plan_code=COALESCE(VALUES(opening_plan_code),opening_plan_code)',
                 [$id,$group?:null,$mobile,$notes,$openingPlan]);
             audit('account_save',$name);
+            if ($planChanged)
+                audit('account_plan_change',$name.' '.($previousPlan??'legacy').' -> '.$openingPlan);
             db()->commit();
             json_response(array_merge(['ok'=>true,'message'=>'授权已保存','id'=>$id],$creating?['password'=>$pass,'username'=>$name]:[]));
         }
@@ -277,7 +302,7 @@ $nav=[
 <div class="card editor" id="account-editor" hidden><div class="card-head"><h2 id="editor-title">创建客户</h2><button class="text-button" data-action="close-editor">关闭</button></div>
 <form data-ajax="account_save"><input name="action" type="hidden" value="account_save"><input name="id" type="hidden" value="0">
 <div class="form-grid">
-<div class="field span2" id="opening-plan-field"><label for="opening-plan">开户套餐（仅创建客户时选择）</label><select id="opening-plan" name="opening_plan" required><option value="">请选择开户套餐</option><?php foreach(phonehub_opening_plans() as $code=>$plan): ?><option value="<?=h($code)?>" data-pc="<?=(int)$plan['device_limit']?>" data-mobile="<?=(int)$plan['mobile_limit']?>"><?=h($plan['label'])?> · <?=(int)$plan['device_limit']?> 台电脑 / <?=(int)$plan['mobile_limit']?> 台手机</option><?php endforeach ?><option value="custom">自定义授权额度</option></select><span class="footnote">只预设电脑与手机额度，不产生订单或费用记录；其他平台、AI 权限按下方独立配置。创建后仍可编辑授权额度。</span></div>
+<div class="field span2" id="opening-plan-field"><label for="opening-plan">客户套餐（创建后可修改）</label><select id="opening-plan" name="opening_plan" required><option value="">请选择客户套餐</option><?php foreach(phonehub_opening_plans(false) as $code=>$plan): ?><option value="<?=h($code)?>" data-pc="<?=(int)$plan['device_limit']?>" data-mobile="<?=(int)$plan['mobile_limit']?>" data-enabled="<?=(int)$plan['enabled']?>" <?=$plan['enabled']?'':'disabled'?>><?=h($plan['label'])?><?=$plan['enabled']?'':'（已停用）'?> · <?=(int)$plan['device_limit']?> 台电脑 / <?=(int)$plan['mobile_limit']?> 台手机</option><?php endforeach ?><option value="custom">自定义授权额度</option></select><span class="footnote">切换套餐会按新套餐设置电脑和手机额度；原套餐未变时保留当前额度，也可单独调整。套餐不影响其他平台、AI 权限、到期时间或费用。</span></div>
 <div class="field"><label>客户账号</label><input name="username" required minlength="3" maxlength="64"></div>
 <div class="field"><label>客户密码</label><input name="password" type="password" autocomplete="new-password" placeholder="新建自动生成；编辑留空保持不变" readonly tabindex="-1"><span class="footnote">需要修改密码时，请在客户列表点击“重置密码”，随机生成后只显示一次。</span></div>
 <div class="field"><label>客户分组</label><select name="group_id"><option value="0">未分组</option><?php foreach($groups as $g): ?><option value="<?=(int)$g['id']?>"><?=h($g['name'])?></option><?php endforeach ?></select></div>
@@ -306,7 +331,7 @@ $nav=[
 <div class="field"><label for="account-filter-expiry">到期情况</label><select id="account-filter-expiry" name="expiry">
 <?php foreach(['all'=>'全部期限','expired'=>'已过期','due7'=>'未来 7 天到期','due30'=>'未来 30 天到期','permanent'=>'永久','valid'=>'未过期（含永久）'] as $value=>$label): ?><option value="<?=h($value)?>" <?=$accountFilters['expiry']===$value?'selected':''?>><?=h($label)?></option><?php endforeach ?>
 </select></div>
-<div class="field"><label for="account-filter-plan">开户套餐</label><select id="account-filter-plan" name="plan">
+<div class="field"><label for="account-filter-plan">客户套餐</label><select id="account-filter-plan" name="plan">
 <option value="all">全部套餐</option><option value="legacy" <?=$accountFilters['plan']==='legacy'?'selected':''?>>旧授权（无套餐）</option><option value="custom" <?=$accountFilters['plan']==='custom'?'selected':''?>>自定义授权</option>
 <?php foreach(phonehub_opening_plans(false) as $code=>$p): ?><option value="<?=h($code)?>" <?=$accountFilters['plan']===$code?'selected':''?>><?=h($p['label'])?><?=$p['enabled']?'':'（已停用）'?></option><?php endforeach ?>
 </select></div>
@@ -321,8 +346,8 @@ $accountPageLink=static function(int $page) use($accountFilters): string {
 };
 ?>
 <div class="card"><div class="card-head"><h2>客户列表</h2><span class="count">匹配 <?=$accountTotal?> 位 · 第 <?=$accountPage?> / <?=$accountPages?> 页（每页 30 位）</span></div>
-<div class="table-scroll"><table><thead><tr><th>客户账号</th><th>开户套餐</th><th>分组</th><th>电脑名额</th><th>手机额度</th><th>授权截止（北京时间）</th><th>平台权限</th><th>状态</th><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><th>操作</th><?php endif ?></tr></thead><tbody>
-<?php foreach($accounts as $a): $payload=['id'=>(int)$a['id'],'username'=>$a['username'],'group_id'=>(int)$a['group_id'],'device_limit'=>(int)$a['device_limit'],'mobile_limit'=>(int)$a['mobile_limit'],'license_until'=>utc_to_input($a['license_until']),'entitlements'=>json_decode((string)$a['entitlements'],true)?:[],'notes'=>$a['notes'],'enabled'=>(bool)$a['enabled'],'ai_enabled'=>(bool)$a['ai_enabled'],'allow_client_ai_key'=>(bool)$a['allow_client_ai_key'],'ai_daily_limit'=>(int)$a['ai_daily_limit']]; ?>
+<div class="table-scroll"><table><thead><tr><th>客户账号</th><th>客户套餐</th><th>分组</th><th>电脑名额</th><th>手机额度</th><th>授权截止（北京时间）</th><th>平台权限</th><th>状态</th><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><th>操作</th><?php endif ?></tr></thead><tbody>
+<?php foreach($accounts as $a): $payload=['id'=>(int)$a['id'],'username'=>$a['username'],'group_id'=>(int)$a['group_id'],'device_limit'=>(int)$a['device_limit'],'mobile_limit'=>(int)$a['mobile_limit'],'opening_plan_code'=>$a['opening_plan_code']??null,'license_until'=>utc_to_input($a['license_until']),'entitlements'=>json_decode((string)$a['entitlements'],true)?:[],'notes'=>$a['notes'],'enabled'=>(bool)$a['enabled'],'ai_enabled'=>(bool)$a['ai_enabled'],'allow_client_ai_key'=>(bool)$a['allow_client_ai_key'],'ai_daily_limit'=>(int)$a['ai_daily_limit']]; ?>
 <tr><td><b><?=h($a['username'])?></b></td><td><?=h(phonehub_plan_label($a['opening_plan_code']??null))?></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?= (int)$a['mobile_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><?=h(implode('、',array_map(static fn($x)=>['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP','skill'=>'Skill','mcp-codex'=>'Codex MCP','mcp-harness'=>'DeepSeek Harness MCP'][$x]??$x,json_decode((string)$a['entitlements'],true)?:[])))?></td>
 <td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><td class="actions">
 <button class="small-link" data-edit="<?=h(json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP|JSON_HEX_TAG))?>">编辑</button>

@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "channel": "stable",
-  "released_at": "2026-11-17",
-  "notes": "在 v0.5.9 可选批量 client_heartbeat 与脱敏耗时采样基础上，增加 Apache storage 路径及密钥/ZIP 文件访问防护；明确宝塔 Nginx 仍需单独配置 location 403，生产未验证不宣称已保护。保持 API 兼容、旧授权与签名信任链。"
+  "released_at": "2026-11-18",
+  "notes": "允许对已创建客户在编辑页改选当前套餐；更换时由服务端按启用的套餐覆盖电脑和手机额度，原套餐不变时保留手动名额，停用历史套餐可保留但不能新分配，增设变更审计与HTTP回归。兼容旧account_save，无数据库迁移，其他授权/客户端接口/签名保持原状。"
 }

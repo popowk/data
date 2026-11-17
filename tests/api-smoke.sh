@@ -147,6 +147,75 @@ grep -q '每页 30 位' "$adminHtml"
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&q=ci_nonexistent_user' -o "$adminHtml"
 grep -q '没有符合条件的客户' "$adminHtml"
 
+
+# Existing customer plan reassignment: only a changed preset overrides forged quotas.
+# The account_save path remains usable for clients that omit opening_plan.
+planSwitchId=$(TEST_RESPONSE="$planCreated" python3 -c 'import os,json; print(json.loads(os.environ["TEST_RESPONSE"])["id"])')
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&q=ci_open_plan_user' -o "$adminHtml"
+grep -q '客户套餐（创建后可修改）' "$adminHtml"
+grep -q 'opening_plan_code' "$adminHtml"
+switchedAccount=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
+  --data-urlencode "id=$planSwitchId" --data-urlencode "username=ci_open_plan_user" \
+  --data-urlencode "opening_plan=standard" --data-urlencode "device_limit=99" \
+  --data-urlencode "mobile_limit=999" --data-urlencode "enabled=on" \
+  --data-urlencode "entitlements[]=douyin")
+TEST_RESPONSE="$switchedAccount" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
+PLAN_USER_ID="$planSwitchId" php -r '
+$cfg=require "storage/config.php";$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$s=$p->prepare("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code,u.entitlements FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.id=?");$s->execute([(int)getenv("PLAN_USER_ID")]);$r=$s->fetch(PDO::FETCH_ASSOC);
+if(!$r || (int)$r["device_limit"]!==3 || (int)$r["mobile_limit"]!==5 || $r["opening_plan_code"]!=="standard" || json_decode($r["entitlements"],true)!==["douyin"])exit(2);
+$s=$p->prepare("SELECT COUNT(*) FROM phonehub_admin_audit WHERE action=? AND target LIKE ?");$s->execute(["account_plan_change","ci_open_plan_user personal -> standard%"]);if((int)$s->fetchColumn()<1)exit(3);
+'
+# Same-plan saves allow manual quota edits, and legacy edits with the field
+# omitted must preserve the current stored plan label.
+samePlanEdit=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
+  --data-urlencode "id=$planSwitchId" --data-urlencode "username=ci_open_plan_user" \
+  --data-urlencode "opening_plan=standard" --data-urlencode "device_limit=4" \
+  --data-urlencode "mobile_limit=6" --data-urlencode "enabled=on" \
+  --data-urlencode "entitlements[]=douyin")
+TEST_RESPONSE="$samePlanEdit" python3 -c 'import os,json; assert json.loads(os.environ["TEST_RESPONSE"])["ok"]'
+legacyEdit=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
+  --data-urlencode "id=$planSwitchId" --data-urlencode "username=ci_open_plan_user" \
+  --data-urlencode "device_limit=4" --data-urlencode "mobile_limit=6" \
+  --data-urlencode "enabled=on" --data-urlencode "entitlements[]=douyin")
+TEST_RESPONSE="$legacyEdit" python3 -c 'import os,json; assert json.loads(os.environ["TEST_RESPONSE"])["ok"]'
+PLAN_USER_ID="$planSwitchId" php -r '
+$cfg=require "storage/config.php";$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$s=$p->prepare("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.id=?");$s->execute([(int)getenv("PLAN_USER_ID")]);$r=$s->fetch(PDO::FETCH_ASSOC);
+if(!$r || (int)$r["device_limit"]!==4 || (int)$r["mobile_limit"]!==6 || $r["opening_plan_code"]!=="standard")exit(2);
+'
+# A disabled template cannot be assigned to another customer by forged POST.
+illegalPlanEdit=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
+  --data-urlencode "id=$planSwitchId" --data-urlencode "username=ci_open_plan_user" \
+  --data-urlencode "opening_plan=$planCode" --data-urlencode "device_limit=1" \
+  --data-urlencode "mobile_limit=1" --data-urlencode "enabled=on")
+TEST_RESPONSE="$illegalPlanEdit" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and "套餐" in j["error"],j'
+# Historical disabled plan may remain on the same user without resetting quota.
+originalDynamicId=$(TEST_RESPONSE="$newAccount" python3 -c 'import os,json; print(json.loads(os.environ["TEST_RESPONSE"])["id"])')
+inactivePlanEdit=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
+  --data-urlencode "id=$originalDynamicId" --data-urlencode "username=ci_dynamic_plan_user" \
+  --data-urlencode "opening_plan=$planCode" --data-urlencode "device_limit=7" \
+  --data-urlencode "mobile_limit=11" --data-urlencode "enabled=on")
+TEST_RESPONSE="$inactivePlanEdit" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
+# Custom means intentionally user-specified limits and updated plan label.
+customPlanEdit=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
+  --data-urlencode "id=$planSwitchId" --data-urlencode "username=ci_open_plan_user" \
+  --data-urlencode "opening_plan=custom" --data-urlencode "device_limit=6" \
+  --data-urlencode "mobile_limit=8" --data-urlencode "enabled=on" \
+  --data-urlencode "entitlements[]=douyin")
+TEST_RESPONSE="$customPlanEdit" python3 -c 'import os,json; assert json.loads(os.environ["TEST_RESPONSE"])["ok"]'
+PLAN_USER_ID="$planSwitchId" php -r '
+$cfg=require "storage/config.php";$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$s=$p->prepare("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.id=?");$s->execute([(int)getenv("PLAN_USER_ID")]);$r=$s->fetch(PDO::FETCH_ASSOC);
+if(!$r || (int)$r["device_limit"]!==6 || (int)$r["mobile_limit"]!==8 || $r["opening_plan_code"]!=="custom")exit(2);
+'
+
 # Bulk authorization: server preview, reject stale member snapshot, then apply
 # the same request after fresh preview. No production data is used.
 groupCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
