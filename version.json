@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "channel": "stable",
   "released_at": "2026-11-17",
-  "notes": "服务端 v0.5：增加可选择启用的固定公钥 Ed25519 自更新验签，离线签名工具与篡改回放测试；新增 CLI 加密数据库和关键文件备份、离线完整性校验、隔离恢复及可选保留策略；Codex/DeepSeek Harness MCP 全局和客户权限分离且默认禁用；不改 Windows APP、不覆盖自定义 README、不修改现有客户数据。"
+  "notes": "服务端 v0.5.1：Ed25519 自更新密钥一次性自动初始化、GitHub Actions 自动签名及自检、国内镜像验签和 SSH 固定公钥安装；客户端能力查询仅返回 true 能力键、未授权能力字段省略，AI 状态不再透露服务器密钥是否配置；保持操作结果布尔语义和服务端强制鉴权；修复 MCP 子平台总开关页面回显。保持既有客户数据、README 和 Windows APP 不变。"
 }
