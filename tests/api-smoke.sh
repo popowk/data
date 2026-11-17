@@ -24,6 +24,24 @@ adminLogin=$(curl -fsS -b "$adminCookies" -c "$adminCookies" -X POST 'http://127
 TEST_RESPONSE="$adminLogin" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
 grep -q '系统更新' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=diagnostics' -o "$adminHtml"
+grep -q '复制完整报告' "$adminHtml"
+reportJson=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=diagnostic_report")
+TEST_RESPONSE="$reportJson" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); r=j.get("report",""); assert j["ok"] and "PhoneHub 故障诊断报告" in r and "MySQL 版本" in r and len(r)<8000,j'
+planCreated=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
+  --data-urlencode "username=ci_open_plan_user" --data-urlencode "opening_plan=personal" \
+  --data-urlencode "device_limit=99" --data-urlencode "mobile_limit=999" \
+  --data-urlencode "enabled=on" --data-urlencode "entitlements[]=douyin")
+TEST_RESPONSE="$planCreated" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["id"]>0 and len(j["password"])>=12,j'
+php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$s=$p->query("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.username=CHAR(99,105,95,111,112,101,110,95,112,108,97,110,95,117,115,101,114)");
+$row=$s->fetch(PDO::FETCH_ASSOC);
+if (!$row || (int)$row["device_limit"]!==1 || (int)$row["mobile_limit"]!==1 || $row["opening_plan_code"]!=="personal") exit(2);
+'
 rm -f "$adminCookies" "$adminHtml"
 BASE='http://127.0.0.1:18765/api/phonehub.php?action='
 DEVICE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
