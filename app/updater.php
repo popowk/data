@@ -7,7 +7,7 @@ const UPDATE_FILES = [
     'index.php','install.php','version.json','.htaccess',
     'app/core.php','app/accounts.php','app/updater.php','app/features.php','app/gateway.php',
     'app/releases.php','app/release_admin.php','app/ai.php','app/mobile.php',
-    'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','docs/客户端接入API-v0.5.md','docs/运维备份与升级.md','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','assets/app.css','assets/app.js'
+    'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','docs/客户端接入API-v0.5.md','docs/运维备份与升级.md','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','tools/bootstrap-self-update.php','assets/app.css','assets/app.js'
 ];
 
 /**
@@ -162,7 +162,7 @@ function update_archive(): array {
 }
 function missing_runtime_modules(): array {
     $required=['app/accounts.php','app/features.php','app/gateway.php','app/releases.php','app/release_admin.php','app/ai.php',
-        'api/phonehub.php','api/extensions.php','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php'];
+        'api/phonehub.php','api/extensions.php','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','tools/bootstrap-self-update.php'];
     return array_values(array_filter($required,static fn($name)=>!is_file(APP_ROOT.'/'.$name)));
 }
 function check_update(): array {
