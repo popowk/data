@@ -41,6 +41,21 @@ before=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$before" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] is False and "绑定" in j["error"],j'
 bound=$(api mobile_bind "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"display_name\":\"CI Android\",\"phone_model\":\"Test Galaxy\",\"phone_number\":\"+8613912345678\",\"imei\":\"490154203237518\"}")
 TEST_RESPONSE="$bound" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and j["imei_bound"],j'
+mobileRecordId=$(php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+echo $p->query("SELECT id FROM phonehub_mobile_devices WHERE phone_id=REPEAT(CHAR(98),64) LIMIT 1")->fetchColumn();
+')
+reveal=$(curl -fsS -b "$adminCookies" -c "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=device_reveal" \
+  --data-urlencode "id=$mobileRecordId" --data-urlencode "kind=imei")
+TEST_RESPONSE="$reveal" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["value"]=="490154203237518",j'
+php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+if((int)$p->query("SELECT COUNT(*) FROM phonehub_admin_audit WHERE action=\x27device_reveal_imei\x27")->fetchColumn()<1)exit(2);
+'
+
 php -r '
 require "app/core.php";require "app/devices.php";
 $cfg=require "storage/config.php";
@@ -163,12 +178,11 @@ TEST_RESPONSE="$again" python3 -c 'import os,json; j=json.loads(os.environ["TEST
 devices=$(api device_list "{\"device_id\":\"$DEVICE\"}")
 TEST_RESPONSE="$devices" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and len(j["devices"])>=1,j'
 # Blacklisting a computer ID immediately rejects existing sessions and future logins.
-php -r '
-require "app/core.php"; require "app/devices.php";
-$cfg=require "storage/config.php";
-$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
-device_insert_blacklist($p,"computer_id",str_repeat("a",64),"CI computer block",0);
-'
+blockPC=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=device_blacklist_add" \
+  --data-urlencode "kind=computer_id" --data-urlencode "identifier=$DEVICE" \
+  --data-urlencode "reason=CI computer block")
+TEST_RESPONSE="$blockPC" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
 pcBlocked=$(api session "{\"device_id\":\"$DEVICE\"}")
 TEST_RESPONSE="$pcBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error"],j'
 loginBlocked=$(curl -sS -X POST "$BASE""login" -H 'Content-Type: application/json' --data "{\"username\":\"phonehub_ci_user\",\"password\":\"test-secret-123456\",\"device_id\":\"$DEVICE\"}")
