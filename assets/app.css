@@ -107,3 +107,13 @@ input[readonly]{background:#f7f8fb;color:#9099a6}
 .device-tab{font-size:12px;padding:10px 6px}
 .device-commands{min-width:190px}
 }
+
+/* Owner-only sanitized diagnostics report */
+.diagnostic-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:18px 0 16px}
+.diagnostic-actions .muted{font-size:12px}
+.diagnostic-label{display:block;color:#415574;font-weight:700;font-size:12px;margin:12px 0 8px}
+.diagnostic-report{display:block;width:100%;max-width:100%;min-height:320px;box-sizing:border-box;border:1px solid #d9e3f1;border-radius:11px;padding:16px;background:#f7f9fd;color:#2c405f;font:12px/1.75 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow:auto;resize:vertical}
+.diagnostic-report:focus{outline:2px solid #9ebdf9;border-color:#608be4}
+#opening-plan-field select{min-height:43px}
+#opening-plan-field .footnote{display:block;margin-top:5px;line-height:1.6}
+@media(max-width:640px){.diagnostic-actions{align-items:stretch;flex-direction:column}.diagnostic-actions .btn{width:100%}.diagnostic-report{min-height:270px}}
