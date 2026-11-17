@@ -165,7 +165,11 @@ PLAN_USER_ID="$planSwitchId" php -r '
 $cfg=require "storage/config.php";$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
 $s=$p->prepare("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code,u.entitlements FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.id=?");$s->execute([(int)getenv("PLAN_USER_ID")]);$r=$s->fetch(PDO::FETCH_ASSOC);
 if(!$r || (int)$r["device_limit"]!==3 || (int)$r["mobile_limit"]!==5 || $r["opening_plan_code"]!=="standard" || json_decode($r["entitlements"],true)!==["douyin"])exit(2);
-$s=$p->prepare("SELECT COUNT(*) FROM phonehub_admin_audit WHERE action=? AND target LIKE ?");$s->execute(["account_plan_change","ci_open_plan_user personal -> standard%"]);if((int)$s->fetchColumn()<1)exit(3);
+$s=$p->prepare("SELECT COUNT(*) FROM phonehub_admin_audit WHERE action=? AND target LIKE ?");$s->execute(["account_plan_change","ci_open_plan_user personal -> standard%"]);if((int)$s->fetchColumn()<1) {
+  $rows=$p->query("SELECT action,target FROM phonehub_admin_audit ORDER BY id DESC LIMIT 8")->fetchAll(PDO::FETCH_ASSOC);
+  fwrite(STDERR,"Missing expected plan audit: ".json_encode($rows,JSON_UNESCAPED_UNICODE)."\n");
+  exit(3);
+}
 '
 # Same-plan saves allow manual quota edits, and legacy edits with the field
 # omitted must preserve the current stored plan label.
