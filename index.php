@@ -28,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             session_regenerate_id(true); $_SESSION['admin_id']=(int)$admin['id']; $_SESSION['admin_user']=$name; $_SESSION['auth_version']=(int)$admin['auth_version'];
             json_response(['ok'=>true]);
         }
-        require_admin();
+        phonehub_require_action($action);
         if ($action === 'logout') {
             $_SESSION=[]; session_regenerate_id(true);
             json_response(['ok'=>true]);
@@ -185,7 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (db_safe_in_transaction()) db()->rollBack();
         $message = $e instanceof PDOException ? '数据库操作失败，请检查是否重复或数据格式不正确' : $e->getMessage();
         error_log('PhoneHub admin: '.get_class($e));
-        json_response(['ok'=>false,'error'=>$message],400);
+        json_response(['ok'=>false,'error'=>$message],$e instanceof PhoneHubPermissionException ? 403 : 400);
     }
 }
 function db_safe_in_transaction(): bool {
@@ -207,7 +207,7 @@ $view=(string)($_GET['view'] ?? 'dashboard');
 if (in_array($view,['mobiles','sessions'],true)) {header('Location: index.php?view=devices',true,302);exit;}
 if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','diagnostics','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
 $adminRole=admin_role();
-if (in_array($view,['admins','gateway','update','diagnostics','releases','ai','cloud_features','plans','backup_keys'],true) && $adminRole!=='owner') { http_response_code(403); exit('该页面仅主管理员可以访问'); }
+if (!phonehub_role_can_view($adminRole,$view)) { http_response_code(403); exit('当前管理员无权访问此页面'); }
 $groups=in_array($view,['dashboard','accounts','groups','group_bulk'],true) ? sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll() : [];
 $accounts=[];
 $accountTotal=0;$accountPage=1;$accountPages=1;
@@ -263,16 +263,17 @@ $nav=[
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="csrf" content="<?=h(csrf())?>"><title>PhoneHub 管理控制台</title><link rel="stylesheet" href="assets/app.css?v=<?=rawurlencode(app_version())?>"></head>
 <body><div class="app"><aside class="sidebar"><div class="brand"><span class="brand-mark">P</span><div><strong>PhoneHub</strong><small>授权管理中心</small></div></div>
-<nav><?php foreach ($nav as $route=>$item): if ($adminRole!=='owner' && in_array($route,['update','diagnostics','gateway','admins','releases','ai','cloud_features','plans','backup_keys'],true)) continue; ?><a class="<?= $view===$route?'active':'' ?>" href="?view=<?=h($route)?>"><span class="nav-icon"><?=h($item[1])?></span><?=h($item[0])?></a><?php endforeach ?></nav>
-<div class="sidebar-footer"><span class="status-dot"></span> 运行中 <small>v<?=h(app_version())?></small></div></aside>
+<nav><?php foreach ($nav as $route=>$item): if (!phonehub_role_can_view($adminRole,$route)) continue; ?><a class="<?= $view===$route?'active':'' ?>" href="?view=<?=h($route)?>"><span class="nav-icon"><?=h($item[1])?></span><?=h($item[0])?></a><?php endforeach ?></nav>
+<div class="sidebar-footer"><span class="status-dot"></span> 运行中 <small><?=h(phonehub_role_label($adminRole))?> · v<?=h(app_version())?></small></div></aside>
 <div class="main"><header class="topbar"><div><span class="crumb">PhoneHub /</span> <?=h($nav[$view][0])?></div><div class="top-right"><span class="avatar"><?=h(substr((string)($_SESSION['admin_user']??'A'),0,1))?></span><?=h($_SESSION['admin_user']??'管理员')?><button class="text-button" data-action="logout">退出</button></div></header>
 <main id="content" class="content">
 <?php if ($view==='dashboard'): ?>
-<div class="page-title"><div><h1>运营概览</h1><p>客户授权与电脑会话状态一览</p></div><a class="btn primary" href="?view=accounts">+ 新增授权</a></div>
+<div class="page-title"><div><h1>运营概览</h1><p>客户授权与电脑会话状态一览</p></div><a class="btn primary" href="?view=accounts"><?=$adminRole==='viewer'?'查看客户':'+ 新增授权'?></a></div>
 <div class="stats"><div class="stat"><span>客户总数</span><strong><?=$total?></strong><small>全部授权账号</small></div><div class="stat"><span>正常授权</span><strong><?=$enabled?></strong><small>账号启用中（不含到期校验）</small></div><div class="stat"><span>电脑名额占用</span><strong><?=$devices?></strong><small>未过期的设备会话</small></div><div class="stat"><span>客户分组</span><strong><?=count($groups)?></strong><small>支持自主分组管理</small></div></div>
 <div class="card"><div class="card-head"><h2>最近客户</h2><a href="?view=accounts">查看全部</a></div><div class="table-scroll"><table><thead><tr><th>客户账号</th><th>分组</th><th>电脑名额</th><th>授权期限</th><th>状态</th></tr></thead><tbody><?php foreach (array_slice($accounts,0,8) as $a): ?><tr><td><b><?=h($a['username'])?></b></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td></tr><?php endforeach ?></tbody></table></div></div>
 <?php elseif ($view==='accounts'): ?>
-<div class="page-title"><div><h1>客户授权</h1><p>新增客户自动生成随机密码；安卓手机额度需要接管客户端接口后才能强制执行</p></div><button class="btn primary" data-action="new-account">+ 创建客户</button></div>
+<div class="page-title"><div><h1>客户授权</h1><p>新增客户自动生成随机密码；安卓手机额度需要接管客户端接口后才能强制执行</p></div><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><button class="btn primary" data-action="new-account">+ 创建客户</button><?php else: ?><span class="muted">只读查看，不允许修改授权</span><?php endif ?></div>
+<?php if(phonehub_role_can_action($adminRole,'account_save')): ?>
 <div class="card editor" id="account-editor" hidden><div class="card-head"><h2 id="editor-title">创建客户</h2><button class="text-button" data-action="close-editor">关闭</button></div>
 <form data-ajax="account_save"><input name="action" type="hidden" value="account_save"><input name="id" type="hidden" value="0">
 <div class="form-grid">
@@ -290,6 +291,7 @@ $nav=[
 <div class="field span2"><label>客户端自带 API Key</label><label class="check-row"><input type="checkbox" name="allow_client_ai_key"> 允许该客户自带 Key（还需主管理员开启全局开关）</label></div>
 <div class="field span2"><label>内部备注</label><input name="notes" maxlength="500" placeholder="可填写客户联系方式、购买产品等"></div>
 </div><div class="editor-actions"><button class="btn primary">保存授权</button></div></form></div>
+<?php endif ?>
 <div class="card">
 <form method="get" action="index.php" class="account-filter-form" aria-label="筛选客户">
 <input type="hidden" name="view" value="accounts">
@@ -319,14 +321,14 @@ $accountPageLink=static function(int $page) use($accountFilters): string {
 };
 ?>
 <div class="card"><div class="card-head"><h2>客户列表</h2><span class="count">匹配 <?=$accountTotal?> 位 · 第 <?=$accountPage?> / <?=$accountPages?> 页（每页 30 位）</span></div>
-<div class="table-scroll"><table><thead><tr><th>客户账号</th><th>开户套餐</th><th>分组</th><th>电脑名额</th><th>手机额度</th><th>授权截止（北京时间）</th><th>平台权限</th><th>状态</th><th>操作</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>客户账号</th><th>开户套餐</th><th>分组</th><th>电脑名额</th><th>手机额度</th><th>授权截止（北京时间）</th><th>平台权限</th><th>状态</th><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><th>操作</th><?php endif ?></tr></thead><tbody>
 <?php foreach($accounts as $a): $payload=['id'=>(int)$a['id'],'username'=>$a['username'],'group_id'=>(int)$a['group_id'],'device_limit'=>(int)$a['device_limit'],'mobile_limit'=>(int)$a['mobile_limit'],'license_until'=>utc_to_input($a['license_until']),'entitlements'=>json_decode((string)$a['entitlements'],true)?:[],'notes'=>$a['notes'],'enabled'=>(bool)$a['enabled'],'ai_enabled'=>(bool)$a['ai_enabled'],'allow_client_ai_key'=>(bool)$a['allow_client_ai_key'],'ai_daily_limit'=>(int)$a['ai_daily_limit']]; ?>
 <tr><td><b><?=h($a['username'])?></b></td><td><?=h(phonehub_plan_label($a['opening_plan_code']??null))?></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?= (int)$a['mobile_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><?=h(implode('、',array_map(static fn($x)=>['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP','skill'=>'Skill','mcp-codex'=>'Codex MCP','mcp-harness'=>'DeepSeek Harness MCP'][$x]??$x,json_decode((string)$a['entitlements'],true)?:[])))?></td>
-<td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td><td class="actions">
+<td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><td class="actions">
 <button class="small-link" data-edit="<?=h(json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP|JSON_HEX_TAG))?>">编辑</button>
 <button class="small-link" data-action="reset-account-password" data-id="<?=(int)$a['id']?>">重置密码</button>
-<button class="small-link" data-action="revoke-account" data-id="<?=(int)$a['id']?>">踢下线</button></td></tr><?php endforeach ?>
-<?php if (!$accounts): ?><tr><td colspan="9" class="empty-result">没有符合条件的客户，请调整筛选条件。</td></tr><?php endif ?>
+<button class="small-link" data-action="revoke-account" data-id="<?=(int)$a['id']?>">踢下线</button></td><?php endif ?></tr><?php endforeach ?>
+<?php if (!$accounts): ?><tr><td colspan="<?=phonehub_role_can_action($adminRole,'account_save')?9:8?>" class="empty-result">没有符合条件的客户，请调整筛选条件。</td></tr><?php endif ?>
 </tbody></table></div>
 <nav class="account-pagination" aria-label="客户列表分页">
 <?php if($accountPage>1): ?><a class="btn" href="<?=h($accountPageLink($accountPage-1))?>">上一页</a><?php endif ?>
@@ -334,8 +336,8 @@ $accountPageLink=static function(int $page) use($accountFilters): string {
 <?php if($accountPage<$accountPages): ?><a class="btn" href="<?=h($accountPageLink($accountPage+1))?>">下一页</a><?php endif ?>
 </nav></div>
 <?php elseif($view==='groups'): ?>
-<div class="page-title"><div><h1>客户分组</h1><p>将代理商、企业或购买渠道分组管理</p></div><a class="btn primary" href="?view=group_bulk">统一修改分组授权</a></div><div class="card"><div class="card-head"><h2>新建分组</h2></div><form class="inline-form" data-ajax="group_create"><input type="hidden" name="action" value="group_create"><input name="name" placeholder="例如：代理商A / 企业客户" maxlength="100" required><button class="btn primary">创建分组</button></form></div>
-<div class="card"><div class="card-head"><h2>已创建分组</h2></div><div class="table-scroll"><table><thead><tr><th>分组名称</th><th>客户数</th><th>操作</th></tr></thead><tbody><?php foreach($groups as $g): ?><tr><td><b><?=h($g['name'])?></b></td><td><?=(int)$g['users']?></td><td><button class="small-link" data-action="delete-group" data-id="<?=(int)$g['id']?>">删除</button></td></tr><?php endforeach ?></tbody></table></div></div>
+<div class="page-title"><div><h1>客户分组</h1><p>将代理商、企业或购买渠道分组管理</p></div><?php if(phonehub_role_can_view($adminRole,'group_bulk')): ?><a class="btn primary" href="?view=group_bulk">统一修改分组授权</a><?php endif ?></div><?php if(phonehub_role_can_action($adminRole,'group_create')): ?><div class="card"><div class="card-head"><h2>新建分组</h2></div><form class="inline-form" data-ajax="group_create"><input type="hidden" name="action" value="group_create"><input name="name" placeholder="例如：代理商A / 企业客户" maxlength="100" required><button class="btn primary">创建分组</button></form></div><?php endif ?>
+<div class="card"><div class="card-head"><h2>已创建分组</h2></div><div class="table-scroll"><table><thead><tr><th>分组名称</th><th>客户数</th><th>操作</th></tr></thead><tbody><?php foreach($groups as $g): ?><tr><td><b><?=h($g['name'])?></b></td><td><?=(int)$g['users']?></td><td><?php if(phonehub_role_can_action($adminRole,'group_delete')): ?><button class="small-link" data-action="delete-group" data-id="<?=(int)$g['id']?>">删除</button><?php else: ?>只读<?php endif ?></td></tr><?php endforeach ?></tbody></table></div></div>
 <?php elseif($view==='plans'): require_once __DIR__.'/app/features.php'; plan_admin_view(); ?>
 <?php elseif($view==='packages'): $packages=sql('SELECT package_id,MAX(version) AS version,COUNT(*) AS versions FROM phonehub_packages GROUP BY package_id ORDER BY package_id')->fetchAll(); ?>
 <div class="page-title"><div><h1>平台操作包</h1><p>兼容现有 PhoneHub 加密包协议；本版本仅展示，不处理签名私钥</p></div></div>
