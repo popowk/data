@@ -41,7 +41,7 @@ $planTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHER
 if($planTable!==1) throw new RuntimeException('plan migration table missing');
 if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==10)
     throw new RuntimeException('plan migration version incorrect');
-$openingPlans=phonehub_opening_plans();
+$openingPlans=phonehub_opening_plans(true,$pdo);
 if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
     $openingPlans['standard']['mobile_limit']!==5 || $openingPlans['team']['device_limit']!==10 ||
     phonehub_plan_label(null)!=='原有授权')
