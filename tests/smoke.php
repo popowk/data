@@ -35,7 +35,8 @@ if($aiTable!==1) throw new RuntimeException('AI schema self-repair failed');
 $aiColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_users'")->fetchAll(PDO::FETCH_COLUMN);
 foreach(['ai_enabled','allow_client_ai_key','ai_daily_limit'] as $column) if(!in_array($column,$aiColumns,true)) throw new RuntimeException('AI schema self-repair missed '.$column);
 $mobileColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_mobile_devices'")->fetchAll(PDO::FETCH_COLUMN);
-if(!in_array('imei_hash',$mobileColumns,true)) throw new RuntimeException('mobile IMEI hash column missing');
+foreach (['imei_hash','imei_encrypted','phone_number_encrypted','phone_number_hash','phone_model'] as $column)
+    if(!in_array($column,$mobileColumns,true)) throw new RuntimeException('mobile identity column missing: '.$column);
 $blacklistTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_mobile_blacklist'")->fetchColumn();
 if($blacklistTable!==1) throw new RuntimeException('mobile blacklist table missing');
 $identityMeta=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_mobile_identity_meta'")->fetchColumn();
@@ -60,6 +61,24 @@ $phoneId=str_repeat('c',64);
 $pdo->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES('imei_hash',?,?,1,0)")
     ->execute([$imeiHash,'CI blacklist test']);
 if(!mobile_blacklist_match($pdo,$phoneId,$imeiHash)) throw new RuntimeException('IMEI blacklist lookup failed');
+require dirname(__DIR__).'/app/devices.php';
+$encryptedImei=device_encrypt('490154203237518');
+$encryptedPhone=device_encrypt('+8613812345678');
+if($encryptedImei==='490154203237518' || device_decrypt($encryptedImei)!=='490154203237518')
+    throw new RuntimeException('IMEI encrypted roundtrip failed');
+if(device_decrypt($encryptedPhone)!=='+8613812345678')
+    throw new RuntimeException('phone number encrypted roundtrip failed');
+$phoneHash=device_phone_hash(device_phone_normalize('13812345678'));
+if(!is_string($phoneHash) || strlen($phoneHash)!==64 || hash_equals($phoneHash,hash('sha256','13812345678')))
+    throw new RuntimeException('phone number HMAC validation failed');
+$pdo->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES('phone_hash',?,?,1,0)")
+    ->execute([$phoneHash,'phone blacklist test']);
+if(!mobile_blacklist_match($pdo,str_repeat('b',64),null,$phoneHash))
+    throw new RuntimeException('phone number blacklist lookup failed');
+$computerId=str_repeat('d',64);
+if(device_blacklisted_computer($pdo,$computerId)) throw new RuntimeException('unknown computer incorrectly blacklisted');
+device_insert_blacklist($pdo,'computer_id',$computerId,'CI computer blacklist',0);
+if(!device_blacklisted_computer($pdo,$computerId)) throw new RuntimeException('computer blacklist lookup failed');
 if(release_platform('mcp')!=='mcp' || release_platform('skill')!=='skill' ||
    release_platform('mcp-codex')!=='mcp-codex' || release_platform('mcp-harness')!=='mcp-harness')
     throw new RuntimeException('MCP/Skill subplatform release targets unavailable');
@@ -106,8 +125,10 @@ ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false)
     throw new RuntimeException('redesigned group bulk form render failed');
 ob_start();feature_view('mobiles');$mobileHtml=ob_get_clean();
-if (strpos($mobileHtml,'设备黑名单')===false || strpos($mobileHtml,'IMEI')===false)
-    throw new RuntimeException('mobile device and blacklist page render failed');
+if (strpos($mobileHtml,'设备管理')===false || strpos($mobileHtml,'电脑设备')===false ||
+    strpos($mobileHtml,'安卓手机')===false || strpos($mobileHtml,'禁止访问')===false ||
+    strpos($mobileHtml,'IMEI')===false || strpos($mobileHtml,'手机号')===false)
+    throw new RuntimeException('unified device management page render failed');
 
 // Regression: resetting a customer password must commit the new hash, revoke sessions,
 // audit the operation, and return the one-time secret even if the later UI refresh fails.
