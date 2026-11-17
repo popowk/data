@@ -247,6 +247,10 @@ function migrate(PDO $conn): void {
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(7,UTC_TIMESTAMP())");
     }
     if ($version < 8) {
+        $hasColumn=static function(string $table,string $name) use ($conn): bool {
+            $q=$conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?");
+            $q->execute([$table,$name]);return (int)$q->fetchColumn()>0;
+        };
         // Optional fields: old HMAC-only records remain intact and show
         // 'not collected' until a client supplies original identifiers.
         if (!$hasColumn('phonehub_mobile_devices','phone_model'))
