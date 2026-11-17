@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require dirname(__DIR__).'/app/core.php';
-require dirname(__DIR__).'/app/backup_admin.php';
+require dirname(__DIR__).'/app/features.php';
 if(!extension_loaded('sodium')) throw new RuntimeException('libsodium unavailable');
 $temp=sys_get_temp_dir().'/phonehub-key-test-'.bin2hex(random_bytes(5));
 if (!mkdir($temp,0700)) throw new RuntimeException('cannot create isolated key test dir');
