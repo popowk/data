@@ -384,3 +384,35 @@ Web 服务器必须禁止 HTTP 访问 /license/storage/，否则更新私钥、�
 - `ai` 只返回有效 AI 策略、可用服务器模式与 BYOK 许可三个布尔字段；同时遵守当前用户每日额度，不返回任何上游密钥、密文、Token 或密钥是否存在的原始内容。
 - 请求体继续采用现有 64 KiB 限制，手机 8 项/包版本 16 项；这不是延长客户端离线有效期或绕过手机心跳的许可。旧客户端继续使用原调用即可；新客户端只有拿到明确的当次 `bound=true` 和 `download_allowed=true` 才能采用批量结果。
 - **安全边界：** `batch` 是当前状态快照，不能代替实际下载时再次验权。手机指纹/可选 IMEI 不是可信硬件证明；不保证客户端本机不会被逆向、Hook 或读取内存。
+
+
+### 批量心跳客户端接入、降级与验收（2026-11-18）
+
+以下规则根据客户端联调交付包 \`PhoneHub-batch-api-v0.5.9.zip\` 的接口说明与现有服务器代码交叉核对整理。ZIP 内的 \`api/phonehub.php\`、\`api/extensions.php\` 与 GitHub 当前 v0.5.10 **内容一致**，无需再次覆盖；这只证明源码相同，**不证明生产服务器已经部署、网关已接管或 Nginx 已安全配置**。
+
+**实际调用路径**
+
+- 直接联调：\`POST https://data.tmd.pet/license/api/phonehub.php?action=client_heartbeat\`，使用登录后的 \`Authorization: Bearer ...\` 和登录时相同的 \`device_id\`。
+- 兼容旧路径 \`/phonehub/api.php\`：只有确认后台网关已安全接管并转发到新接口时，才能视为同一协议。两者不要仅凭 URL 猜测。
+- \`phones\` 应来自客户端当前实际检测到的手机；本接口只验证服务器绑定资格，**不证明 USB 实时在线**。客户端必须自行进行在线检测和按手机 ID 关联结果。
+- \`package_versions\` 应填写真实已缓存包的整数版本（0 到 2147483647，最多 16 个），例如 \`{"douyin":1}\`。这里没有提供版本的包，服务端返回的 \`update_available\` 为 \`null\`；不能将 \`null\` 当成无更新。
+
+**客户端必须采用拒绝优先的状态机**
+
+1. 原有 Bearer 会话失效、账号过期或电脑受限：停止本次授权访问；不能拿本地缓存的旧 \`batch\` 替代实时鉴权。
+2. 旧服务端**完全没有**返回 \`batch\` 字段：可临时退回旧的 \`mobile_check/mobile_heartbeat\`、\`package_list/package_check\`、\`ai_status\` 分项检查，不能因此省略手机检查。
+3. 已明确返回 \`batch\`，但其数据缺失、类型错误、手机数量或手机 ID 对不上、含重复或冲突结果：**视为协议错误，不回退到放宽检查的模式**；应停止受影响的操作包和手机授权使用，并提示联系管理员。
+4. 逐个手机核对 \`phone_id\`、\`bound === true\` 且 \`status === "bound"\`；\`not_bound\`、\`blacklisted\`、\`identity_mismatch\`、\`quota_exceeded\`、\`quota_disabled\` 都必须当次拒绝，不复用其他手机的结果。
+5. 对每个包同时检查它仍在本次 \`packages\` 中、\`download_allowed === true\`，以及本地版本未过期、包内容通过原有验签和防回退校验。服务端不在 \`batch\` 返回密文或密钥；需要更新时仍使用已有 \`package\` 下载接口并再次验权。
+6. \`ai\` 中的 \`enabled\`、\`server_mode_available\`、\`client_key_allowed\` 均要求布尔值严格等于 \`true\`；服务端对实际 \`ai_chat\` 仍重新检查开关、客户额度和密钥模式。任何响应不延长离线授权期限。
+
+**已审查接口文件与校验值（仅对应当前这份 ZIP）**
+
+| 接口文件 | SHA-256 |
+|---|---|
+| \`api/phonehub.php\` | \`2f235b1cb0fd279c1f26231000b00f0c4296949ca3e44de92a86ba75c7e5c191\` |
+| \`api/extensions.php\` | \`1de8af6f6d07826ad1b2e47602c9e13880fbafd7f2c4dc7bcfcb8f68e50566fc\` |
+
+这组哈希用于识别已审查的文件，**不代表对未来版本固定哈希**。客户端交付包自述单次手动检查约 2.120 秒、其中一次心跳约 1.972 秒，并自述客户端测试通过；这些是**交付方的报告值，尚未由服务端实测独立复核**。若要确认 2 秒耗时来源，应启用可选 PHP 分段采样并结合 Nginx 请求耗时和客户端 DNS/TCP/TLS/TFFB 数据，不应凭这一次读数认定数据库慢。
+
+**资源保密边界：** 原 \`package\` 返回的加密 \`envelope\` 与 \`content_key\` 可被合法客户端同时获取，因此有效客户端仍可能提取解密后的操作包；已签名 ZIP 验证的是完整性和发布者身份，**不是 ZIP 内容加密**。批量心跳不会改变这个事实。请先按照 [运维备份与升级](运维备份与升级.md) 的 Nginx 防护要求阻止对 \`/license/storage/\` 的匿名直接访问，并验证所有 CDN/源站入口。
