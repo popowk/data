@@ -207,7 +207,7 @@ if (!array_filter($diagnostics['checks'],static fn($check)=>($check['name']??'')
 
 ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false ||
-    strpos($bulkHtml,'完成服务端预览')===false)
+    strpos($bulkHtml,'先由服务器预检')===false)
     throw new RuntimeException('redesigned group bulk form render failed');
 ob_start();feature_view('mobiles');$mobileHtml=ob_get_clean();
 if (strpos($mobileHtml,'设备管理')===false || strpos($mobileHtml,'电脑设备')===false ||

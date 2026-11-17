@@ -93,7 +93,7 @@
           throw new Error('服务器未返回有效的批量操作预览');
         const message='服务器预检：将修改 '+preview.members+' 位客户的【'+preview.fields.join('、')+
           '】。'+(preview.revoke_sessions?'相关电脑会话会被撤销。':'本次不会主动撤销电脑会话。')+
-          '\\n确认提交此批量修改？';
+          '\n确认提交此批量修改？';
         if(!confirm(message))return;
         fields.set('preview_snapshot',preview.snapshot);
       }
