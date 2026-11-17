@@ -96,6 +96,30 @@
     } catch(err){toast(err.message,true);}
     finally {if(submit)submit.disabled=false;}
   });
+  function openPlanEditor(data) {
+    const panel=$('#plan-editor');
+    if(!panel) return;
+    const form=$('form',panel);
+    form.reset();
+    form.elements.id.value=data?.id||0;
+    form.elements.name.value=data?.name||'';
+    form.elements.device_limit.value=data?.device_limit??3;
+    form.elements.mobile_limit.value=data?.mobile_limit??5;
+    form.elements.sort_order.value=data?.sort_order??100;
+    $('#plan-editor-title').textContent=data?'编辑套餐':'新增套餐';
+    panel.hidden=false;
+    panel.scrollIntoView({behavior:'smooth',block:'start'});
+    form.elements.name.focus({preventScroll:true});
+  }
+  document.addEventListener('submit',event=>{
+    const form=event.target.closest('form[data-backup-key-download]');
+    if(!form)return;
+    if(!confirm('即将生成备份密钥：私钥只会下载这一次，无法从服务器再次取回。请确认能保存到安全离线位置。')) {
+      event.preventDefault();return;
+    }
+    const submit=$('button[type="submit"]',form);
+    if(submit)submit.disabled=true;
+  },true);
   function applyOpeningPlan(form) {
     const picker=form.elements.opening_plan;
     if(!picker) return;
@@ -158,9 +182,17 @@
   document.addEventListener('click',async event=>{
     const edit=event.target.closest('[data-edit]');
     if (edit) {try{openEditor(JSON.parse(edit.dataset.edit));}catch(e){toast('客户数据无法读取',true);}return;}
+    const editPlan=event.target.closest('[data-plan-edit]');
+    if(editPlan) {
+      try {openPlanEditor(JSON.parse(editPlan.dataset.planEdit));}
+      catch(e){toast('套餐数据读取失败',true);}
+      return;
+    }
     const trigger=event.target.closest('[data-action]');if(!trigger)return;
     const action=trigger.dataset.action, id=trigger.dataset.id;
     if (action==='new-account'){openEditor(null);return;}
+    if (action==='new-plan'){openPlanEditor(null);return;}
+    if (action==='close-plan-editor'){const panel=$('#plan-editor');if(panel)panel.hidden=true;return;}
     if (action==='close-editor'){$('#account-editor').hidden=true;return;}
     if (action==='check-update'){await checkUpdate();return;}
     if (action==='generate-diagnostic') {
@@ -272,6 +304,7 @@
       'admin-reset':['admin_reset',{id},true],
       'admin-toggle':['admin_toggle',{id},true],
       'admin-delete':['admin_delete',{id},true],
+      'plan-toggle':['plan_toggle',{id},true],
       'mobile-revoke':['mobile_revoke',{id},true],
       'mobile-blacklist':['mobile_blacklist',{id,reason:'管理员手动拉黑'},true],
       'mobile-unblacklist':['mobile_unblacklist',{id},true],
