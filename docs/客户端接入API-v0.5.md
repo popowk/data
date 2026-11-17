@@ -127,18 +127,29 @@ package 返回结构仍为：
 
 所有新全局开关默认 \`0\`。已存在的 \`mcp\` 客户权限**不会自动获得** Codex/Harness 权限。只有主管理员能够新授予这些子平台，普通管理员不能绕过。
 
-对于 \`license_status\`、\`capabilities\`、\`client_config\`、\`client_heartbeat\`，\`features\` 中返回：
+对于 \`license_status\`、\`capabilities\`、\`client_config\`、\`client_heartbeat\`，\`features\` 采取 **true-only 正向能力披露**：只返回服务器实际开放且该客户已获授权的功能，未开放项整个字段省略，不返回 \`false\`。例如客户仅开放原有 MCP：
 
 ~~~json
 {
-  "mcp_available": false,
-  "mcp_codex_available": false,
-  "mcp_harness_available": false,
-  "skill_available": false
+  "features": {
+    "mobile_bind": true,
+    "mobile_unbind": true,
+    "package_requires_mobile_binding": true,
+    "update_check": true,
+    "update_download": true,
+    "log_batch": true,
+    "device_list": true,
+    "device_revoke": true,
+    "mcp_available": true
+  }
 }
 ~~~
 
-此处显示的是功能字段示例，不代表所有响应只包含这四个字段。客户端使用 \`update_list\`、\`update_check\`、\`update_manifest\` 或 \`update_download\` 时，服务端根据平台 ID、全局开关与客户授权执行校验；未开放时返回 \`FEATURE_DISABLED\`，客户未授权时返回 \`NOT_ENTITLED\`。
+若 Codex MCP、DeepSeek Harness MCP、Skill 未被授权，\`mcp_codex_available\`、\`mcp_harness_available\` 和 \`skill_available\` **不出现**。客户端以 \`features?.mcp_codex_available === true\` 作为允许条件，不能把字段缺失当成允许。这个规则只用于**能力披露**，不改变操作结果中的 \`ok\`、\`available\`、\`bound\` 等协议布尔值，因为客户端需要区分失败、未绑定、没有更新等正常状态。
+
+这只减少对客户端的未授权能力提示，并非权限安全边界。已知端点仍可能被直接请求，服务端每次调用和下载都会重新验证登录状态、客户授权、全局开关和设备限制，不能只依赖客户端是否看到某个字段。
+
+客户端使用 \`update_list\`、\`update_check\`、\`update_manifest\` 或 \`update_download\` 时，服务端根据平台 ID、全局开关与客户授权执行校验；未开放时返回 \`FEATURE_DISABLED\`，客户未授权时返回 \`NOT_ENTITLED\`。
 
 独立发布 ZIP 仍需要主管理员操作，签名清单及 ZIP SHA-256 校验沿用现有客户端更新机制。对于旧版 \`mcp\`，旧权限和发布行为保持兼容。已下载安装到客户电脑的本地文件不会因云端停用而被远程删除，软件客户端必须自行执行重新联网后的撤销策略。
 
@@ -234,8 +245,6 @@ AI 默认由服务器中转，APP 不需要也不应该拿到服务器 DeepSeek 
   "provider": "deepseek",
   "default_model": "deepseek-flash",
   "server_mode_available": true,
-  "server_key_configured": true,
-  "client_key_allowed": false,
   "allowed_models": ["deepseek-flash", "deepseek-v4-pro"],
   "max_tokens": 4096,
   "requests_per_minute": 10,
@@ -244,6 +253,8 @@ AI 默认由服务器中转，APP 不需要也不应该拿到服务器 DeepSeek 
   "daily_remaining": 98
 }
 ~~~
+
+当 AI 已开放时，只返回值为 \`true\` 的权限布尔项：例如服务器模式不可用则省略 \`server_mode_available\`，客户端自带 Key 未开放则省略 \`client_key_allowed\`；不再向客户端透露服务器是否存有 API Key（移除 \`server_key_configured\`）。当 AI 全部关闭时只返回 \`{"ok":true}\`，不会输出模型列表或隐藏的可用功能。客户端应按字段存在且严格等于 \`true\` 判断能力。AI 请求仍由服务器逐次检查权限。
 
 ### 7.2 默认服务器中转
 
