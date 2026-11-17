@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.5.9",
+  "version": "0.5.10",
   "channel": "stable",
   "released_at": "2026-11-17",
-  "notes": "client_heartbeat 新增可选 batch 批量查询：最多8台手机独立核验身份/黑名单/额度并刷新有效绑定last_seen，授权包版本/下载资格和AI可用策略一起返回；不传batch时旧API完全兼容。未修改资源加密分发格式、固定公钥或现有客户授权。"
+  "notes": "在 v0.5.9 可选批量 client_heartbeat 与脱敏耗时采样基础上，增加 Apache storage 路径及密钥/ZIP 文件访问防护；明确宝塔 Nginx 仍需单独配置 location 403，生产未验证不宣称已保护。保持 API 兼容、旧授权与签名信任链。"
 }

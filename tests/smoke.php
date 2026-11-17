@@ -75,6 +75,11 @@ if (!phonehub_role_can_action('viewer','logout') ||
     !phonehub_role_can_action('owner','backup_key_generate') ||
     phonehub_role_label('viewer')!=='只读管理员')
     throw new RuntimeException('role action policy mismatch');
+// Apache-only fallback: updating this file does not configure Nginx.
+$apacheRules=(string)file_get_contents(dirname(__DIR__).'/.htaccess');
+if (!str_contains($apacheRules,'RewriteRule ^storage(/|$) - [F,L]') ||
+    !str_contains($apacheRules,'Require all denied'))
+    throw new RuntimeException('Apache storage route protection missing');
 // Parameterized filters: input cannot turn into SQL clauses or LIKE wildcards.
 $filter=phonehub_account_filters([
   'q'=>'ci_test_01','group'=>'none','status'=>'enabled',

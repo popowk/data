@@ -1,4 +1,13 @@
 Options -Indexes
+# Defense in depth for Apache. BaoTa Nginx must have its own location rule.
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule ^storage(/|$) - [F,L]
+</IfModule>
+# Block directly served secret/key/archive extensions where Apache applies.
+<FilesMatch "\.(key|pub|pem|sql|sqlite|db|bak|zip)$">
+Require all denied
+</FilesMatch>
 <FilesMatch "^(README\.md|version\.json)$">
 Require all denied
 </FilesMatch>
