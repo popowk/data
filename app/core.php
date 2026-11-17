@@ -346,10 +346,11 @@ function require_owner(): void {
     require_admin();
     if (admin_role()!=='owner') throw new RuntimeException('仅主管理员可以执行此操作');
 }
-function phonehub_opening_plans(bool $activeOnly=true): array {
-    // Opening quota templates are managed by the primary administrator.
-    // Never derive AI/MCP access or billing permissions from a template.
-    $rows=sql('SELECT plan_code,name,device_limit,mobile_limit,enabled
+function phonehub_opening_plans(bool $activeOnly=true,?PDO $connection=null): array {
+    // A supplied connection supports pre-install migration tests without
+    // requiring storage/config.php or modifying production configuration.
+    $pdo=$connection??db();
+    $rows=$pdo->query('SELECT plan_code,name,device_limit,mobile_limit,enabled
         FROM phonehub_plan_templates '.($activeOnly?'WHERE enabled=1 ':'').'ORDER BY sort_order,id')->fetchAll(PDO::FETCH_ASSOC);
     $out=[];
     foreach ($rows as $row) {
