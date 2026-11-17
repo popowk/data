@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=7) return;
+        if ($ready>=8) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -245,6 +245,27 @@ function migrate(PDO $conn): void {
         $conn->exec("INSERT IGNORE INTO phonehub_feature_settings(setting_key,setting_value) VALUES
           ('mcp_codex_enabled','0'),('mcp_harness_enabled','0')");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(7,UTC_TIMESTAMP())");
+    }
+    if ($version < 8) {
+        // Optional fields: old HMAC-only records remain intact and show
+        // 'not collected' until a client supplies original identifiers.
+        if (!$hasColumn('phonehub_mobile_devices','phone_model'))
+            $conn->exec("ALTER TABLE phonehub_mobile_devices ADD COLUMN phone_model VARCHAR(120) NULL DEFAULT NULL");
+        if (!$hasColumn('phonehub_mobile_devices','imei_encrypted'))
+            $conn->exec("ALTER TABLE phonehub_mobile_devices ADD COLUMN imei_encrypted TEXT NULL");
+        if (!$hasColumn('phonehub_mobile_devices','phone_number_encrypted'))
+            $conn->exec("ALTER TABLE phonehub_mobile_devices ADD COLUMN phone_number_encrypted TEXT NULL");
+        if (!$hasColumn('phonehub_mobile_devices','phone_number_hash'))
+            $conn->exec("ALTER TABLE phonehub_mobile_devices ADD COLUMN phone_number_hash CHAR(64) NULL DEFAULT NULL");
+        $hasIndex=static function(string $table,string $name) use ($conn): bool {
+            $q=$conn->prepare("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?");
+            $q->execute([$table,$name]);return (int)$q->fetchColumn()>0;
+        };
+        if (!$hasIndex('phonehub_mobile_devices','idx_phone_number_hash'))
+            $conn->exec("ALTER TABLE phonehub_mobile_devices ADD INDEX idx_phone_number_hash(phone_number_hash)");
+        // Reuse existing blacklist table (type VARCHAR(16)) for computer ID
+        // and phone-number HMAC; no destructive migration of old entries.
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(8,UTC_TIMESTAMP())");
     }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
