@@ -144,6 +144,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 json_response(['ok'=>true]+signing_generate_and_publish(trim((string)($_POST['github_token']??''))));
             json_response(['ok'=>true]+signing_activate_trust());
         }
+        if (in_array($action,['plan_save','plan_toggle'],true)) {
+            require_owner();
+            if (!is_file(__DIR__.'/app/plan_admin.php'))
+                throw new RuntimeException('套餐管理模块尚未安装，请先在系统更新中补齐');
+            require_once __DIR__.'/app/plan_admin.php';
+            plan_admin_action($action);
+        }
+        if ($action==='backup_key_generate') {
+            require_owner();
+            if (!is_file(__DIR__.'/app/backup_admin.php'))
+                throw new RuntimeException('备份密钥模块尚未安装，请先在系统更新中补齐');
+            require_once __DIR__.'/app/backup_admin.php';
+            backup_admin_download_once();
+        }
         if ($action==='diagnostic_report') {
             require_owner();
             if (!is_file(__DIR__.'/app/updater.php'))
@@ -195,9 +209,9 @@ if (!admin_id()) {
 <?php exit; }
 $view=(string)($_GET['view'] ?? 'dashboard');
 if (in_array($view,['mobiles','sessions'],true)) {header('Location: index.php?view=devices',true,302);exit;}
-if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','client_logs','releases','ai','update','diagnostics','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
+if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','diagnostics','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
 $adminRole=admin_role();
-if (in_array($view,['admins','gateway','update','diagnostics','releases','ai','cloud_features'],true) && $adminRole!=='owner') { http_response_code(403); exit('该页面仅主管理员可以访问'); }
+if (in_array($view,['admins','gateway','update','diagnostics','releases','ai','cloud_features','plans','backup_keys'],true) && $adminRole!=='owner') { http_response_code(403); exit('该页面仅主管理员可以访问'); }
 $groups=in_array($view,['dashboard','accounts','groups','group_bulk'],true) ? sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll() : [];
 $accounts=($view==='accounts'||$view==='dashboard') ? sql("SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,u.created_at,u.ai_enabled,u.allow_client_ai_key,u.ai_daily_limit,m.group_id,COALESCE(m.mobile_limit,0) AS mobile_limit,m.opening_plan_code,COALESCE(m.notes,'') AS notes,g.name AS group_name,(SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id LEFT JOIN phonehub_groups g ON g.id=m.group_id ORDER BY u.id DESC")->fetchAll() : [];
 $nav=[
@@ -207,12 +221,14 @@ $nav=[
 'group_bulk'=>['分组批量配置','≡'],
 'devices'=>['设备管理','▣'],
 'packages'=>['操作包','⬡'],
+'plans'=>['套餐管理','▤'],
 'client_logs'=>['客户端日志','☷'],
 'releases'=>['核心更新发布','⇧'],
 'ai'=>['AI 接口管理','✧'],
 'cloud_features'=>['客户端能力控制','⚙'],
 'update'=>['系统更新','⟳'],
 'diagnostics'=>['故障诊断','⌕'],
+'backup_keys'=>['备份密钥','◈'],
 'gateway'=>['客户端接口接管','↪'],
 'admins'=>['管理员管理','♧'],
 'audit'=>['操作记录','☷']
@@ -221,7 +237,7 @@ $nav=[
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="csrf" content="<?=h(csrf())?>"><title>PhoneHub 管理控制台</title><link rel="stylesheet" href="assets/app.css?v=<?=rawurlencode(app_version())?>"></head>
 <body><div class="app"><aside class="sidebar"><div class="brand"><span class="brand-mark">P</span><div><strong>PhoneHub</strong><small>授权管理中心</small></div></div>
-<nav><?php foreach ($nav as $route=>$item): if ($adminRole!=='owner' && in_array($route,['update','diagnostics','gateway','admins','releases','ai','cloud_features'],true)) continue; ?><a class="<?= $view===$route?'active':'' ?>" href="?view=<?=h($route)?>"><span class="nav-icon"><?=h($item[1])?></span><?=h($item[0])?></a><?php endforeach ?></nav>
+<nav><?php foreach ($nav as $route=>$item): if ($adminRole!=='owner' && in_array($route,['update','diagnostics','gateway','admins','releases','ai','cloud_features','plans','backup_keys'],true)) continue; ?><a class="<?= $view===$route?'active':'' ?>" href="?view=<?=h($route)?>"><span class="nav-icon"><?=h($item[1])?></span><?=h($item[0])?></a><?php endforeach ?></nav>
 <div class="sidebar-footer"><span class="status-dot"></span> 运行中 <small>v<?=h(app_version())?></small></div></aside>
 <div class="main"><header class="topbar"><div><span class="crumb">PhoneHub /</span> <?=h($nav[$view][0])?></div><div class="top-right"><span class="avatar"><?=h(substr((string)($_SESSION['admin_user']??'A'),0,1))?></span><?=h($_SESSION['admin_user']??'管理员')?><button class="text-button" data-action="logout">退出</button></div></header>
 <main id="content" class="content">
@@ -261,9 +277,15 @@ $nav=[
 <?php elseif($view==='groups'): ?>
 <div class="page-title"><div><h1>客户分组</h1><p>将代理商、企业或购买渠道分组管理</p></div><a class="btn primary" href="?view=group_bulk">统一修改分组授权</a></div><div class="card"><div class="card-head"><h2>新建分组</h2></div><form class="inline-form" data-ajax="group_create"><input type="hidden" name="action" value="group_create"><input name="name" placeholder="例如：代理商A / 企业客户" maxlength="100" required><button class="btn primary">创建分组</button></form></div>
 <div class="card"><div class="card-head"><h2>已创建分组</h2></div><div class="table-scroll"><table><thead><tr><th>分组名称</th><th>客户数</th><th>操作</th></tr></thead><tbody><?php foreach($groups as $g): ?><tr><td><b><?=h($g['name'])?></b></td><td><?=(int)$g['users']?></td><td><button class="small-link" data-action="delete-group" data-id="<?=(int)$g['id']?>">删除</button></td></tr><?php endforeach ?></tbody></table></div></div>
+<?php elseif($view==='plans'): ?>
+<?php if(is_file(__DIR__.'/app/plan_admin.php')) { require_once __DIR__.'/app/plan_admin.php'; plan_admin_view(); }
+else { ?><div class="card"><h2>套餐管理模块尚未补齐</h2><p class="muted">缺少 app/plan_admin.php。请进入系统更新补齐文件。</p><a class="btn" href="?view=update">前往系统更新</a></div><?php } ?>
 <?php elseif($view==='packages'): $packages=sql('SELECT package_id,MAX(version) AS version,COUNT(*) AS versions FROM phonehub_packages GROUP BY package_id ORDER BY package_id')->fetchAll(); ?>
 <div class="page-title"><div><h1>平台操作包</h1><p>兼容现有 PhoneHub 加密包协议；本版本仅展示，不处理签名私钥</p></div></div>
 <div class="card"><div class="table-scroll"><table><thead><tr><th>平台包</th><th>最高版本</th><th>历史版本数量</th></tr></thead><tbody><?php foreach($packages as $p): ?><tr><td><?=h($p['package_id'])?></td><td><?=h($p['version'])?></td><td><?=h($p['versions'])?></td></tr><?php endforeach ?></tbody></table></div></div>
+<?php elseif($view==='backup_keys'): ?>
+<?php if(is_file(__DIR__.'/app/backup_admin.php')) {require_once __DIR__.'/app/backup_admin.php';backup_admin_view();}
+else { ?><div class="card"><h2>备份密钥模块尚未补齐</h2><p class="muted">缺少 app/backup_admin.php。请从系统更新补齐模块。</p><a class="btn" href="?view=update">前往系统更新</a></div><?php } ?>
 <?php elseif($view==='diagnostics'): ?>
 <div class="page-title"><div><h1>故障诊断</h1><p>一键生成可直接复制给技术支持的脱敏报告，不包含客户信息或敏感密钥</p></div><a class="btn" href="?view=update">返回系统更新</a></div>
 <div class="card">
@@ -281,7 +303,7 @@ $nav=[
 <?php elseif($view==='update'): ?>
 <div class="page-title"><div><h1>系统更新</h1><p>从国内镜像获取 GitHub 仓库最新代码，完成备份后在线安装</p></div></div>
 <div class="card update-card"><div class="update-icon">⟳</div><h2>当前版本 v<?=h(app_version())?></h2><p class="muted">更新源：<code>https://git.wksite.cn/popowk/data</code></p><p class="muted">仅更新管理程序文件，自动跳过 storage 内的数据库配置和运行数据。</p>
-<div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><a class="btn" href="?view=diagnostics">复制故障报告</a><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
+<div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><a class="btn" href="?view=diagnostics">复制故障报告</a><a class="btn" href="?view=backup_keys">备份密钥</a><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
 <?php
 $signingModuleReady=is_file(__DIR__.'/app/signing_admin.php');
 if ($signingModuleReady) {
