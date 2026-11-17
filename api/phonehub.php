@@ -129,6 +129,9 @@ try {
         if (mobile_blacklist_match($pdo,$phone,$knownImeiHash,$phoneHash??($existing['phone_number_hash']??null))) {
             $pdo->rollBack();api_problem('DEVICE_BLACKLISTED','该手机指纹或 IMEI 已被管理员拉黑',403);
         }
+        if ($existing && $phoneHash!==null && !empty($existing['phone_number_hash']) && !hash_equals((string)$existing['phone_number_hash'],$phoneHash)) {
+            $pdo->rollBack();api_problem('PHONE_IDENTITY_MISMATCH','该手机指纹已登记不同手机号，请联系管理员核验',403);
+        }
         if ($existing && $imeiHash!==null && !empty($existing['imei_hash']) && !hash_equals((string)$existing['imei_hash'],$imeiHash)) {
             $pdo->rollBack();api_problem('DEVICE_IDENTITY_MISMATCH','该手机指纹已绑定不同 IMEI，请联系管理员核验',403);
         }
@@ -150,7 +153,8 @@ try {
             FROM phonehub_mobile_devices d WHERE d.user_id=? AND d.enabled=1
             AND NOT EXISTS (SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND
               ((b.identifier_type='phone_id' AND b.identifier_hash=d.phone_id) OR
-               (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash)))
+               (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash) OR
+               (b.identifier_type='phone_hash' AND d.phone_number_hash IS NOT NULL AND b.identifier_hash=d.phone_number_hash)))
             ORDER BY d.id",[$userId])->fetchAll();
         $limit=(int)client_sql('SELECT COALESCE(m.mobile_limit,0) FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetchColumn();
         api_out(['ok'=>true,'mobile_limit'=>$limit,'active_count'=>count($devices),'devices'=>$devices]);
