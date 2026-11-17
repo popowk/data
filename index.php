@@ -168,7 +168,8 @@ if (!admin_id()) {
 <button class="btn primary full">登录</button></form><p id="message" class="footnote"></p></main><script src="assets/app.js?v=<?=rawurlencode(app_version())?>" defer></script></body></html>
 <?php exit; }
 $view=(string)($_GET['view'] ?? 'dashboard');
-if (!in_array($view,['dashboard','accounts','groups','group_bulk','mobiles','sessions','packages','client_logs','releases','ai','update','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
+if (in_array($view,['mobiles','sessions'],true)) {header('Location: index.php?view=devices',true,302);exit;}
+if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','client_logs','releases','ai','update','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
 $adminRole=admin_role();
 if (in_array($view,['admins','gateway','update','releases','ai','cloud_features'],true) && $adminRole!=='owner') { http_response_code(403); exit('该页面仅主管理员可以访问'); }
 $groups=in_array($view,['dashboard','accounts','groups','group_bulk'],true) ? sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll() : [];
@@ -178,8 +179,7 @@ $nav=[
 'accounts'=>['客户授权','♙'],
 'groups'=>['客户分组','◫'],
 'group_bulk'=>['分组批量配置','≡'],
-'mobiles'=>['安卓手机','▤'],
-'sessions'=>['电脑会话','▣'],
+'devices'=>['设备管理','▣'],
 'packages'=>['操作包','⬡'],
 'client_logs'=>['客户端日志','☷'],
 'releases'=>['核心更新发布','⇧'],
@@ -232,8 +232,6 @@ $nav=[
 <?php elseif($view==='groups'): ?>
 <div class="page-title"><div><h1>客户分组</h1><p>将代理商、企业或购买渠道分组管理</p></div><a class="btn primary" href="?view=group_bulk">统一修改分组授权</a></div><div class="card"><div class="card-head"><h2>新建分组</h2></div><form class="inline-form" data-ajax="group_create"><input type="hidden" name="action" value="group_create"><input name="name" placeholder="例如：代理商A / 企业客户" maxlength="100" required><button class="btn primary">创建分组</button></form></div>
 <div class="card"><div class="card-head"><h2>已创建分组</h2></div><div class="table-scroll"><table><thead><tr><th>分组名称</th><th>客户数</th><th>操作</th></tr></thead><tbody><?php foreach($groups as $g): ?><tr><td><b><?=h($g['name'])?></b></td><td><?=(int)$g['users']?></td><td><button class="small-link" data-action="delete-group" data-id="<?=(int)$g['id']?>">删除</button></td></tr><?php endforeach ?></tbody></table></div></div>
-<?php elseif($view==='sessions'): $sessions=sql("SELECT s.id,u.username,s.device_id,s.expires_at FROM phonehub_sessions s JOIN phonehub_users u ON u.id=s.user_id WHERE s.expires_at>UTC_TIMESTAMP() ORDER BY s.expires_at DESC LIMIT 500")->fetchAll(); ?>
-<div class="page-title"><div><h1>电脑会话</h1><p>当前列出未过期的登录会话；这不代表实时在线</p></div></div><div class="card"><div class="table-scroll"><table><thead><tr><th>客户账号</th><th>设备安装标识</th><th>会话截止（北京时间）</th><th>操作</th></tr></thead><tbody><?php foreach($sessions as $s): ?><tr><td><?=h($s['username'])?></td><td><code title="<?=h($s['device_id'])?>"><?=h(substr($s['device_id'],0,16))?>…</code></td><td><?=h(utc_to_cn($s['expires_at']))?></td><td><button class="small-link" data-action="revoke-session" data-id="<?=(int)$s['id']?>">强制下线</button></td></tr><?php endforeach ?></tbody></table></div></div>
 <?php elseif($view==='packages'): $packages=sql('SELECT package_id,MAX(version) AS version,COUNT(*) AS versions FROM phonehub_packages GROUP BY package_id ORDER BY package_id')->fetchAll(); ?>
 <div class="page-title"><div><h1>平台操作包</h1><p>兼容现有 PhoneHub 加密包协议；本版本仅展示，不处理签名私钥</p></div></div>
 <div class="card"><div class="table-scroll"><table><thead><tr><th>平台包</th><th>最高版本</th><th>历史版本数量</th></tr></thead><tbody><?php foreach($packages as $p): ?><tr><td><?=h($p['package_id'])?></td><td><?=h($p['version'])?></td><td><?=h($p['versions'])?></td></tr><?php endforeach ?></tbody></table></div></div>
@@ -269,6 +267,6 @@ $nav=[
     http_response_code(500);
     ?><div class="card"><h2>AI 管理页面暂时无法加载</h2><p class="muted">服务器已记录错误，请检查 PHP 错误日志。错误编号：<code><?=h($errorRef)?></code></p><a class="btn" href="?view=ai">重新加载</a></div><?php
 } ?>
-<?php elseif (in_array($view,['admins','group_bulk','mobiles','gateway','client_logs','cloud_features'],true)): require __DIR__.'/app/features.php'; feature_view($view); ?>
+<?php elseif (in_array($view,['admins','group_bulk','devices','gateway','client_logs','cloud_features'],true)): require __DIR__.'/app/features.php'; feature_view($view); ?>
 <?php endif ?>
 </main></div></div><div class="toast" id="toast" role="status" aria-live="polite"></div><script src="assets/app.js?v=<?=rawurlencode(app_version())?>" defer></script></body></html>
