@@ -82,6 +82,29 @@ disabledPlanAttempt=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:187
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
   --data-urlencode "username=ci_disabled_plan_user" --data-urlencode "opening_plan=$planCode")
 TEST_RESPONSE="$disabledPlanAttempt" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and "套餐" in j["error"],j'
+# A backup decryption key can be downloaded only once by the owner.
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=backup_keys' -o "$adminHtml"
+grep -q 'Curve25519' "$adminHtml"
+downloadedKey=$(mktemp)
+downloadHeaders=$(mktemp)
+curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=backup_key_generate" \
+  -D "$downloadHeaders" -o "$downloadedKey"
+test "$(wc -c < "$downloadedKey")" -eq 32
+test "$(wc -c < storage/backup-recipient.pub)" -eq 32
+grep -qi 'application/octet-stream' "$downloadHeaders"
+BACKUP_KEY_FILE="$downloadedKey" php -r '
+$public=file_get_contents("storage/backup-recipient.pub");
+$secret=file_get_contents(getenv("BACKUP_KEY_FILE"));
+$sample="ci-backup-roundtrip";
+$sealed=sodium_crypto_box_seal($sample,$public);
+$pair=sodium_crypto_box_keypair_from_secretkey_and_publickey($secret,$public);
+if(sodium_crypto_box_seal_open($sealed,$pair)!==$sample)exit(3);
+'
+secondAttempt=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=backup_key_generate")
+TEST_RESPONSE="$secondAttempt" python3 -c 'import json,os; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"],j'
+rm -f "$downloadedKey" "$downloadHeaders" storage/backup-recipient.pub
 rm -f "$adminCookies" "$adminHtml"
 BASE='http://127.0.0.1:18765/api/phonehub.php?action='
 DEVICE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
