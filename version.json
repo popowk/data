@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "channel": "stable",
   "released_at": "2026-11-17",
-  "notes": "服务端 v0.5.2：主管理后台直接生成 Ed25519 自更新签名密钥并安全配置 GitHub Actions，在镜像签名验证成功后启用固定公钥；电脑会话与安卓手机统一为设备管理，支持独立拉黑电脑 ID、手机指纹、IMEI 和手机号；IMEI 原文与手机号经用途隔离密钥加密保存、主管理员按需查看并审计，旧 IMEI HMAC 和客户数据保持兼容；新增可选手机型号和手机号字段。README 和 Windows APP 均未修改。"
+  "notes": "修复从旧版升级器升级时漏传新增模块导致后台 HTTP 500：系统更新、设备管理、登录和相关管理动作改为缺失模块提示并保留修复入口；客户端 API 在缺失设备安全模块时明确返回 503 且拒绝绕过黑名单。升级清单包含 app/devices.php、app/device_admin.php、app/signing_admin.php。仍须在服务器补齐缺失文件；不修改客户数据或 README.md。"
 }
