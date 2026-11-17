@@ -2,6 +2,33 @@
   const $ = (selector, root=document) => root.querySelector(selector);
   const token = () => $('meta[name="csrf"]')?.content || '';
   let updateAvailable = false;
+  let activeDeviceTab = 'computers';
+  function setDeviceTab(tab) {
+    activeDeviceTab=tab;
+    document.querySelectorAll('[data-device-tab]').forEach(b=>{
+      const chosen=b.dataset.deviceTab===tab;
+      b.classList.toggle('active',chosen);
+      b.setAttribute('aria-selected',String(chosen));
+    });
+    document.querySelectorAll('[data-device-panel]').forEach(p=>{
+      p.hidden=p.dataset.devicePanel!==tab;
+    });
+  }
+  function showSensitive(label,value) {
+    const overlay=document.createElement('div');overlay.className='secret-overlay';
+    const dialog=document.createElement('section');dialog.className='secret-dialog';
+    dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
+    const title=document.createElement('h2');title.textContent=label;
+    const note=document.createElement('p');note.textContent='此数据为敏感设备信息，本次查看已经记录在管理员操作日志中。';
+    const code=document.createElement('code');code.className='secret-value';code.textContent=value;
+    const close=document.createElement('button');close.type='button';close.className='btn';close.textContent='关闭';
+    const copy=document.createElement('button');copy.type='button';copy.className='btn primary';copy.textContent='复制';
+    close.addEventListener('click',()=>overlay.remove());
+    copy.addEventListener('click',()=>navigator.clipboard.writeText(value).then(()=>toast('已复制')).catch(()=>toast('复制失败',true)));
+    const buttons=document.createElement('div');buttons.className='secret-buttons';buttons.append(copy,close);
+    dialog.append(title,note,code,buttons);overlay.append(dialog);document.body.append(overlay);
+    close.focus();
+  }
   function showPassword(username, password) {
     const overlay=document.createElement('div');overlay.className='secret-overlay';
     const dialog=document.createElement('section');dialog.className='secret-dialog';
@@ -41,7 +68,10 @@
     if (!response.ok) throw new Error('页面数据获取失败');
     const doc = new DOMParser().parseFromString(await response.text(),'text/html');
     const updated = $('#content',doc);
-    if (updated) root.replaceWith(updated);
+    if (updated) {
+      root.replaceWith(updated);
+      if (document.querySelector('[data-device-tab]')) setDeviceTab(activeDeviceTab);
+    }
   }
   async function refreshAfterSuccess() {
     try { await refreshContent(); }
@@ -147,8 +177,33 @@
       finally{trigger.disabled=false;}
       return;
     }
+    if (action==='device-reveal') {
+      if (!confirm('将查看完整敏感标识并记录审计日志，确认继续？')) return;
+      trigger.disabled=true;
+      try {
+        const result=await request('device_reveal',{id,kind:trigger.dataset.kind});
+        showSensitive(trigger.dataset.kind==='imei'?'完整 IMEI':'完整手机号',result.value);
+      } catch(err) {toast(err.message,true);}
+      finally {trigger.disabled=false;}
+      return;
+    }
+    if (action==='device-block') {
+      const kind=trigger.dataset.kind;
+      const reason=prompt('独立拉黑 '+kind+'，请输入原因（不会同时拉黑其他标识）：','管理员禁止访问');
+      if (reason===null) return;
+      if (!reason.trim()) {toast('拉黑原因不能为空',true);return;}
+      if (!confirm('确认拉黑该设备标识？匹配设备会立即失效。')) return;
+      trigger.disabled=true;
+      try {
+        const result=await request('device_blacklist_add',{id,kind,reason:reason.trim()});
+        toast(result.message||'已拉黑');await refreshAfterSuccess();
+      } catch(err) {toast(err.message,true);}
+      finally {trigger.disabled=false;}
+      return;
+    }
     const map={
       'logout':['logout',{},false],
+      'signing-activate':['signing_activate',{},true],
       'revoke-account':['reset_sessions',{id},true],
       'reset-account-password':['account_password',{id},true],
       'revoke-session':['revoke_session',{id},true],
@@ -176,6 +231,15 @@
       await refreshAfterSuccess();
     }catch(err){toast(err.message,true);}
     finally{trigger.disabled=false;}
+  });
+  document.addEventListener('click',event=>{
+    const tab=event.target.closest('[data-device-tab]');
+    if(tab) {setDeviceTab(tab.dataset.deviceTab);return;}
+    const copy=event.target.closest('[data-device-copy]');
+    if(copy) {
+      navigator.clipboard.writeText(copy.dataset.deviceCopy||'')
+        .then(()=>toast('电脑 ID 已复制')).catch(()=>toast('复制失败，请手动选择',true));
+    }
   });
   // Group bulk form: only submit values for options the administrator explicitly enables.
   document.addEventListener('change',event=>{
