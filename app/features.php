@@ -1,7 +1,10 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__.'/mobile.php';
-require_once __DIR__.'/device_admin.php';
+// When upgrading from an older updater, newly introduced modules may not yet
+// be copied. Keep unrelated admin pages usable for module repair.
+if (is_file(__DIR__.'/devices.php') && is_file(__DIR__.'/device_admin.php'))
+    require_once __DIR__.'/device_admin.php';
 
 function feature_action(string $action): never {
     require_admin();
@@ -95,9 +98,14 @@ function feature_action(string $action): never {
         db()->commit();
         json_response(['ok'=>true,'message'=>'已批量更新 '.count($memberIds).' 个客户；'.($revoke?'相关电脑会话已撤销':'无需退出客户端')]);
     }
-    if (in_array($action,['device_reveal','device_blacklist_add'],true))
+    if (in_array($action,['device_reveal','device_blacklist_add'],true)) {
+        if (!function_exists('device_admin_action'))
+            throw new RuntimeException('设备管理模块缺失；请通过系统更新补齐必要文件');
         device_admin_action($action);
+    }
     if ($action==='mobile_add') {
+        if (!function_exists('device_encrypt'))
+            throw new RuntimeException('设备身份加密模块缺失；请通过系统更新补齐必要文件');
         $user=(int)($_POST['user_id']??0);
         $fingerprint=strtolower(trim((string)($_POST['phone_id']??'')));
         $name=trim((string)($_POST['display_name']??''));
@@ -267,7 +275,13 @@ function feature_view(string $view): void {
         </form>
         <?php
     } elseif ($view==='mobiles' || $view==='devices') {
-        device_admin_view();
+        if (!function_exists('device_admin_view')) {
+            ?><div class="card"><h2>设备管理模块尚未补齐</h2>
+            <p class="muted">缺少 app/devices.php 或 app/device_admin.php。旧版升级器未包含新模块时会出现这种情况。请进入「系统更新」检查并补齐缺失模块，不要清空客户数据。</p>
+            <a class="btn primary" href="?view=update">前往系统更新</a></div><?php
+        } else {
+            device_admin_view();
+        }
     } elseif ($view==='cloud_features') {
         require_owner();
         $rows=sql("SELECT setting_key,setting_value FROM phonehub_feature_settings WHERE setting_key IN ('mcp_enabled','skill_enabled','mcp_codex_enabled','mcp_harness_enabled')")->fetchAll();
