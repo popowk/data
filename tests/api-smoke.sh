@@ -268,8 +268,11 @@ TEST_RESPONSE="$batchNoPhone" python3 -c 'import os,json; j=json.loads(os.enviro
 unknownPhone=$(printf 'd%.0s' {1..64})
 batchUnknown=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$unknownPhone\"}],\"package_versions\":{\"douyin\":0}}}")
 TEST_RESPONSE="$batchUnknown" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and not j["batch"]["phones"][0]["bound"] and j["batch"]["phones"][0]["status"]=="not_bound" and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
-batchMismatch=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\",\"imei\":\"490154203237519\"}],\"package_versions\":{\"douyin\":0}}}")
+batchMismatch=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\",\"imei\":\"490154203237520\"}],\"package_versions\":{\"douyin\":0}}}")
 TEST_RESPONSE="$batchMismatch" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); p=j["batch"]["phones"][0]; assert j["ok"] and not p["bound"] and p["status"]=="identity_mismatch" and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
+# A separately blacklisted IMEI takes precedence over identity mismatch.
+batchBannedImei=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\",\"imei\":\"490154203237519\"}],\"package_versions\":{\"douyin\":0}}}")
+TEST_RESPONSE="$batchBannedImei" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); p=j["batch"]["phones"][0]; assert j["ok"] and not p["bound"] and p["status"]=="blacklisted" and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
 batchDuplicate=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\"},{\"phone_id\":\"$PHONE\"}]}}")
 TEST_RESPONSE="$batchDuplicate" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="DUPLICATE_PHONE_ID",j'
 batchBadVersion=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[],\"package_versions\":{\"douyin\":\"not-an-int\"}}}")
