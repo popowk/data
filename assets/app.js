@@ -96,15 +96,37 @@
     } catch(err){toast(err.message,true);}
     finally {if(submit)submit.disabled=false;}
   });
+  function applyOpeningPlan(form) {
+    const picker=form.elements.opening_plan;
+    if(!picker) return;
+    const code=picker.value;
+    const option=picker.selectedOptions[0];
+    const preset=code && code!=='custom';
+    if(preset && option?.dataset.pc && option?.dataset.mobile) {
+      form.elements.device_limit.value=option.dataset.pc;
+      form.elements.mobile_limit.value=option.dataset.mobile;
+    }
+    // The backend enforces preset quotas; read-only prevents an accidental
+    // mismatch between displayed numbers and the account's actual limits.
+    form.elements.device_limit.readOnly=!!preset;
+    form.elements.mobile_limit.readOnly=!!preset;
+  }
   function openEditor(payload) {
     const container=$('#account-editor');if(!container)return;
     const form=$('form',container);form.reset();
+    const openingField=$('#opening-plan-field',container);
+    if(openingField)openingField.hidden=!!payload;
+    if(form.elements.opening_plan) {
+      form.elements.opening_plan.disabled=!!payload;
+      form.elements.opening_plan.value='';
+    }
     form.elements.id.value=payload?.id || 0;
     form.elements.username.value=payload?.username || '';
     form.elements.password.value='';
     form.elements.group_id.value=payload?.group_id || 0;
     form.elements.device_limit.value=payload?.device_limit || 3;
     form.elements.mobile_limit.value=payload?.mobile_limit ?? 1;
+    applyOpeningPlan(form);
     form.elements.license_until.value=payload?.license_until || '';
     form.elements.notes.value=payload?.notes || '';
     form.elements.enabled.checked=payload?!!payload.enabled:true;
@@ -243,6 +265,11 @@
   });
   // Group bulk form: only submit values for options the administrator explicitly enables.
   document.addEventListener('change',event=>{
+    if(event.target.id==='opening-plan') {
+      const editor=$('#account-editor form');
+      if(editor) applyOpeningPlan(editor);
+      return;
+    }
     const toggle=event.target.closest('.bulk-option-toggle');
     if(toggle){
       const option=toggle.closest('.bulk-option');
