@@ -32,7 +32,8 @@ function api_mobile_quota(int $userId): array {
     $count=(int)client_sql("SELECT COUNT(*) FROM phonehub_mobile_devices d WHERE d.user_id=? AND d.enabled=1
         AND NOT EXISTS (SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND
           ((b.identifier_type='phone_id' AND b.identifier_hash=d.phone_id) OR
-           (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash)))",[$userId])->fetchColumn();
+           (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash) OR
+           (b.identifier_type='phone_hash' AND d.phone_number_hash IS NOT NULL AND b.identifier_hash=d.phone_number_hash)))",[$userId])->fetchColumn();
     return ['mobile_limit'=>(int)($meta['lim']??0),'active_count'=>$count];
 }
 function api_cloud_feature_enabled(string $feature): bool {
@@ -158,10 +159,10 @@ function api_extra(string $action,array $input,array $session,int $userId): void
     if ($action==='mobile_check' || $action==='mobile_heartbeat') {
         $phone=api_phone((string)($input['phone_id']??''));
         $providedImeiHash=api_imei_hash_from_input($input);
-        $found=client_sql('SELECT id,enabled,display_name,imei_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
+        $found=client_sql('SELECT id,enabled,display_name,imei_hash,phone_number_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
         $quota=api_mobile_quota($userId);
         $knownImeiHash=$providedImeiHash??(($found && !empty($found['imei_hash']))?(string)$found['imei_hash']:null);
-        $blocked=mobile_blacklist_match($pdo,$phone,$knownImeiHash);
+        $blocked=mobile_blacklist_match($pdo,$phone,$knownImeiHash,$found['phone_number_hash']??null);
         if ($blocked) api_problem('DEVICE_BLACKLISTED','该手机已被管理员拉黑',403);
         if ($found && $providedImeiHash!==null && !empty($found['imei_hash']) && !hash_equals((string)$found['imei_hash'],$providedImeiHash))
             api_problem('DEVICE_IDENTITY_MISMATCH','手机指纹对应的 IMEI 与已绑定记录不一致',403);
@@ -174,7 +175,8 @@ function api_extra(string $action,array $input,array $session,int $userId): void
                 WHERE d.user_id=? AND d.enabled=1 AND d.id<=?
                 AND NOT EXISTS (SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND
                   ((b.identifier_type='phone_id' AND b.identifier_hash=d.phone_id) OR
-                   (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash)))",
+                   (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash) OR
+                   (b.identifier_type='phone_hash' AND d.phone_number_hash IS NOT NULL AND b.identifier_hash=d.phone_number_hash)))",
                 [$userId,(int)$found['id']])->fetchColumn();
             $withinQuota=$position>0 && $position<=$quota['mobile_limit'];
         }
