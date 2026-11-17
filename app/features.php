@@ -119,6 +119,8 @@ function feature_action(string $action): never {
         $existing=sql('SELECT id,enabled,imei_hash,phone_number_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=? FOR UPDATE',[$user,$fingerprint])->fetch();
         $knownImeiHash=$imeiHash??(($existing && !empty($existing['imei_hash']))?(string)$existing['imei_hash']:null);
         if (mobile_blacklist_match(db(),$fingerprint,$knownImeiHash,$phoneHash??($existing['phone_number_hash']??null))) throw new RuntimeException('该手机指纹或 IMEI 已在设备黑名单中');
+        if ($existing && $phoneHash!==null && !empty($existing['phone_number_hash']) && !hash_equals((string)$existing['phone_number_hash'],$phoneHash))
+            throw new RuntimeException('该设备已绑定不同手机号，需要先解除原有绑定后再核实');
         if ($existing && $imeiHash!==null && !empty($existing['imei_hash']) && !hash_equals((string)$existing['imei_hash'],$imeiHash))
             throw new RuntimeException('该手机指纹已绑定不同 IMEI，请先由主管理员核对设备');
         if ($imeiHash!==null) {
