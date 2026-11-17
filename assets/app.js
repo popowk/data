@@ -81,12 +81,23 @@
     const form=event.target.closest('form[data-ajax]');if (!form)return;
     event.preventDefault();
     const confirmMessage=form.querySelector('[data-confirm-submit]')?.dataset.confirmSubmit;
-    if(confirmMessage && !confirm(confirmMessage))return;
     const action=form.dataset.ajax;
+    if(action!=='group_bulk' && confirmMessage && !confirm(confirmMessage))return;
     const submit=$('button[type="submit"],button:not([type])',form);
     if(submit)submit.disabled=true;
     try {
-      const result=await request(action,new FormData(form));
+      const fields=new FormData(form);
+      if(action==='group_bulk'){
+        const preview=await request('group_bulk_preview',fields);
+        if(!preview.snapshot || !Array.isArray(preview.fields) || !Number.isInteger(preview.members))
+          throw new Error('服务器未返回有效的批量操作预览');
+        const message='服务器预检：将修改 '+preview.members+' 位客户的【'+preview.fields.join('、')+
+          '】。'+(preview.revoke_sessions?'相关电脑会话会被撤销。':'本次不会主动撤销电脑会话。')+
+          '\\n确认提交此批量修改？';
+        if(!confirm(message))return;
+        fields.set('preview_snapshot',preview.snapshot);
+      }
+      const result=await request(action,fields);
       if(action==='login'){location.href='index.php';return;}
       toast(result.message || '保存成功');
       // Reveal one-time credentials before refreshing page content. If the refresh

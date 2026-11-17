@@ -176,6 +176,9 @@ ob_start();ai_admin_view();$aiHtml=ob_get_clean();
 if (strpos($aiHtml,'AI 接口管理')===false || strpos($aiHtml,'remove_api_key')===false)
     throw new RuntimeException('AI admin settings page render failed');
 require dirname(__DIR__).'/app/features.php';
+if (phonehub_group_member_snapshot(['1','2'])!==phonehub_group_member_snapshot([1,2]) ||
+    phonehub_group_member_snapshot([1,2])===phonehub_group_member_snapshot([1,3]))
+    throw new RuntimeException('group bulk preview membership fingerprint invalid');
 ob_start();feature_view('cloud_features');$cloudHtml=ob_get_clean();
 if (strpos($cloudHtml,'MCP 连接能力')===false || strpos($cloudHtml,'Skill 技能能力')===false)
     throw new RuntimeException('cloud feature control page render failed');
@@ -203,7 +206,8 @@ if (!array_filter($diagnostics['checks'],static fn($check)=>($check['name']??'')
     throw new RuntimeException('runtime diagnostics did not validate database connection');
 
 ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
-if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false)
+if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false ||
+    strpos($bulkHtml,'完成服务端预览')===false)
     throw new RuntimeException('redesigned group bulk form render failed');
 ob_start();feature_view('mobiles');$mobileHtml=ob_get_clean();
 if (strpos($mobileHtml,'设备管理')===false || strpos($mobileHtml,'电脑设备')===false ||

@@ -6,6 +6,11 @@ require_once __DIR__.'/mobile.php';
 if (is_file(__DIR__.'/devices.php') && is_file(__DIR__.'/device_admin.php'))
     require_once __DIR__.'/device_admin.php';
 
+function phonehub_group_member_snapshot(array $ids): string {
+    // The list is ordered by user ID by both preview and the locked apply.
+    return hash('sha256',implode(',',array_map(static fn($id)=>(string)(int)$id,$ids)));
+}
+
 function feature_action(string $action): never {
     require_admin();
     $id=(int)($_POST['id'] ?? 0);
@@ -51,7 +56,7 @@ function feature_action(string $action): never {
         audit('owner_password','self');
         json_response(['ok'=>true,'message'=>'主管理员密码已修改']);
     }
-    if ($action==='group_bulk') {
+    if (in_array($action,['group_bulk','group_bulk_preview'],true)) {
         $group=(int)($_POST['group_id']??0);
         if ($group<1 || !(int)sql('SELECT COUNT(*) FROM phonehub_groups WHERE id=?',[$group])->fetchColumn())
             throw new RuntimeException('请选择有效分组');
@@ -82,20 +87,42 @@ function feature_action(string $action): never {
                 $set[]='u.entitlements=?';$params[]=json_encode(array_values(array_unique($v)),JSON_UNESCAPED_UNICODE);
             }
         }
-        $count=(int)sql('SELECT COUNT(*) FROM phonehub_user_meta WHERE group_id=?',[$group])->fetchColumn();
-        if (!$count) throw new RuntimeException('该分组没有客户');
-        db()->beginTransaction();
-        $memberIds=sql('SELECT u.id FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE m.group_id=? FOR UPDATE',[$group])->fetchAll(PDO::FETCH_COLUMN);
-        if (!$memberIds) throw new RuntimeException('该分组没有客户');
-        $params[]=$group;
-        sql('UPDATE phonehub_users u INNER JOIN phonehub_user_meta m ON m.user_id=u.id SET '.implode(',',$set).' WHERE m.group_id=?',$params);
-        $revoke=array_intersect($fields,['device_limit','enabled','license_until','entitlements']);
-        if ($revoke) {
-            $placeholders=implode(',',array_fill(0,count($memberIds),'?'));
-            sql('DELETE FROM phonehub_sessions WHERE user_id IN ('.$placeholders.')',$memberIds);
+        $revoke=(bool)array_intersect($fields,['device_limit','enabled','license_until','entitlements']);
+        if ($action==='group_bulk_preview') {
+            $ids=sql('SELECT u.id FROM phonehub_users u
+              JOIN phonehub_user_meta m ON m.user_id=u.id
+              WHERE m.group_id=? ORDER BY u.id',[$group])->fetchAll(PDO::FETCH_COLUMN);
+            if (!$ids) throw new RuntimeException('该分组没有客户');
+            $labels=['device_limit'=>'电脑名额','mobile_limit'=>'安卓手机名额',
+              'enabled'=>'账号状态','license_until'=>'授权期限','entitlements'=>'平台与扩展权限'];
+            json_response(['ok'=>true,'members'=>count($ids),
+              'fields'=>array_map(static fn($f)=>$labels[$f],$fields),
+              'revoke_sessions'=>$revoke,'snapshot'=>phonehub_group_member_snapshot($ids)]);
         }
-        audit('group_bulk','group='.$group.' members='.count($memberIds).' fields='.implode(',',$fields));
-        db()->commit();
+        $preview=(string)($_POST['preview_snapshot']??'');
+        if (!preg_match('/^[a-f0-9]{64}$/D',$preview))
+            throw new RuntimeException('批量修改需要先在当前页面完成服务端预览');
+        db()->beginTransaction();
+        try {
+            $memberIds=sql('SELECT u.id FROM phonehub_users u
+              JOIN phonehub_user_meta m ON m.user_id=u.id
+              WHERE m.group_id=? ORDER BY u.id FOR UPDATE',[$group])->fetchAll(PDO::FETCH_COLUMN);
+            if (!$memberIds) throw new RuntimeException('该分组没有客户');
+            if (!hash_equals($preview,phonehub_group_member_snapshot($memberIds)))
+                throw new RuntimeException('预览后分组成员发生变化，未执行修改；请重新预览确认');
+            $placeholders=implode(',',array_fill(0,count($memberIds),'?'));
+            // Target only the previewed members even if another request joins
+            // the group while this transaction is in progress.
+            $updateParams=array_merge($params,[$group],$memberIds);
+            sql('UPDATE phonehub_users u INNER JOIN phonehub_user_meta m ON m.user_id=u.id
+              SET '.implode(',',$set).' WHERE m.group_id=? AND u.id IN ('.$placeholders.')',$updateParams);
+            if ($revoke) sql('DELETE FROM phonehub_sessions WHERE user_id IN ('.$placeholders.')',$memberIds);
+            audit('group_bulk','group='.$group.' members='.count($memberIds).' fields='.implode(',',$fields));
+            db()->commit();
+        } catch (Throwable $e) {
+            if (db()->inTransaction()) db()->rollBack();
+            throw $e;
+        }
         json_response(['ok'=>true,'message'=>'已批量更新 '.count($memberIds).' 个客户；'.($revoke?'相关电脑会话已撤销':'无需退出客户端')]);
     }
     if (in_array($action,['device_reveal','device_blacklist_add'],true)) {
@@ -271,7 +298,7 @@ function feature_view(string $view): void {
           </section>
         </div>
         <div class="bulk-impact"><strong>生效提示</strong><p>修改电脑名额、客户状态、授权期限或平台权限时，会撤销该分组客户现有的电脑会话。修改手机名额不会主动解绑已有手机。</p></div>
-        <div class="bulk-submit"><div><strong id="bulk-summary">尚未选择修改项</strong><small>提交前请再次确认目标分组和修改范围</small></div><button class="btn primary" type="submit" data-confirm-submit="此操作将批量修改所选分组的指定授权字段，确认继续？">应用批量配置</button></div>
+        <div class="bulk-submit"><div><strong id="bulk-summary">尚未选择修改项</strong><small>提交后先由服务器预检影响人数和字段，确认后才执行；分组成员变化时拒绝旧预览</small></div><button class="btn primary" type="submit" data-confirm-submit="此操作将批量修改所选分组的指定授权字段，确认继续？">应用批量配置</button></div>
         </form>
         <?php
     } elseif ($view==='mobiles' || $view==='devices') {
