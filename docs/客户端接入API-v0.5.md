@@ -346,3 +346,41 @@ Web 服务器必须禁止 HTTP 访问 /license/storage/，否则更新私钥、�
 已加入 PHP/JS 语法、MySQL 5.7 自动建表/迁移、手机绑定前后 package 访问控制、会话认证、日志上报、更新查询的 GitHub Actions 集成测试。
 
 仍需在你的实际宝塔环境验证：Nginx/ESA 路由、代理 ZIP 下载、PHP 上传限制、真实 APP 客户端、IMEI 在目标设备上的可读取性、真实签名 ZIP 安装/失败回滚。服务端能提供签名与下载不等于桌面 APP 已有完整安全升级器。
+
+### 可选的批量心跳（向后兼容，v0.5.9）
+
+既有 `client_heartbeat` 不带 `batch` 参数时，响应结构保持不变；`license_status`、`capabilities`、`client_config` 也不受影响。仅显式传入 `batch` 时，服务端在原响应基础上追加 `batch` 字段。登录态和电脑授权仍由原有 Bearer Token + `device_id` 校验。
+
+请求示例（演示字段，`phone_id` 为客户端已获取的 64 位十六进制指纹）：
+
+```json
+{
+  "device_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "batch": {
+    "phones": [
+      {"phone_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+    ],
+    "package_versions": {"douyin": 4}
+  }
+}
+```
+
+成功响应继续包含原 `username`、`server_time`、`session_expires_at`、`license_until`、`entitlements`、`mobile`、`computer`、`features`、`settings`，另外：
+
+```json
+{
+  "batch": {
+    "phones": [{"phone_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","bound":true,"status":"bound","imei_bound":false}],
+    "packages": [{"package_id":"douyin","version":5,"download_allowed":true,"update_available":true}],
+    "ai": {"enabled":true,"server_mode_available":true,"client_key_allowed":false},
+    "limits": {"phones":8,"package_versions":16}
+  }
+}
+```
+
+- `phones` 最多 8 项，必须为 `{"phone_id":"…"}` 对象的数组；可选 `imei` 仅用于当次身份核验，必须遵守知情同意与 HTTPS 要求，不在响应中返回。重复手机、非法身份/版本数据、超限批次均返回有 `error_code` 的结构化 400。
+- 服务端逐个按**当前数据库**核验该用户的绑定、设备黑名单、可选 IMEI 一致性及**最旧有效绑定优先**的手机额度。手机状态为 `bound`、`not_bound`、`blacklisted`、`identity_mismatch`、`quota_exceeded`、`quota_disabled`。只有 `bound=true` 刷新 `last_seen`。客户端遇到任何其他状态必须立即将该手机视为不可用；不可沿用先前授权。
+- `packages` 只包含当前客户已授权、服务器启用、对应全局开关开启的操作包，不返回 `envelope` 或 `content_key`。下载资格仍需至少有**本批通过核验**的手机；`update_available` 仅按服务端版本与客户端上报版本比较，客户端版本**不参与权限判断**，未提交版本返回 `null`。资源变化后仍需调用原 `package` 端点，由服务端重新检查授权和有效手机绑定。
+- `ai` 只返回有效 AI 策略、可用服务器模式与 BYOK 许可三个布尔字段；同时遵守当前用户每日额度，不返回任何上游密钥、密文、Token 或密钥是否存在的原始内容。
+- 请求体继续采用现有 64 KiB 限制，手机 8 项/包版本 16 项；这不是延长客户端离线有效期或绕过手机心跳的许可。旧客户端继续使用原调用即可；新客户端只有拿到明确的当次 `bound=true` 和 `download_allowed=true` 才能采用批量结果。
+- **安全边界：** `batch` 是当前状态快照，不能代替实际下载时再次验权。手机指纹/可选 IMEI 不是可信硬件证明；不保证客户端本机不会被逆向、Hook 或读取内存。

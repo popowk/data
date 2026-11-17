@@ -111,6 +111,136 @@ function api_latest_release(string $platform,string $channel): ?array {
     usort($rows,static fn($a,$b)=>version_compare($b['version'],$a['version']));
     return $rows[0]??null;
 }
+/**
+ * Optional heartbeat aggregation. Input is advisory only: every identity,
+ * entitlement, package and quota decision comes from current database state.
+ * This never returns a package envelope, content key, upstream API key, or
+ * mobile identity HMAC/encrypted original.
+ */
+function api_heartbeat_batch(array $batch,array $session,int $userId,array $quota): array {
+    global $pdo;
+    if (array_diff(array_keys($batch),['phones','package_versions']))
+        api_problem('INVALID_HEARTBEAT_BATCH','批量心跳包含未知字段');
+    $phones=$batch['phones']??[];
+    $versions=$batch['package_versions']??[];
+    if (!is_array($phones) || !array_is_list($phones) || count($phones)>8)
+        api_problem('HEARTBEAT_BATCH_LIMIT','单次最多检查 8 台手机');
+    if (!is_array($versions) || count($versions)>16 ||
+        ($versions!==[] && array_is_list($versions)))
+        api_problem('HEARTBEAT_BATCH_LIMIT','单次最多提交 16 个包版本');
+    foreach ($versions as $packageId=>$version) {
+        if (!is_string($packageId) || !preg_match('/^[a-z0-9-]{1,32}$/D',$packageId) ||
+            !(is_int($version) && $version>=0 && $version<=2147483647))
+            api_problem('INVALID_PACKAGE_VERSION','客户端包版本格式错误');
+    }
+    $requests=[];$ids=[];
+    foreach ($phones as $phone) {
+        if (!is_array($phone) || array_is_list($phone) ||
+            array_diff(array_keys($phone),['phone_id','imei']) ||
+            !is_string($phone['phone_id']??null) ||
+            (isset($phone['imei']) && !is_string($phone['imei'])))
+            api_problem('INVALID_HEARTBEAT_PHONE','手机检查项结构不正确');
+        $id=api_phone($phone['phone_id']);
+        if (isset($requests[$id])) api_problem('DUPLICATE_PHONE_ID','不能重复检查同一手机');
+        $imeiHash=api_imei_hash_from_input($phone);
+        $requests[$id]=['imei_hash'=>$imeiHash];
+        $ids[]=$id;
+    }
+
+    $records=[];
+    if ($ids) {
+        $placeholders=implode(',',array_fill(0,count($ids),'?'));
+        $rows=client_sql('SELECT id,phone_id,enabled,imei_hash,phone_number_hash
+            FROM phonehub_mobile_devices WHERE user_id=? AND phone_id IN ('.$placeholders.')',
+            array_merge([$userId],$ids))->fetchAll();
+        foreach ($rows as $row) $records[(string)$row['phone_id']]=$row;
+    }
+    // Preserve the exact oldest-eligible-device rule of mobile_check:
+    // disabled/blacklisted entries consume no quota; newer excess entries are
+    // not authorized even when an earlier valid binding exists.
+    $eligibleRows=$ids?client_sql("SELECT d.id FROM phonehub_mobile_devices d
+        WHERE d.user_id=? AND d.enabled=1 AND NOT EXISTS (
+          SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND (
+            (b.identifier_type='phone_id' AND b.identifier_hash=d.phone_id) OR
+            (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash) OR
+            (b.identifier_type='phone_hash' AND d.phone_number_hash IS NOT NULL AND b.identifier_hash=d.phone_number_hash)
+          )
+        ) ORDER BY d.id LIMIT 1000",[$userId])->fetchAll(PDO::FETCH_COLUMN):[];
+    $withinQuota=[];
+    foreach (array_slice($eligibleRows,0,max(0,min(1000,(int)$quota['mobile_limit']))) as $dbId)
+        $withinQuota[(int)$dbId]=true;
+    $results=[];$refreshIds=[];
+    foreach ($requests as $phoneId=>$request) {
+        $record=$records[$phoneId]??null;
+        $imeiHash=$request['imei_hash']??null;
+        $storedImei=$record && !empty($record['imei_hash'])?(string)$record['imei_hash']:null;
+        $storedPhone=$record && !empty($record['phone_number_hash'])?(string)$record['phone_number_hash']:null;
+        $blocked=mobile_blacklist_match($pdo,$phoneId,$imeiHash??$storedImei,$storedPhone)!==null;
+        $mismatch=$record && $imeiHash!==null && $storedImei!==null &&
+            !hash_equals($storedImei,$imeiHash);
+        if ($blocked) $status='blacklisted';
+        elseif ($mismatch) $status='identity_mismatch';
+        elseif (!$record || (int)$record['enabled']!==1) $status='not_bound';
+        elseif ((int)$quota['mobile_limit']<1) $status='quota_disabled';
+        elseif (!isset($withinQuota[(int)$record['id']])) $status='quota_exceeded';
+        else $status='bound';
+        $bound=$status==='bound';
+        if ($bound) $refreshIds[]=(int)$record['id'];
+        $results[]=['phone_id'=>$phoneId,'bound'=>$bound,'status'=>$status,
+            'imei_bound'=>$storedImei!==null];
+    }
+    if ($refreshIds) {
+        $slots=implode(',',array_fill(0,count($refreshIds),'?'));
+        client_sql('UPDATE phonehub_mobile_devices SET last_seen=UTC_TIMESTAMP()
+            WHERE user_id=? AND enabled=1 AND id IN ('.$slots.')',
+            array_merge([$userId],$refreshIds));
+    }
+
+    $packageStarted=hrtime(true);
+    $allowed=json_decode((string)$session['entitlements'],true);
+    $permitted=array_values(array_unique(array_filter(is_array($allowed)?$allowed:[],
+        static fn($id)=>is_string($id) && preg_match('/^[a-z0-9-]{1,32}$/D',$id))));
+    if (count($permitted)>16) api_problem('HEARTBEAT_BATCH_LIMIT','客户操作包授权数量超过批量上限');
+    $packageRows=[];
+    if ($permitted) {
+        $slots=implode(',',array_fill(0,count($permitted),'?'));
+        $packageRows=client_sql('SELECT package_id,MAX(version) AS latest_version
+            FROM phonehub_packages WHERE enabled=1 AND package_id IN ('.$slots.')
+            GROUP BY package_id ORDER BY package_id',$permitted)->fetchAll();
+    }
+    $packageResults=[];
+    $mobileReady=(int)$quota['mobile_limit']>0 && (int)$quota['active_count']>0 && count($refreshIds)>0;
+    foreach ($packageRows as $p) {
+        $id=(string)$p['package_id'];
+        if (in_array($id,['mcp','skill','mcp-codex','mcp-harness'],true) &&
+            (!api_cloud_feature_enabled($id) ||
+             (in_array($id,['mcp-codex','mcp-harness'],true) && !in_array('mcp',$permitted,true))))
+            continue;
+        $latest=(int)$p['latest_version'];
+        $clientVersion=$versions[$id]??null;
+        $packageResults[]=['package_id'=>$id,'version'=>$latest,
+            'download_allowed'=>$mobileReady,
+            'update_available'=>$clientVersion===null?null:$latest>$clientVersion];
+    }
+
+    api_perf_phase('package',$packageStarted);
+    // Reuse the established AI policy; no upstream key or decryptable value is
+    // returned. Server mode is available only while a usable key exists.
+    $globalAi=ai_settings();
+    $userAi=ai_user_policy($userId);
+    $aiEnabled=$globalAi['enabled'] && $userAi['enabled'];
+    $remaining=max(0,$userAi['daily_limit']-ai_daily_usage($userId));
+    $aiHasQuota=$remaining>0;
+    return [
+        'phones'=>$results,'packages'=>$packageResults,
+        'ai'=>['enabled'=>$aiEnabled,
+          'server_mode_available'=>$aiEnabled && $globalAi['server_key_configured'] && $aiHasQuota,
+          'client_key_allowed'=>$aiEnabled && $globalAi['client_key_enabled'] &&
+              $userAi['allow_client_key'] && $aiHasQuota],
+        'limits'=>['phones'=>8,'package_versions'=>16],
+    ];
+}
+
 function api_extra(string $action,array $input,array $session,int $userId): void {
     global $pdo;
     $device=(string)$session['device_id'];
@@ -135,7 +265,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
                 'mcp_codex_available'=>api_cloud_feature_enabled('mcp-codex') && in_array('mcp',$permitted,true) && in_array('mcp-codex',$permitted,true),
                 'mcp_harness_available'=>api_cloud_feature_enabled('mcp-harness') && in_array('mcp',$permitted,true) && in_array('mcp-harness',$permitted,true)
         ]);
-        api_out([
+        $response=[
             'ok'=>true,'username'=>$session['username'],'server_time'=>time(),
             'session_expires_at'=>strtotime($session['expires_at'].' UTC'),
             'license_until'=>$session['license_until'],'entitlements'=>$permitted,
@@ -143,7 +273,16 @@ function api_extra(string $action,array $input,array $session,int $userId): void
             'computer'=>['device_limit'=>(int)($account['device_limit']??0),'used'=>$pcUsed],
             'features'=>$features,
             'settings'=>['session_check_seconds'=>120,'mobile_heartbeat_seconds'=>300,'log_batch_max'=>50]
-        ]);
+        ];
+        // Only an opt-in client_heartbeat changes shape. All old callers and
+        // license_status/capabilities/client_config keep their prior schema.
+        if ($action==='client_heartbeat' && array_key_exists('batch',$input)) {
+            if (!is_array($input['batch']) ||
+                ($input['batch']!==[] && array_is_list($input['batch'])))
+                api_problem('INVALID_HEARTBEAT_BATCH','batch 必须为 JSON 对象');
+            $response['batch']=api_heartbeat_batch($input['batch'],$session,$userId,$quota);
+        }
+        api_out($response);
     }
     if ($action==='device_list') {
         $rows=client_sql('SELECT device_id,MAX(expires_at) AS expires_at FROM phonehub_sessions WHERE user_id=? AND expires_at>UTC_TIMESTAMP() GROUP BY device_id ORDER BY expires_at DESC',[$userId])->fetchAll();

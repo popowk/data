@@ -4,7 +4,7 @@ mkdir -p storage
 cat >storage/config.php <<'EOF'
 <?php return ['db_host'=>'127.0.0.1','db_port'=>3306,'db_name'=>'phonehub_ci','db_user'=>'root','db_pass'=>'ci_password'];
 EOF
-php -S 127.0.0.1:18765 -t . >/tmp/phonehub-ci-server.log 2>&1 &
+PHONEHUB_PERF_SAMPLE_PERCENT=100 php -S 127.0.0.1:18765 -t . >/tmp/phonehub-ci-server.log 2>&1 &
 server_pid=$!
 trap 'kill "$server_pid" 2>/dev/null || true; rm -f storage/config.php' EXIT
 for i in $(seq 1 40); do
@@ -257,6 +257,26 @@ if(!$row || $row["phone_model"]!=="Test Galaxy" || $row["imei_encrypted"]==="490
 
 after=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$after" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and "envelope" in j,j'
+
+# Old heartbeat keeps its legacy field names, new batch validates each phone.
+legacyHeartbeat=$(api client_heartbeat "{\"device_id\":\"$DEVICE\"}")
+TEST_RESPONSE="$legacyHeartbeat" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and "batch" not in j and "features" in j,j'
+batchHeartbeat=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\"}],\"package_versions\":{\"douyin\":0}}}")
+TEST_RESPONSE="$batchHeartbeat" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); b=j["batch"]; p=b["phones"]; a=b["ai"]; packs=b["packages"]; assert j["ok"] and "computer" in j and "session_expires_at" in j and len(p)==1 and p[0]["bound"] and p[0]["status"]=="bound",j; assert any(x["package_id"]=="douyin" and x["download_allowed"] and x["update_available"] for x in packs),j; assert set(a)=={"enabled","server_mode_available","client_key_allowed"},j; assert "content_key" not in str(b) and "envelope" not in str(b) and "api_key" not in str(b),j'
+batchNoPhone=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[],\"package_versions\":{\"douyin\":0}}}")
+TEST_RESPONSE="$batchNoPhone" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["batch"]["phones"]==[] and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
+unknownPhone=$(printf 'd%.0s' {1..64})
+batchUnknown=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$unknownPhone\"}],\"package_versions\":{\"douyin\":0}}}")
+TEST_RESPONSE="$batchUnknown" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and not j["batch"]["phones"][0]["bound"] and j["batch"]["phones"][0]["status"]=="not_bound" and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
+batchMismatch=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\",\"imei\":\"490154203237519\"}],\"package_versions\":{\"douyin\":0}}}")
+TEST_RESPONSE="$batchMismatch" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); p=j["batch"]["phones"][0]; assert j["ok"] and not p["bound"] and p["status"]=="identity_mismatch" and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
+batchDuplicate=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\"},{\"phone_id\":\"$PHONE\"}]}}")
+TEST_RESPONSE="$batchDuplicate" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="DUPLICATE_PHONE_ID",j'
+batchBadVersion=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[],\"package_versions\":{\"douyin\":\"not-an-int\"}}}")
+TEST_RESPONSE="$batchBadVersion" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="INVALID_PACKAGE_VERSION",j'
+tooMany=$(python3 -c 'import json; print(json.dumps({"device_id":"a"*64,"batch":{"phones":[{"phone_id":format(i,"064x")} for i in range(9)]}}))')
+batchTooMany=$(api client_heartbeat "$tooMany")
+TEST_RESPONSE="$batchTooMany" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="HEARTBEAT_BATCH_LIMIT",j'
 listed=$(api mobile_list "{\"device_id\":\"$DEVICE\"}")
 TEST_RESPONSE="$listed" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["active_count"]==1 and j["devices"][0]["imei_bound"],j'
 # A number-only blacklist must reject bound devices without blocking other identifiers.
@@ -269,6 +289,9 @@ $p->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_ha
 '
 numberBlocked=$(api mobile_check "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\"}")
 TEST_RESPONSE="$numberBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="DEVICE_BLACKLISTED",j'
+
+batchBlocked=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\"}],\"package_versions\":{\"douyin\":0}}}")
+TEST_RESPONSE="$batchBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); p=j["batch"]["phones"][0]; assert j["ok"] and not p["bound"] and p["status"]=="blacklisted" and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
 php -r '
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
@@ -287,6 +310,10 @@ firstAllowed=$(api mobile_check "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHON
 TEST_RESPONSE="$firstAllowed" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"],j'
 excessDenied=$(api mobile_check "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$(printf 'c%.0s' {1..64})\"}")
 TEST_RESPONSE="$excessDenied" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and not j["bound"],j'
+
+excessPhone=$(printf 'c%.0s' {1..64})
+batchQuota=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\"},{\"phone_id\":\"$excessPhone\"}],\"package_versions\":{\"douyin\":0}}}")
+TEST_RESPONSE="$batchQuota" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); p=j["batch"]["phones"]; assert j["ok"] and len(p)==2 and p[0]["bound"] and p[0]["status"]=="bound" and not p[1]["bound"] and p[1]["status"]=="quota_exceeded",j'
 php -r '
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
@@ -376,4 +403,8 @@ pcBlocked=$(api session "{\"device_id\":\"$DEVICE\"}")
 TEST_RESPONSE="$pcBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error"],j'
 loginBlocked=$(curl -sS -X POST "$BASE""login" -H 'Content-Type: application/json' --data "{\"username\":\"phonehub_ci_user\",\"password\":\"test-secret-123456\",\"device_id\":\"$DEVICE\"}")
 TEST_RESPONSE="$loginBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and "禁止" in j["error"],j'
+# PHP timing telemetry must be opt-in, structured and free of client secrets.
+grep -q 'PhoneHub heartbeat_perf status=200 ' /tmp/phonehub-ci-server.log
+grep -q 'connect_ms=.*auth_ms=.*db_ms=.*package_ms=.*response_ms=' /tmp/phonehub-ci-server.log
+if grep -Fq "$TOKEN" /tmp/phonehub-ci-server.log; then echo 'Bearer leaked to timing logs' >&2; exit 10; fi
 echo 'PASS: authenticated mobile/model/IMEI/phone ciphertext, phone and computer blacklist, authorization, logs and signed updates'

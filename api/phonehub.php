@@ -7,15 +7,48 @@ header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
 date_default_timezone_set('UTC');
+/**
+ * Optional sanitized heartbeat performance sampling.
+ * Sampling is disabled unless PHONEHUB_PERF_SAMPLE_PERCENT is set to 1..100.
+ * The counters measure PHP-only phases, NOT client DNS/TLS or network delivery.
+ */
+$GLOBALS['phonehub_perf']=[
+    'sample'=>false,'started_ns'=>hrtime(true),'connect_ms'=>0.0,
+    'auth_ms'=>0.0,'db_ms'=>0.0,'package_ms'=>0.0,
+    'response_ms'=>0.0,'queries'=>0
+];
+function api_perf_phase(string $phase,int $startedNs): void {
+    if (empty($GLOBALS['phonehub_perf']['sample'])) return;
+    $key=$phase.'_ms';
+    if (array_key_exists($key,$GLOBALS['phonehub_perf']))
+        $GLOBALS['phonehub_perf'][$key]=(hrtime(true)-$startedNs)/1000000;
+}
+function api_perf_report(int $status): void {
+    $p=$GLOBALS['phonehub_perf']??[];
+    if (empty($p['sample'])) return;
+    $total=(hrtime(true)-$p['started_ns'])/1000000;
+    // No account names, phone IDs, IPs, URLs, payload, tokens or secrets.
+    error_log(sprintf(
+        'PhoneHub heartbeat_perf status=%d total_ms=%.2f connect_ms=%.2f auth_ms=%.2f db_ms=%.2f package_ms=%.2f response_ms=%.2f queries=%d',
+        $status,$total,$p['connect_ms'],$p['auth_ms'],$p['db_ms'],
+        $p['package_ms'],$p['response_ms'],$p['queries']
+    ));
+}
 function api_out(array $data,int $status=200): never {
+    $started=hrtime(true);
     http_response_code($status);
     echo json_encode($data,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR|JSON_INVALID_UTF8_SUBSTITUTE);
+    api_perf_phase('response',$started);
+    api_perf_report($status);
     exit;
 }
 function api_error(string $message,int $code=400): never {api_out(['ok'=>false,'error'=>$message],$code);}
 try {
     if (($_GET['action']??'health')==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true,'imei_binding'=>'optional_hmac']);
     $action=(string)($_GET['action']??'health');
+    $sampleRate=max(0,min(100,(int)(getenv('PHONEHUB_PERF_SAMPLE_PERCENT')?:0)));
+    if ($action==='client_heartbeat' && $sampleRate>0 && random_int(1,100)<=$sampleRate)
+        $GLOBALS['phonehub_perf']['sample']=true;
     if (($_SERVER['REQUEST_METHOD']??'GET')!=='POST') api_error('仅支持 POST',405);
     if (isset($_SERVER['HTTP_ORIGIN'])) api_error('请通过 PhoneHub 客户端操作',403);
     $maxBody=$action==='ai_chat'?262144:65536;
@@ -26,13 +59,25 @@ try {
     if (!is_array($input)) api_error('请求格式不正确');
     $cfg=require dirname(__DIR__).'/storage/config.php';
     if (!is_array($cfg)) throw new RuntimeException('database configuration unavailable');
+    $connectStarted=hrtime(true);
     $pdo=new PDO('mysql:host='.$cfg['db_host'].';port='.(int)$cfg['db_port'].';dbname='.$cfg['db_name'].';charset=utf8mb4',
         $cfg['db_user'],$cfg['db_pass'],
         [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC,PDO::ATTR_EMULATE_PREPARES=>false]);
     $pdo->exec("SET time_zone = '+00:00'");
+    api_perf_phase('connect',$connectStarted);
     function client_sql(string $sql,array $params=[]): PDOStatement {
         global $pdo;
-        $st=$pdo->prepare($sql);$st->execute($params);return $st;
+        $started=hrtime(true);
+        try {
+            $st=$pdo->prepare($sql);
+            $st->execute($params);
+            return $st;
+        } finally {
+            if (!empty($GLOBALS['phonehub_perf']['sample'])) {
+                $GLOBALS['phonehub_perf']['db_ms']+=(hrtime(true)-$started)/1000000;
+                $GLOBALS['phonehub_perf']['queries']++;
+            }
+        }
     }
     require_once __DIR__.'/extensions.php';
     // Fail closed with a clear recovery error if an old updater missed a
@@ -82,6 +127,7 @@ try {
         api_out(['ok'=>true,'token'=>$token,'expires_at'=>$expires,'username'=>$account['username'],
             'license_until'=>$account['license_until'],'entitlements'=>json_decode($account['entitlements'],true)]);
     }
+    $authStarted=hrtime(true);
     $header=$_SERVER['HTTP_AUTHORIZATION']??'';
     if (!preg_match('/^Bearer ([a-f0-9]{64})$/D',$header,$match)) api_error('请先登录',401);
     $tokenHash=hash('sha256',$match[1]);
@@ -93,6 +139,7 @@ try {
         client_sql('DELETE FROM phonehub_sessions WHERE device_id=?',[$session['device_id']]);
         api_error('此电脑已被管理员禁止访问',403);
     }
+    api_perf_phase('auth',$authStarted);
     $userId=(int)$session['user_id'];
     if ($action==='logout') { client_sql('DELETE FROM phonehub_sessions WHERE token_hash=?',[$tokenHash]);api_out(['ok'=>true]); }
     if ($action==='session') api_out(['ok'=>true,'username'=>$session['username'],
