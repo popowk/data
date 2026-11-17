@@ -18,6 +18,8 @@ jobs:
         run: node --check assets/app.js
       - name: Test CLI backup creation and isolated recovery
         run: bash tests/backup-cli-smoke.sh
+      - name: Verify one-time recipient key generation
+        run: php tests/backup-admin-smoke.php
       - name: Test encrypted backup roundtrip and offline restore
         run: php tests/backup-crypto-smoke.php
       - name: Verify self-update key bootstrap and reuse
