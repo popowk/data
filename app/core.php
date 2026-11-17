@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=8) return;
+        if ($ready>=9) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -271,6 +271,15 @@ function migrate(PDO $conn): void {
         // and phone-number HMAC; no destructive migration of old entries.
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(8,UTC_TIMESTAMP())");
     }
+    if ($version < 9) {
+        // Opening presets are metadata, not billing/subscriptions. Existing
+        // customers retain their exact quotas and grants.
+        $column=$conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_user_meta' AND COLUMN_NAME='opening_plan_code'");
+        $column->execute();
+        if ((int)$column->fetchColumn()===0)
+            $conn->exec("ALTER TABLE phonehub_user_meta ADD COLUMN opening_plan_code VARCHAR(24) NULL DEFAULT NULL");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(9,UTC_TIMESTAMP())");
+    }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
@@ -315,6 +324,20 @@ function admin_role(): string {
 function require_owner(): void {
     require_admin();
     if (admin_role()!=='owner') throw new RuntimeException('仅主管理员可以执行此操作');
+}
+function phonehub_opening_plans(): array {
+    // Fixed quotas only. Cloud permissions, AI, pricing and orders are not
+    // inferred from a plan; owners select those privileges independently.
+    return [
+        'personal'=>['label'=>'单机版','device_limit'=>1,'mobile_limit'=>1],
+        'standard'=>['label'=>'标准版','device_limit'=>3,'mobile_limit'=>5],
+        'team'=>['label'=>'团队版','device_limit'=>10,'mobile_limit'=>20]
+    ];
+}
+function phonehub_plan_label(?string $code): string {
+    if ($code===null || $code==='') return '原有授权';
+    if ($code==='custom') return '自定义';
+    return phonehub_opening_plans()[$code]['label']??'未知套餐';
 }
 function random_password(int $length=20): string {
     $characters='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#%+-';
