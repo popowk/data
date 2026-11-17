@@ -6,7 +6,7 @@ const UPDATE_MAX_BYTES = 16777216;
 const UPDATE_FILES = [
     'index.php','install.php','version.json','.htaccess',
     'app/core.php','app/accounts.php','app/updater.php','app/features.php','app/gateway.php',
-    'app/devices.php','app/device_admin.php','app/signing_admin.php','app/plan_admin.php','app/backup_admin.php',
+    'app/devices.php','app/device_admin.php','app/signing_admin.php',
     'app/releases.php','app/release_admin.php','app/ai.php','app/mobile.php',
     'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','docs/客户端接入API-v0.5.md','docs/运维备份与升级.md','docs/设备管理与签名-v0.5.2.md','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','tools/bootstrap-self-update.php','assets/app.css','assets/app.js'
 ];
