@@ -12,35 +12,38 @@ function phonehub_group_member_snapshot(array $ids): string {
 }
 
 function feature_action(string $action): never {
-    require_admin();
+    phonehub_require_action($action);
     $id=(int)($_POST['id'] ?? 0);
     if ($action==='admin_create') {
         require_owner();
         $name=trim((string)($_POST['username'] ?? ''));validate_user($name);
+        $role=(string)($_POST['role']??'admin');
+        if (!in_array($role,['admin','viewer'],true)) throw new RuntimeException('管理员角色无效');
         $password=random_password();
-        sql("INSERT INTO phonehub_admins(username,password_hash,role,enabled) VALUES(?,?,'admin',1)",[$name,password_hash_safe($password)]);
+        sql('INSERT INTO phonehub_admins(username,password_hash,role,enabled) VALUES(?,?,?,1)',
+            [$name,password_hash_safe($password),$role]);
         audit('admin_create',$name);
         json_response(['ok'=>true,'message'=>'管理员已创建','password'=>$password,'username'=>$name]);
     }
     if (in_array($action,['admin_toggle','admin_reset','admin_delete'],true)) {
         require_owner();
         $target=sql('SELECT id,username,role,enabled FROM phonehub_admins WHERE id=?',[$id])->fetch();
-        if (!$target || $target['role']!=='admin' || (int)$target['id']===admin_id())
+        if (!$target || !in_array($target['role'],['admin','viewer'],true) || (int)$target['id']===admin_id())
             throw new RuntimeException('主管理员受到保护，禁止修改、重置或删除');
         if ($action==='admin_toggle') {
             $next=(int)$target['enabled'] ? 0 : 1;
-            sql('UPDATE phonehub_admins SET enabled=?,auth_version=auth_version+1 WHERE id=? AND role=?',[$next,$id,'admin']);
+            sql("UPDATE phonehub_admins SET enabled=?,auth_version=auth_version+1 WHERE id=? AND role IN ('admin','viewer')",[$next,$id]);
             audit('admin_toggle',(string)$target['username']);
             json_response(['ok'=>true,'message'=>$next?'管理员已启用':'管理员已停用']);
         }
         if ($action==='admin_reset') {
             $password=random_password();
-            sql('UPDATE phonehub_admins SET password_hash=?,auth_version=auth_version+1 WHERE id=? AND role=?',
-                [password_hash_safe($password),$id,'admin']);
+            sql("UPDATE phonehub_admins SET password_hash=?,auth_version=auth_version+1 WHERE id=? AND role IN ('admin','viewer')",
+                [password_hash_safe($password),$id]);
             audit('admin_reset',(string)$target['username']);
             json_response(['ok'=>true,'message'=>'管理员密码已重置','username'=>$target['username'],'password'=>$password]);
         }
-        sql('DELETE FROM phonehub_admins WHERE id=? AND role=?',[$id,'admin']);
+        sql("DELETE FROM phonehub_admins WHERE id=? AND role IN ('admin','viewer')",[$id]);
         audit('admin_delete',(string)$target['username']);
         json_response(['ok'=>true,'message'=>'管理员已删除']);
     }
@@ -239,14 +242,15 @@ function feature_action(string $action): never {
 }
 
 function feature_view(string $view): void {
+    phonehub_require_view($view==='mobiles'?'devices':$view);
     if ($view==='admins') {
         require_owner();
         $admins=sql('SELECT id,username,role,enabled,created_at FROM phonehub_admins ORDER BY CASE WHEN role=\'owner\' THEN 0 ELSE 1 END,id')->fetchAll();
         ?><div class="page-title"><div><h1>管理员管理</h1><p>仅主管理员可以创建、停用、重置或删除其他管理员</p></div></div>
-        <div class="card"><div class="card-head"><h2>创建普通管理员</h2></div>
-        <form data-ajax="admin_create" class="inline-form"><input name="action" type="hidden" value="admin_create"><input name="username" placeholder="管理员登录名（3–64 位英文字符）" required minlength="3"><button class="btn primary">+ 创建并生成随机密码</button></form></div>
+        <div class="card"><div class="card-head"><h2>创建管理员</h2></div>
+        <form data-ajax="admin_create" class="inline-form admin-create-form"><input name="action" type="hidden" value="admin_create"><input name="username" placeholder="管理员登录名（3–64 位英文字符）" required minlength="3"><select name="role" aria-label="管理员角色" required><option value="admin">普通管理员（可维护授权）</option><option value="viewer">只读管理员（只能查看）</option></select><button class="btn primary">创建并生成密码</button></form><p class="footnote">只读管理员仅可浏览概览、客户授权、分组及操作包；后台 POST 由服务器拒绝。原普通管理员权限不变。</p></div>
         <div class="card"><div class="card-head"><h2>管理员列表</h2></div><div class="table-scroll"><table><thead><tr><th>管理员</th><th>权限</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
-        <?php foreach($admins as $a): ?><tr><td><b><?=h($a['username'])?></b></td><td><?= $a['role']==='owner'?'主管理员（受保护）':'普通管理员' ?></td><td><span class="pill <?=(int)$a['enabled']?'ok':'off'?>"><?=(int)$a['enabled']?'正常':'已停用'?></span></td><td><?=h(utc_to_cn($a['created_at']))?></td><td>
+        <?php foreach($admins as $a): ?><tr><td><b><?=h($a['username'])?></b></td><td><?=h(phonehub_role_label((string)$a['role']))?><?= $a['role']==='owner'?'（受保护）':'' ?></td><td><span class="pill <?=(int)$a['enabled']?'ok':'off'?>"><?=(int)$a['enabled']?'正常':'已停用'?></span></td><td><?=h(utc_to_cn($a['created_at']))?></td><td>
         <?php if($a['role']==='owner'): ?><span class="muted">不可操作</span><?php else: ?>
         <button class="small-link" data-action="admin-reset" data-id="<?=(int)$a['id']?>">重置密码</button>
         <button class="small-link" data-action="admin-toggle" data-id="<?=(int)$a['id']?>"><?=(int)$a['enabled']?'停用':'启用'?></button>
