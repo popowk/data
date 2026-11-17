@@ -123,6 +123,17 @@ if (strpos($cloudHtml,'name="mcp_codex_enabled"')===false ||
     strpos($cloudHtml,'name="mcp_harness_enabled"')===false)
     throw new RuntimeException('MCP subplatform switches missing');
 
+$safeReport=update_diagnostic_report();
+$reportText=(string)($safeReport['report']??'');
+if (!str_starts_with($reportText,'PhoneHub 故障诊断报告') ||
+    !str_contains($reportText,'MySQL 版本') ||
+    !str_contains($reportText,'自更新签名'))
+    throw new RuntimeException('copyable sanitized diagnostics incomplete');
+$testConfig=require APP_STORE.'/config.php';
+foreach ([(string)$testConfig['db_pass'],(string)($_SESSION['admin_user']??'')] as $forbiddenValue)
+    if ($forbiddenValue!=='' && str_contains($reportText,$forbiddenValue))
+        throw new RuntimeException('diagnostic report contains protected configuration fields');
+if (strlen($reportText)>8000) throw new RuntimeException('diagnostic report not bounded');
 $diagnostics=update_diagnostics();
 if (($diagnostics['summary']['errors']??-1)!==0)
     throw new RuntimeException('runtime diagnostics returned errors in CI environment: '.json_encode($diagnostics,JSON_UNESCAPED_UNICODE));
