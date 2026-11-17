@@ -92,6 +92,10 @@ if (strpos($cloudHtml,'MCP 连接能力')===false || strpos($cloudHtml,'Skill �
     throw new RuntimeException('cloud feature control page render failed');
 if (strpos($cloudHtml,'cloud-feature-card')===false || strpos($cloudHtml,'cloud-savebar')===false)
     throw new RuntimeException('redesigned cloud feature controls missing');
+if (strpos($cloudHtml,'name="mcp_codex_enabled"')===false ||
+    strpos($cloudHtml,'name="mcp_harness_enabled"')===false)
+    throw new RuntimeException('MCP subplatform switches missing');
+
 $diagnostics=update_diagnostics();
 if (($diagnostics['summary']['errors']??-1)!==0)
     throw new RuntimeException('runtime diagnostics returned errors in CI environment: '.json_encode($diagnostics,JSON_UNESCAPED_UNICODE));
