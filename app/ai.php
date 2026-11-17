@@ -138,17 +138,23 @@ function api_ai_status(int $userId): never {
     if ($serverUsable) { try {$serverUsable=ai_server_secret()!=='';} catch(Throwable $e) {$serverUsable=false;} }
     $enabled=$global['enabled'] && $user['enabled'];
     $clientAllowed=$enabled && $global['client_key_enabled'] && $user['allow_client_key'];
-    api_out([
-        'ok'=>true,'enabled'=>$enabled,'provider'=>AI_DEFAULT_PROVIDER,'default_model'=>$global['model'],
-        'server_mode_available'=>$enabled && $serverUsable,
-        'server_key_configured'=>$serverUsable,
-        'client_key_allowed'=>$clientAllowed,
-        'allowed_models'=>AI_ALLOWED_MODELS,
-        'max_tokens'=>$global['max_tokens'],
-        'requests_per_minute'=>$global['requests_per_minute'],
-        'daily_limit'=>$user['daily_limit'],'daily_used'=>$used,
-        'daily_remaining'=>$user['daily_limit']===0?0:max(0,$user['daily_limit']-$used)
-    ]);
+    // Positive-only client capability discovery. Omit ungranted features and
+    // never reveal whether the server has an API key configured.
+    $result=['ok'=>true];
+    if ($enabled) {
+        $result['enabled']=true;
+        $result['provider']=AI_DEFAULT_PROVIDER;
+        $result['default_model']=$global['model'];
+        $result['allowed_models']=AI_ALLOWED_MODELS;
+        $result['max_tokens']=$global['max_tokens'];
+        $result['requests_per_minute']=$global['requests_per_minute'];
+        $result['daily_limit']=$user['daily_limit'];
+        $result['daily_used']=$used;
+        $result['daily_remaining']=$user['daily_limit']===0?0:max(0,$user['daily_limit']-$used);
+        if ($serverUsable) $result['server_mode_available']=true;
+        if ($clientAllowed) $result['client_key_allowed']=true;
+    }
+    api_out($result);
 }
 function ai_reserve_request(int $userId,string $device,string $mode,string $model,array $settings): string {
     global $pdo;
