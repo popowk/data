@@ -118,6 +118,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $result=account_reset_password((int)($_POST['id']??0));
             json_response(['ok'=>true,'message'=>'客户密码已重置，原电脑会话已撤销','username'=>$result['username'],'password'=>$result['password']]);
         }
+        if (in_array($action,['signing_generate','signing_activate'],true)) {
+            require_owner();
+            require_once __DIR__.'/app/signing_admin.php';
+            if ($action==='signing_generate')
+                json_response(['ok'=>true]+signing_generate_and_publish(trim((string)($_POST['github_token']??''))));
+            json_response(['ok'=>true]+signing_activate_trust());
+        }
         if (in_array($action,['update_check','update_apply','update_diagnostics'],true)) {
             require_owner();
             require __DIR__.'/app/updater.php';
@@ -234,6 +241,24 @@ $nav=[
 <div class="page-title"><div><h1>系统更新</h1><p>从国内镜像获取 GitHub 仓库最新代码，完成备份后在线安装</p></div></div>
 <div class="card update-card"><div class="update-icon">⟳</div><h2>当前版本 v<?=h(app_version())?></h2><p class="muted">更新源：<code>https://git.wksite.cn/popowk/data</code></p><p class="muted">仅更新管理程序文件，自动跳过 storage 内的数据库配置和运行数据。</p>
 <div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
+<?php require_once __DIR__.'/app/signing_admin.php'; $signing=signing_status(); ?>
+<div class="card">
+ <div class="card-head"><h2>Ed25519 签名密钥管理</h2><span class="pill <?=$signing['state']==='active'?'ok':'off'?>"><?=$signing['state']==='active'?'强制验签已启用':($signing['state']==='pending'?'等待发布签名':'尚未初始化')?></span></div>
+ <p class="muted">主管理员在这里直接初始化签名密钥，服务器生成 Ed25519 私钥并加密传入 GitHub Actions Secret，随后擦除本次服务器内存中的私钥；只保留固定公钥。使用 GitHub 一次性 Token，不保存 Token、私钥或签名明文在数据库。</p>
+ <?php if(isset($signing['fingerprint'])): ?><p class="muted">公钥 SHA-256 指纹：<code><?=h($signing['fingerprint'])?></code></p><?php endif ?>
+ <?php if($signing['state']==='unconfigured'): ?>
+ <form data-ajax="signing_generate"><input type="hidden" name="action" value="signing_generate">
+  <div class="field"><label>GitHub 临时访问 Token（须有 popowk/data 仓库 Actions Secrets 写入权限）</label><input type="password" name="github_token" autocomplete="off" required placeholder="只用于本次安全配置，不保存"></div>
+  <p class="footnote">初始化后由 GitHub Actions 自动签名。镜像签名尚未发布时不会启用固定公钥，避免锁死现有更新通道。</p>
+  <button class="btn primary" type="submit">生成密钥并自动配置签名</button>
+ </form>
+ <?php elseif($signing['state']==='pending'): ?>
+ <div class="update-actions"><button class="btn primary" data-action="signing-activate">验证镜像并启用签名</button></div>
+ <p class="muted">签名发布或镜像同步尚未完成时，验证会安全失败，可稍后重新点击；不会覆盖已有公钥。</p>
+ <?php else: ?>
+ <p class="muted">今后每次后台安装更新都必须先通过独立 Ed25519 签名和完整文件摘要校验，不允许重新生成新密钥覆盖当前信任链。</p>
+ <?php endif ?>
+ </div>
 <div class="card"><h2>更新说明</h2><p class="muted">安装前自动备份原文件。下载、解压、写入或校验失败会报错；写入阶段失败将尝试自动回滚。更新过程不删除客户、会话和数据库。镜像站需要支持 GitHub 源码 ZIP 下载接口。</p></div>
 <?php elseif($view==='audit'): $before=max(0,(int)($_GET['before']??0)); $auditSql="SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id ORDER BY a.id DESC LIMIT 51"; $audits=$before>0?sql("SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id WHERE a.id < ? ORDER BY a.id DESC LIMIT 51",[$before])->fetchAll():sql($auditSql)->fetchAll(); $hasOlder=count($audits)>50; if($hasOlder)array_pop($audits); $nextBefore=$audits?(int)$audits[count($audits)-1]['id']:0; ?>
 <div class="page-title"><div><h1>管理员操作记录</h1><p>按时间倒序展示，每页 50 条；可继续加载更早记录</p></div><?php if($before>0): ?><a class="btn" href="?view=audit">返回最新记录</a><?php endif ?></div><div class="card"><div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div><?php if($hasOlder && $nextBefore>0): ?><div class="editor-actions"><a class="btn" href="?view=audit&amp;before=<?=$nextBefore?>">更早记录</a></div><?php endif ?></div>
