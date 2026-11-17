@@ -6,6 +6,7 @@ declare(strict_types=1);
  * secret key in a one-time authenticated HTTPS download. NEVER log its contents.
  */
 function backup_recipient_status(string $storage=APP_STORE): array {
+    if (!extension_loaded('sodium')) throw new RuntimeException('备份密钥管理需要 PHP sodium 扩展');
     $path=rtrim($storage,'/').'/backup-recipient.pub';
     if (is_link($path)) throw new RuntimeException('备份接收公钥不能是符号链接');
     if (!file_exists($path)) return ['configured'=>false];
@@ -50,10 +51,12 @@ function backup_recipient_generate(string $storage): array {
 function backup_admin_download_once(): never {
     require_owner();
     if (!extension_loaded('sodium')) throw new RuntimeException('PHP sodium 不可用');
+    audit('backup_recipient_generate_requested','initialization');
     $generated=backup_recipient_generate(APP_STORE);
     $secret=$generated['secret'];
     try {
-        audit('backup_recipient_generate',substr($generated['fingerprint'],0,16));
+        try {audit('backup_recipient_generate',substr($generated['fingerprint'],0,16));}
+        catch(Throwable $e) {error_log('PhoneHub recipient key audit failed: '.get_class($e));}
         // Raw recipient private key is compatible with the existing offline
         // tools/backup-server.php verify/restore CLI operations.
         header('Content-Type: application/octet-stream');
