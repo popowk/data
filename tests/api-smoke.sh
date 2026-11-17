@@ -29,7 +29,7 @@ grep -q '复制完整报告' "$adminHtml"
 reportJson=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=diagnostic_report")
 TEST_RESPONSE="$reportJson" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); r=j.get("report",""); assert j["ok"] and "PhoneHub 故障诊断报告" in r and "MySQL 版本" in r and len(r)<8000,j'
-planCreated=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+planCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
   --data-urlencode "username=ci_open_plan_user" --data-urlencode "opening_plan=personal" \
   --data-urlencode "device_limit=99" --data-urlencode "mobile_limit=999" \
@@ -46,7 +46,7 @@ if (!$row || (int)$row["device_limit"]!==1 || (int)$row["mobile_limit"]!==1 || $
 # deactivations must not retroactively alter existing authorizations.
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=plans' -o "$adminHtml"
 grep -q '套餐管理' "$adminHtml"
-newPlan=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+newPlan=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=plan_save" \
   --data-urlencode "name=CI Enterprise" --data-urlencode "device_limit=7" \
   --data-urlencode "mobile_limit=11" --data-urlencode "sort_order=90")
@@ -57,13 +57,13 @@ $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cf
 $s=$p->prepare("SELECT plan_code FROM phonehub_plan_templates WHERE id=?");
 $s->execute([(int)getenv("PLAN_ID")]);echo $s->fetchColumn();
 ')
-newAccount=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+newAccount=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
   --data-urlencode "username=ci_dynamic_plan_user" --data-urlencode "opening_plan=$planCode" \
   --data-urlencode "device_limit=99" --data-urlencode "mobile_limit=999" \
   --data-urlencode "enabled=on")
 TEST_RESPONSE="$newAccount" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["id"]>0,j'
-planEdited=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+planEdited=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=plan_save" \
   --data-urlencode "id=$planId" --data-urlencode "name=CI Enterprise Renamed" \
   --data-urlencode "device_limit=12" --data-urlencode "mobile_limit=19" --data-urlencode "sort_order=91")
@@ -75,7 +75,7 @@ $s=$p->prepare("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code FROM ph
 $s->execute(["ci_dynamic_plan_user"]);$row=$s->fetch(PDO::FETCH_ASSOC);
 if(!$row || (int)$row["device_limit"]!==7 || (int)$row["mobile_limit"]!==11 || $row["opening_plan_code"]!==getenv("PLAN_CODE"))exit(2);
 '
-planToggle=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+planToggle=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=plan_toggle" --data-urlencode "id=$planId")
 TEST_RESPONSE="$planToggle" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
 disabledPlanAttempt=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
