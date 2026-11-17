@@ -146,16 +146,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if (in_array($action,['plan_save','plan_toggle'],true)) {
             require_owner();
-            if (!is_file(__DIR__.'/app/plan_admin.php'))
-                throw new RuntimeException('套餐管理模块尚未安装，请先在系统更新中补齐');
-            require_once __DIR__.'/app/plan_admin.php';
+            require_once __DIR__.'/app/features.php';
             plan_admin_action($action);
         }
         if ($action==='backup_key_generate') {
             require_owner();
-            if (!is_file(__DIR__.'/app/backup_admin.php'))
-                throw new RuntimeException('备份密钥模块尚未安装，请先在系统更新中补齐');
-            require_once __DIR__.'/app/backup_admin.php';
+            require_once __DIR__.'/app/features.php';
             backup_admin_download_once();
         }
         if ($action==='diagnostic_report') {
@@ -277,15 +273,11 @@ $nav=[
 <?php elseif($view==='groups'): ?>
 <div class="page-title"><div><h1>客户分组</h1><p>将代理商、企业或购买渠道分组管理</p></div><a class="btn primary" href="?view=group_bulk">统一修改分组授权</a></div><div class="card"><div class="card-head"><h2>新建分组</h2></div><form class="inline-form" data-ajax="group_create"><input type="hidden" name="action" value="group_create"><input name="name" placeholder="例如：代理商A / 企业客户" maxlength="100" required><button class="btn primary">创建分组</button></form></div>
 <div class="card"><div class="card-head"><h2>已创建分组</h2></div><div class="table-scroll"><table><thead><tr><th>分组名称</th><th>客户数</th><th>操作</th></tr></thead><tbody><?php foreach($groups as $g): ?><tr><td><b><?=h($g['name'])?></b></td><td><?=(int)$g['users']?></td><td><button class="small-link" data-action="delete-group" data-id="<?=(int)$g['id']?>">删除</button></td></tr><?php endforeach ?></tbody></table></div></div>
-<?php elseif($view==='plans'): ?>
-<?php if(is_file(__DIR__.'/app/plan_admin.php')) { require_once __DIR__.'/app/plan_admin.php'; plan_admin_view(); }
-else { ?><div class="card"><h2>套餐管理模块尚未补齐</h2><p class="muted">缺少 app/plan_admin.php。请进入系统更新补齐文件。</p><a class="btn" href="?view=update">前往系统更新</a></div><?php } ?>
+<?php elseif($view==='plans'): require_once __DIR__.'/app/features.php'; plan_admin_view(); ?>
 <?php elseif($view==='packages'): $packages=sql('SELECT package_id,MAX(version) AS version,COUNT(*) AS versions FROM phonehub_packages GROUP BY package_id ORDER BY package_id')->fetchAll(); ?>
 <div class="page-title"><div><h1>平台操作包</h1><p>兼容现有 PhoneHub 加密包协议；本版本仅展示，不处理签名私钥</p></div></div>
 <div class="card"><div class="table-scroll"><table><thead><tr><th>平台包</th><th>最高版本</th><th>历史版本数量</th></tr></thead><tbody><?php foreach($packages as $p): ?><tr><td><?=h($p['package_id'])?></td><td><?=h($p['version'])?></td><td><?=h($p['versions'])?></td></tr><?php endforeach ?></tbody></table></div></div>
-<?php elseif($view==='backup_keys'): ?>
-<?php if(is_file(__DIR__.'/app/backup_admin.php')) {require_once __DIR__.'/app/backup_admin.php';backup_admin_view();}
-else { ?><div class="card"><h2>备份密钥模块尚未补齐</h2><p class="muted">缺少 app/backup_admin.php。请从系统更新补齐模块。</p><a class="btn" href="?view=update">前往系统更新</a></div><?php } ?>
+<?php elseif($view==='backup_keys'): require_once __DIR__.'/app/features.php'; backup_admin_view(); ?>
 <?php elseif($view==='diagnostics'): ?>
 <div class="page-title"><div><h1>故障诊断</h1><p>一键生成可直接复制给技术支持的脱敏报告，不包含客户信息或敏感密钥</p></div><a class="btn" href="?view=update">返回系统更新</a></div>
 <div class="card">
