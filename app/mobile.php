@@ -3,8 +3,9 @@ declare(strict_types=1);
 
 /**
  * Mobile identity helpers.
- * Callers must submit raw IMEI only over HTTPS; it is normalized and immediately converted to
- * a deployment-keyed HMAC. It is never stored or returned.
+ * Raw IMEI can be submitted only via authenticated HTTPS requests. HMAC is
+ * used for matching/blacklists; optional reversible originals are encrypted by
+ * app/devices.php with a purpose-separated key and never stored as plaintext.
  */
 function mobile_identity_db_sql(string $statement,array $params=[]): PDOStatement {
     $connection=$GLOBALS['pdo']??null;
