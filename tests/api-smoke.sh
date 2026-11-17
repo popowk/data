@@ -63,6 +63,26 @@ $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cf
 $p->exec("UPDATE phonehub_user_meta SET mobile_limit=8 WHERE user_id=1");
 $p->exec("DELETE FROM phonehub_mobile_devices WHERE phone_id=REPEAT(CHAR(99),64)");
 '
+# Capability discovery returns only true-valued fields; disabled keys are omitted.
+for action in license_status capabilities client_config client_heartbeat; do
+  cap=$(api "$action" "{\"device_id\":\"$DEVICE\"}")
+  TEST_RESPONSE="$cap" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); f=j["features"]; assert j["ok"] and all(v is True for v in f.values()),j; assert not any(k in f for k in ("mcp_available","skill_available","mcp_codex_available","mcp_harness_available")),j'
+done
+# Positive permissions must appear as true; ungranted features remain entirely absent.
+php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$p->exec("UPDATE phonehub_users SET entitlements=\x27[\x22douyin\x22,\x22mcp\x22,\x22mcp-codex\x22]\x27 WHERE username=\x27phonehub_ci_user\x27");
+$p->exec("UPDATE phonehub_feature_settings SET setting_value=\x271\x27 WHERE setting_key IN (\x27mcp_enabled\x27,\x27mcp_codex_enabled\x27)");
+'
+capEnabled=$(api capabilities "{\"device_id\":\"$DEVICE\"}")
+TEST_RESPONSE="$capEnabled" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); f=j["features"]; assert f["mcp_available"] is True and f["mcp_codex_available"] is True and "mcp_harness_available" not in f and "skill_available" not in f and all(v is True for v in f.values()),j'
+php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$p->exec("UPDATE phonehub_users SET entitlements=\x27[\x22douyin\x22]\x27 WHERE username=\x27phonehub_ci_user\x27");
+$p->exec("UPDATE phonehub_feature_settings SET setting_value=\x270\x27 WHERE setting_key IN (\x27mcp_enabled\x27,\x27mcp_codex_enabled\x27)");
+'
 mcpDisabled=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"mcp\",\"channel\":\"stable\",\"current_version\":\"0.0.0\"}")
 TEST_RESPONSE="$mcpDisabled" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="FEATURE_DISABLED",j'
 for platform in mcp-codex mcp-harness; do
@@ -70,7 +90,7 @@ for platform in mcp-codex mcp-harness; do
   TEST_RESPONSE="$denied" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="FEATURE_DISABLED",j'
 done
 aiStatus=$(api ai_status "{\"device_id\":\"$DEVICE\"}")
-TEST_RESPONSE="$aiStatus" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["enabled"] and not j["client_key_allowed"] and not j["server_key_configured"],j'
+TEST_RESPONSE="$aiStatus" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["enabled"] is True and "client_key_allowed" not in j and "server_mode_available" not in j and "server_key_configured" not in j,j'
 byokDenied=$(api ai_chat "{\"device_id\":\"$DEVICE\",\"credential_mode\":\"client\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}")
 TEST_RESPONSE="$byokDenied" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="CLIENT_KEY_FORBIDDEN",j'
 serverMissing=$(api ai_chat "{\"device_id\":\"$DEVICE\",\"credential_mode\":\"server\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}")
