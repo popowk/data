@@ -39,12 +39,39 @@ api() {
 }
 before=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$before" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] is False and "绑定" in j["error"],j'
-bound=$(api mobile_bind "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"display_name\":\"CI Android\",\"imei\":\"490154203237518\"}")
+bound=$(api mobile_bind "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"display_name\":\"CI Android\",\"phone_model\":\"Test Galaxy\",\"phone_number\":\"+8613912345678\",\"imei\":\"490154203237518\"}")
 TEST_RESPONSE="$bound" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and j["imei_bound"],j'
+php -r '
+require "app/core.php";require "app/devices.php";
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$row=$p->query("SELECT imei_encrypted,phone_number_encrypted,phone_number_hash,phone_model FROM phonehub_mobile_devices WHERE phone_id=REPEAT(CHAR(98),64) LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+if(!$row || $row["phone_model"]!=="Test Galaxy" || $row["imei_encrypted"]==="490154203237518" ||
+    device_decrypt($row["imei_encrypted"])!=="490154203237518" ||
+    device_decrypt($row["phone_number_encrypted"])!=="+8613912345678" ||
+    $row["phone_number_hash"]!==device_phone_hash("+8613912345678")) exit(3);
+'
+
 after=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$after" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and "envelope" in j,j'
 listed=$(api mobile_list "{\"device_id\":\"$DEVICE\"}")
 TEST_RESPONSE="$listed" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["active_count"]==1 and j["devices"][0]["imei_bound"],j'
+# A number-only blacklist must reject bound devices without blocking other identifiers.
+php -r '
+require "app/core.php"; require "app/devices.php";
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$hash=device_phone_hash("+8613912345678");
+$p->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES(?,?,?,1,0)")->execute(["phone_hash",$hash,"CI number block"]);
+'
+numberBlocked=$(api mobile_check "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\"}")
+TEST_RESPONSE="$numberBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="DEVICE_BLACKLISTED",j'
+php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$p->exec("UPDATE phonehub_mobile_blacklist SET enabled=0 WHERE identifier_type=\x27phone_hash\x27 AND reason=\x27CI number block\x27");
+'
+
 # Lowering a mobile quota must prevent excess, newer devices from passing mobile_check.
 php -r '
 $cfg=require "storage/config.php";
@@ -135,4 +162,15 @@ again=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$again" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] is False and "绑定" in j["error"],j'
 devices=$(api device_list "{\"device_id\":\"$DEVICE\"}")
 TEST_RESPONSE="$devices" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and len(j["devices"])>=1,j'
-echo 'PASS: login, IMEI HMAC binding, blacklist enforcement, MCP default-deny, mobile package gating, AI/BYOK, logs and signed updates'
+# Blacklisting a computer ID immediately rejects existing sessions and future logins.
+php -r '
+require "app/core.php"; require "app/devices.php";
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+device_insert_blacklist($p,"computer_id",str_repeat("a",64),"CI computer block",0);
+'
+pcBlocked=$(api session "{\"device_id\":\"$DEVICE\"}")
+TEST_RESPONSE="$pcBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error"],j'
+loginBlocked=$(curl -sS -X POST "$BASE""login" -H 'Content-Type: application/json' --data "{\"username\":\"phonehub_ci_user\",\"password\":\"test-secret-123456\",\"device_id\":\"$DEVICE\"}")
+TEST_RESPONSE="$loginBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and "禁止" in j["error"],j'
+echo 'PASS: authenticated mobile/model/IMEI/phone ciphertext, phone and computer blacklist, authorization, logs and signed updates'
