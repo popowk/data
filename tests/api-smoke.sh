@@ -42,6 +42,46 @@ $s=$p->query("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code FROM phon
 $row=$s->fetch(PDO::FETCH_ASSOC);
 if (!$row || (int)$row["device_limit"]!==1 || (int)$row["mobile_limit"]!==1 || $row["opening_plan_code"]!=="personal") exit(2);
 '
+# Owner-managed templates apply only to newly created accounts; edits and
+# deactivations must not retroactively alter existing authorizations.
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=plans' -o "$adminHtml"
+grep -q '套餐管理' "$adminHtml"
+newPlan=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=plan_save" \
+  --data-urlencode "name=CI Enterprise" --data-urlencode "device_limit=7" \
+  --data-urlencode "mobile_limit=11" --data-urlencode "sort_order=90")
+planId=$(TEST_RESPONSE="$newPlan" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j; print(j["id"])')
+planCode=$(PLAN_ID="$planId" php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$s=$p->prepare("SELECT plan_code FROM phonehub_plan_templates WHERE id=?");
+$s->execute([(int)getenv("PLAN_ID")]);echo $s->fetchColumn();
+')
+newAccount=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
+  --data-urlencode "username=ci_dynamic_plan_user" --data-urlencode "opening_plan=$planCode" \
+  --data-urlencode "device_limit=99" --data-urlencode "mobile_limit=999" \
+  --data-urlencode "enabled=on")
+TEST_RESPONSE="$newAccount" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["id"]>0,j'
+planEdited=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=plan_save" \
+  --data-urlencode "id=$planId" --data-urlencode "name=CI Enterprise Renamed" \
+  --data-urlencode "device_limit=12" --data-urlencode "mobile_limit=19" --data-urlencode "sort_order=91")
+TEST_RESPONSE="$planEdited" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
+PLAN_CODE="$planCode" php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$s=$p->prepare("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.username=?");
+$s->execute(["ci_dynamic_plan_user"]);$row=$s->fetch(PDO::FETCH_ASSOC);
+if(!$row || (int)$row["device_limit"]!==7 || (int)$row["mobile_limit"]!==11 || $row["opening_plan_code"]!==getenv("PLAN_CODE"))exit(2);
+'
+planToggle=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=plan_toggle" --data-urlencode "id=$planId")
+TEST_RESPONSE="$planToggle" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
+disabledPlanAttempt=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
+  --data-urlencode "username=ci_disabled_plan_user" --data-urlencode "opening_plan=$planCode")
+TEST_RESPONSE="$disabledPlanAttempt" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and "套餐" in j["error"],j'
 rm -f "$adminCookies" "$adminHtml"
 BASE='http://127.0.0.1:18765/api/phonehub.php?action='
 DEVICE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
