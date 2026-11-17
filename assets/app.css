@@ -82,3 +82,28 @@ input[readonly]{background:#f7f8fb;color:#9099a6}
 .cloud-warning strong{font-size:12px;color:#98733d}.cloud-warning p{margin:6px 0 0;color:#9b8a70;font-size:11px;line-height:1.8}
 @media(max-width:800px){.bulk-grid,.cloud-feature-grid{grid-template-columns:1fr}.bulk-option-wide{grid-column:auto}.bulk-submit,.cloud-savebar{align-items:stretch;flex-direction:column}.bulk-submit .btn,.cloud-savebar .btn{width:100%}.cloud-summary{align-items:flex-start;gap:14px}.cloud-summary>div{min-width:80px;padding-right:14px}}
 @media(max-width:560px){.bulk-target-card{padding:18px}.bulk-section-head,.bulk-section-title{align-items:flex-start}.bulk-tip{display:none}.bulk-option{padding:15px}.bulk-option-body{margin-left:0}.bulk-group-meta{flex-direction:column;gap:4px}.cloud-summary{display:block}.cloud-summary>div{border:0;padding:0 0 10px}.cloud-live-indicator{display:none}}
+
+/* Unified computer/mobile device dashboard */
+.device-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:0 0 20px}
+.device-summary-card{display:grid;gap:6px;background:#fff;border:1px solid #e4e9f1;border-radius:13px;padding:17px 19px}
+.device-summary-card span{font-weight:650;font-size:12px;color:#6a7b92}
+.device-summary-card strong{font-size:27px;color:#294b72}
+.device-summary-card small{font-size:11px;color:#96a1b0;line-height:1.6}
+.device-tabs{display:flex;gap:5px;margin-bottom:17px;padding:5px;background:#edf2f9;border-radius:12px;max-width:520px}
+.device-tab{flex:1;border:0;border-radius:9px;background:transparent;padding:11px 13px;color:#667b96;font-size:13px;font-weight:700;cursor:pointer}
+.device-tab.active{background:#fff;color:#3268d8;box-shadow:0 2px 7px #253d5712}
+.device-tab:focus-visible{outline:2px solid #3974de;outline-offset:2px}
+[data-device-panel][hidden]{display:none!important}
+.device-commands{min-width:230px}
+.device-commands button{margin:0 6px 5px 0}
+.device-sensitive{font-size:12px;color:#526987;white-space:nowrap}
+.device-subline{display:block;margin-top:4px;color:#9ba7b5;max-width:160px;white-space:normal}
+.danger-action{color:#c35255!important}
+@media(max-width:760px){
+.device-summary{grid-template-columns:1fr;gap:8px}
+.device-summary-card{padding:12px 15px}
+.device-summary-card strong{font-size:22px}
+.device-tabs{max-width:none}
+.device-tab{font-size:12px;padding:10px 6px}
+.device-commands{min-width:190px}
+}
