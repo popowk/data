@@ -1,0 +1,89 @@
+name: Signed PhoneHub server updates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'version.json'
+      - 'index.php'
+      - 'install.php'
+      - '.htaccess'
+      - 'app/**'
+      - 'api/**'
+      - 'assets/**'
+      - 'tools/**'
+      - 'docs/客户端接入API-v0.3.md'
+      - 'docs/客户端接入API-v0.4.md'
+      - 'docs/客户端接入API-v0.5.md'
+      - 'docs/运维备份与升级.md'
+      - '.github/workflows/sign-server-update.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phonehub-self-update-signature
+  cancel-in-progress: false
+
+jobs:
+  sign-and-verify:
+    if: github.repository == 'popowk/data'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Determine signing availability
+        id: signing
+        env:
+          PRIVATE_KEY_B64: ${{ secrets.PHONEHUB_SERVER_SIGNING_KEY_B64 }}
+        run: |
+          if [ -n "$PRIVATE_KEY_B64" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Private signing key has not been provisioned. Signing is disabled until the trusted setup runs."
+          fi
+      - name: Sign complete server release and verify with derived public key
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          PRIVATE_KEY_B64: ${{ secrets.PHONEHUB_SERVER_SIGNING_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          secret_file="$(mktemp "$RUNNER_TEMP/phonehub-key.XXXXXX")"
+          trap 'rm -f "$secret_file"' EXIT
+          printf '%s' "$PRIVATE_KEY_B64" | base64 --decode > "$secret_file"
+          unset PRIVATE_KEY_B64
+          php tools/sign-self-update.php "$secret_file"
+          php -r '
+            require "app/core.php";
+            require "app/updater.php";
+            $priv=file_get_contents($argv[1]);
+            $pub=sodium_crypto_sign_publickey_from_secretkey($priv);
+            $files=[];
+            foreach (UPDATE_FILES as $path) {
+              $data=file_get_contents($path);
+              if (!is_string($data)) throw new RuntimeException("Missing release file");
+              $files[$path]=$data;
+            }
+            $ver=json_decode($files["version.json"],true,512,JSON_THROW_ON_ERROR)["version"];
+            update_verify_signed_archive($files,$ver,
+              file_get_contents("deploy/self-update-manifest.json"),
+              file_get_contents("deploy/self-update-manifest.sig"),$pub);
+            echo "Independent Ed25519 verification passed for server release ".$ver."\n";
+          ' "$secret_file"
+      - name: Commit signed manifest only
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "phonehub-update-signer[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- deploy/self-update-manifest.json deploy/self-update-manifest.sig
+          if git diff --cached --quiet; then
+            echo "Signed manifest is unchanged"
+          else
+            git commit -m "chore: publish Ed25519 signed server update manifest [skip ci]"
+            git push origin HEAD:main
+          fi
