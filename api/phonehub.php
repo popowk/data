@@ -35,6 +35,10 @@ try {
         $st=$pdo->prepare($sql);$st->execute($params);return $st;
     }
     require_once __DIR__.'/extensions.php';
+    // Fail closed with a clear recovery error if an old updater missed a
+    // newly introduced security module. Never skip blacklist enforcement.
+    if (!is_file(dirname(__DIR__).'/app/devices.php'))
+        api_out(['ok'=>false,'error'=>'服务器升级不完整：缺少设备安全模块，请联系管理员补齐更新文件','error_code'=>'SERVER_MODULE_MISSING'],503);
     require_once dirname(__DIR__).'/app/devices.php';
     if ($action==='login') {
         $name=(string)($input['username']??'');
