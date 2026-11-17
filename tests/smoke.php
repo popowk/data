@@ -46,6 +46,46 @@ if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
     $openingPlans['standard']['mobile_limit']!==5 || $openingPlans['team']['device_limit']!==10 ||
     phonehub_plan_label(null)!=='原有授权')
     throw new RuntimeException('opening plan presets invalid');
+// Regression: editing/stopping an opening template must not mutate an existing
+// customer's stored quotas or opening label. Disabled plans must not be offered
+// to newly created customers, but historical template lookup must still work.
+$pdo->beginTransaction();
+try {
+    $pdo->exec("INSERT INTO phonehub_plan_templates(plan_code,name,device_limit,mobile_limit,enabled,sort_order)
+        VALUES('ci_plan_fixture','测试套餐',2,4,1,15)");
+    $active=phonehub_opening_plans(true,$pdo);
+    if (count($active)!==4 || !isset($active['ci_plan_fixture']) ||
+        array_keys($active)!==['personal','ci_plan_fixture','standard','team'])
+        throw new RuntimeException('new plan template not available or plan sorting incorrect');
+
+    $pdo->exec("INSERT INTO phonehub_users(username,password_hash,device_limit,entitlements)
+        VALUES('ci_plan_fixture','test-hash',2,'[\"douyin\"]')");
+    $userId=(int)$pdo->lastInsertId();
+    $pdo->prepare('INSERT INTO phonehub_user_meta(user_id,mobile_limit,opening_plan_code) VALUES(?,?,?)')
+        ->execute([$userId,4,'ci_plan_fixture']);
+
+    $pdo->exec("UPDATE phonehub_plan_templates
+        SET name='测试套餐（已修改）',device_limit=99,mobile_limit=88,enabled=0
+        WHERE plan_code='ci_plan_fixture'");
+    $active=phonehub_opening_plans(true,$pdo);
+    $all=phonehub_opening_plans(false,$pdo);
+    if (isset($active['ci_plan_fixture']) || ($all['ci_plan_fixture']['device_limit']??null)!==99 ||
+        ($all['ci_plan_fixture']['mobile_limit']??null)!==88 ||
+        ($all['ci_plan_fixture']['label']??null)!=='测试套餐（已修改）')
+        throw new RuntimeException('disabled/edited plan template visibility incorrect');
+    $snapshot=$pdo->query("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code
+        FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id
+        WHERE u.username='ci_plan_fixture'")->fetch(PDO::FETCH_ASSOC);
+    if ((int)($snapshot['device_limit']??0)!==2 ||
+        (int)($snapshot['mobile_limit']??0)!==4 ||
+        ($snapshot['opening_plan_code']??null)!=='ci_plan_fixture')
+        throw new RuntimeException('editing/stopping a plan unexpectedly mutated prior account entitlements');
+    $pdo->exec("UPDATE phonehub_plan_templates SET enabled=1 WHERE plan_code='ci_plan_fixture'");
+    if (!isset(phonehub_opening_plans(true,$pdo)['ci_plan_fixture']))
+        throw new RuntimeException('re-enabled plan template not visible');
+} finally {
+    if ($pdo->inTransaction()) $pdo->rollBack();
+}
 $mobileColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_mobile_devices'")->fetchAll(PDO::FETCH_COLUMN);
 foreach (['imei_hash','imei_encrypted','phone_number_encrypted','phone_number_hash','phone_model'] as $column)
     if(!in_array($column,$mobileColumns,true)) throw new RuntimeException('mobile identity column missing: '.$column);
