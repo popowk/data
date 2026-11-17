@@ -42,8 +42,6 @@ try {
         $device=(string)($input['device_id']??'');
         if (!preg_match('/^[a-zA-Z0-9_-]{3,64}$/D',$name) || !preg_match('/^[a-f0-9]{64}$/D',$device) || strlen($password)>256)
             api_error('登录信息格式不正确');
-        if (device_blacklisted_computer($pdo,$device))
-            api_error('此电脑已被管理员禁止访问',403);
         $bucket=hash('sha256',strtolower($name).'|'.($_SERVER['REMOTE_ADDR']??''));
         client_sql('DELETE FROM phonehub_login_attempts WHERE attempted_at < DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 HOUR)');
         $attempts=(int)client_sql('SELECT COUNT(*) FROM phonehub_login_attempts WHERE bucket=? AND attempted_at>DATE_SUB(UTC_TIMESTAMP(),INTERVAL 15 MINUTE)',[$bucket])->fetchColumn();
@@ -54,6 +52,10 @@ try {
         if (!password_verify($password,$account['password_hash']??$dummy) || !$account || !(int)$account['enabled'])
             api_error('账号或密码错误，或账号已停用',401);
         if ($account['license_until'] && strtotime($account['license_until'].' UTC')<=time()) api_error('账号授权已到期',403);
+        // Only authenticated customers may learn that this computer ID is blocked.
+        // Keep login throttling and password verification ahead of the blacklist check.
+        if (device_blacklisted_computer($pdo,$device))
+            api_error('此电脑已被管理员禁止访问',403);
         $pdo->beginTransaction();
         client_sql('SELECT id FROM phonehub_users WHERE id=? FOR UPDATE',[$account['id']]);
         client_sql('DELETE FROM phonehub_sessions WHERE expires_at<UTC_TIMESTAMP()');
