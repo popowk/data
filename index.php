@@ -209,7 +209,37 @@ if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','pac
 $adminRole=admin_role();
 if (in_array($view,['admins','gateway','update','diagnostics','releases','ai','cloud_features','plans','backup_keys'],true) && $adminRole!=='owner') { http_response_code(403); exit('该页面仅主管理员可以访问'); }
 $groups=in_array($view,['dashboard','accounts','groups','group_bulk'],true) ? sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll() : [];
-$accounts=($view==='accounts'||$view==='dashboard') ? sql("SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,u.created_at,u.ai_enabled,u.allow_client_ai_key,u.ai_daily_limit,m.group_id,COALESCE(m.mobile_limit,0) AS mobile_limit,m.opening_plan_code,COALESCE(m.notes,'') AS notes,g.name AS group_name,(SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id LEFT JOIN phonehub_groups g ON g.id=m.group_id ORDER BY u.id DESC")->fetchAll() : [];
+$accounts=[];
+$accountTotal=0;$accountPage=1;$accountPages=1;
+$accountFilters=['q'=>'','group'=>'all','status'=>'all','expiry'=>'all','plan'=>'all','page'=>1];
+$accountSelect="SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,u.created_at,
+    u.ai_enabled,u.allow_client_ai_key,u.ai_daily_limit,m.group_id,COALESCE(m.mobile_limit,0) AS mobile_limit,
+    m.opening_plan_code,COALESCE(m.notes,'') AS notes,g.name AS group_name,
+    (SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s
+      WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices
+    FROM phonehub_users u
+    LEFT JOIN phonehub_user_meta m ON m.user_id=u.id
+    LEFT JOIN phonehub_groups g ON g.id=m.group_id";
+if ($view==='dashboard') {
+    $dashboardSummary=sql('SELECT COUNT(*) AS total,SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) AS enabled FROM phonehub_users')->fetch();
+    $total=(int)($dashboardSummary['total']??0);
+    $enabled=(int)($dashboardSummary['enabled']??0);
+    $devices=(int)sql('SELECT COUNT(*) FROM (
+      SELECT user_id,device_id FROM phonehub_sessions WHERE expires_at>UTC_TIMESTAMP()
+      GROUP BY user_id,device_id
+    ) live')->fetchColumn();
+    $accounts=sql($accountSelect.' ORDER BY u.id DESC LIMIT 8')->fetchAll();
+}
+if ($view==='accounts') {
+    $accountFilters=phonehub_account_filters($_GET);
+    $where=$accountFilters['where'];$params=$accountFilters['params'];
+    $accountTotal=(int)sql('SELECT COUNT(*) FROM phonehub_users u
+      LEFT JOIN phonehub_user_meta m ON m.user_id=u.id'.$where,$params)->fetchColumn();
+    $accountPages=max(1,(int)ceil($accountTotal/30));
+    $accountPage=min($accountFilters['page'],$accountPages);
+    $offset=($accountPage-1)*30;
+    $accounts=sql($accountSelect.$where.' ORDER BY u.id DESC LIMIT 30 OFFSET '.$offset,$params)->fetchAll();
+}
 $nav=[
 'dashboard'=>['概览','▦'],
 'accounts'=>['客户授权','♙'],
@@ -237,9 +267,7 @@ $nav=[
 <div class="sidebar-footer"><span class="status-dot"></span> 运行中 <small>v<?=h(app_version())?></small></div></aside>
 <div class="main"><header class="topbar"><div><span class="crumb">PhoneHub /</span> <?=h($nav[$view][0])?></div><div class="top-right"><span class="avatar"><?=h(substr((string)($_SESSION['admin_user']??'A'),0,1))?></span><?=h($_SESSION['admin_user']??'管理员')?><button class="text-button" data-action="logout">退出</button></div></header>
 <main id="content" class="content">
-<?php if ($view==='dashboard'):
-    $total=count($accounts);$enabled=count(array_filter($accounts,fn($u)=>(int)$u['enabled']===1));$devices=array_sum(array_map(fn($u)=>(int)$u['active_devices'],$accounts));
-?>
+<?php if ($view==='dashboard'): ?>
 <div class="page-title"><div><h1>运营概览</h1><p>客户授权与电脑会话状态一览</p></div><a class="btn primary" href="?view=accounts">+ 新增授权</a></div>
 <div class="stats"><div class="stat"><span>客户总数</span><strong><?=$total?></strong><small>全部授权账号</small></div><div class="stat"><span>正常授权</span><strong><?=$enabled?></strong><small>账号启用中（不含到期校验）</small></div><div class="stat"><span>电脑名额占用</span><strong><?=$devices?></strong><small>未过期的设备会话</small></div><div class="stat"><span>客户分组</span><strong><?=count($groups)?></strong><small>支持自主分组管理</small></div></div>
 <div class="card"><div class="card-head"><h2>最近客户</h2><a href="?view=accounts">查看全部</a></div><div class="table-scroll"><table><thead><tr><th>客户账号</th><th>分组</th><th>电脑名额</th><th>授权期限</th><th>状态</th></tr></thead><tbody><?php foreach (array_slice($accounts,0,8) as $a): ?><tr><td><b><?=h($a['username'])?></b></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td></tr><?php endforeach ?></tbody></table></div></div>
@@ -262,14 +290,49 @@ $nav=[
 <div class="field span2"><label>客户端自带 API Key</label><label class="check-row"><input type="checkbox" name="allow_client_ai_key"> 允许该客户自带 Key（还需主管理员开启全局开关）</label></div>
 <div class="field span2"><label>内部备注</label><input name="notes" maxlength="500" placeholder="可填写客户联系方式、购买产品等"></div>
 </div><div class="editor-actions"><button class="btn primary">保存授权</button></div></form></div>
-<div class="card"><div class="card-head"><h2>全部客户</h2><span class="count"><?=count($accounts)?> 个账号</span></div>
+<div class="card">
+<form method="get" action="index.php" class="account-filter-form" aria-label="筛选客户">
+<input type="hidden" name="view" value="accounts">
+<div class="field"><label for="account-filter-q">客户账号</label><input id="account-filter-q" name="q" maxlength="64" value="<?=h($accountFilters['q'])?>" placeholder="按账号搜索"></div>
+<div class="field"><label for="account-filter-group">分组</label><select id="account-filter-group" name="group">
+<option value="all">全部分组</option><option value="none" <?=$accountFilters['group']==='none'?'selected':''?>>未分组</option>
+<?php foreach($groups as $g): ?><option value="<?=(int)$g['id']?>" <?=$accountFilters['group']===(string)$g['id']?'selected':''?>><?=h($g['name'])?></option><?php endforeach ?>
+</select></div>
+<div class="field"><label for="account-filter-status">状态</label><select id="account-filter-status" name="status">
+<?php foreach(['all'=>'全部状态','enabled'=>'已启用','disabled'=>'已停用'] as $value=>$label): ?><option value="<?=h($value)?>" <?=$accountFilters['status']===$value?'selected':''?>><?=h($label)?></option><?php endforeach ?>
+</select></div>
+<div class="field"><label for="account-filter-expiry">到期情况</label><select id="account-filter-expiry" name="expiry">
+<?php foreach(['all'=>'全部期限','expired'=>'已过期','due7'=>'未来 7 天到期','due30'=>'未来 30 天到期','permanent'=>'永久','valid'=>'未过期（含永久）'] as $value=>$label): ?><option value="<?=h($value)?>" <?=$accountFilters['expiry']===$value?'selected':''?>><?=h($label)?></option><?php endforeach ?>
+</select></div>
+<div class="field"><label for="account-filter-plan">开户套餐</label><select id="account-filter-plan" name="plan">
+<option value="all">全部套餐</option><option value="legacy" <?=$accountFilters['plan']==='legacy'?'selected':''?>>旧授权（无套餐）</option><option value="custom" <?=$accountFilters['plan']==='custom'?'selected':''?>>自定义授权</option>
+<?php foreach(phonehub_opening_plans(false) as $code=>$p): ?><option value="<?=h($code)?>" <?=$accountFilters['plan']===$code?'selected':''?>><?=h($p['label'])?><?=$p['enabled']?'':'（已停用）'?></option><?php endforeach ?>
+</select></div>
+<div class="account-filter-actions"><button class="btn primary" type="submit">查询</button><a class="btn" href="?view=accounts">重置</a></div>
+</form></div>
+<?php
+$accountPageLink=static function(int $page) use($accountFilters): string {
+    return 'index.php?'.http_build_query(['view'=>'accounts','q'=>$accountFilters['q'],
+      'group'=>$accountFilters['group'],'status'=>$accountFilters['status'],
+      'expiry'=>$accountFilters['expiry'],'plan'=>$accountFilters['plan'],'page'=>$page],
+      '', '&', PHP_QUERY_RFC3986);
+};
+?>
+<div class="card"><div class="card-head"><h2>客户列表</h2><span class="count">匹配 <?=$accountTotal?> 位 · 第 <?=$accountPage?> / <?=$accountPages?> 页（每页 30 位）</span></div>
 <div class="table-scroll"><table><thead><tr><th>客户账号</th><th>开户套餐</th><th>分组</th><th>电脑名额</th><th>手机额度</th><th>授权截止（北京时间）</th><th>平台权限</th><th>状态</th><th>操作</th></tr></thead><tbody>
 <?php foreach($accounts as $a): $payload=['id'=>(int)$a['id'],'username'=>$a['username'],'group_id'=>(int)$a['group_id'],'device_limit'=>(int)$a['device_limit'],'mobile_limit'=>(int)$a['mobile_limit'],'license_until'=>utc_to_input($a['license_until']),'entitlements'=>json_decode((string)$a['entitlements'],true)?:[],'notes'=>$a['notes'],'enabled'=>(bool)$a['enabled'],'ai_enabled'=>(bool)$a['ai_enabled'],'allow_client_ai_key'=>(bool)$a['allow_client_ai_key'],'ai_daily_limit'=>(int)$a['ai_daily_limit']]; ?>
 <tr><td><b><?=h($a['username'])?></b></td><td><?=h(phonehub_plan_label($a['opening_plan_code']??null))?></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?= (int)$a['mobile_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><?=h(implode('、',array_map(static fn($x)=>['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP','skill'=>'Skill','mcp-codex'=>'Codex MCP','mcp-harness'=>'DeepSeek Harness MCP'][$x]??$x,json_decode((string)$a['entitlements'],true)?:[])))?></td>
 <td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td><td class="actions">
 <button class="small-link" data-edit="<?=h(json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP|JSON_HEX_TAG))?>">编辑</button>
 <button class="small-link" data-action="reset-account-password" data-id="<?=(int)$a['id']?>">重置密码</button>
-<button class="small-link" data-action="revoke-account" data-id="<?=(int)$a['id']?>">踢下线</button></td></tr><?php endforeach ?></tbody></table></div></div>
+<button class="small-link" data-action="revoke-account" data-id="<?=(int)$a['id']?>">踢下线</button></td></tr><?php endforeach ?>
+<?php if (!$accounts): ?><tr><td colspan="9" class="empty-result">没有符合条件的客户，请调整筛选条件。</td></tr><?php endif ?>
+</tbody></table></div>
+<nav class="account-pagination" aria-label="客户列表分页">
+<?php if($accountPage>1): ?><a class="btn" href="<?=h($accountPageLink($accountPage-1))?>">上一页</a><?php endif ?>
+<span>第 <?=$accountPage?> 页 / 共 <?=$accountPages?> 页</span>
+<?php if($accountPage<$accountPages): ?><a class="btn" href="<?=h($accountPageLink($accountPage+1))?>">下一页</a><?php endif ?>
+</nav></div>
 <?php elseif($view==='groups'): ?>
 <div class="page-title"><div><h1>客户分组</h1><p>将代理商、企业或购买渠道分组管理</p></div><a class="btn primary" href="?view=group_bulk">统一修改分组授权</a></div><div class="card"><div class="card-head"><h2>新建分组</h2></div><form class="inline-form" data-ajax="group_create"><input type="hidden" name="action" value="group_create"><input name="name" placeholder="例如：代理商A / 企业客户" maxlength="100" required><button class="btn primary">创建分组</button></form></div>
 <div class="card"><div class="card-head"><h2>已创建分组</h2></div><div class="table-scroll"><table><thead><tr><th>分组名称</th><th>客户数</th><th>操作</th></tr></thead><tbody><?php foreach($groups as $g): ?><tr><td><b><?=h($g['name'])?></b></td><td><?=(int)$g['users']?></td><td><button class="small-link" data-action="delete-group" data-id="<?=(int)$g['id']?>">删除</button></td></tr><?php endforeach ?></tbody></table></div></div>
@@ -288,6 +351,7 @@ $nav=[
     <button class="btn" type="button" id="copy-diagnostic" data-action="copy-diagnostic" disabled>复制完整报告</button>
     <span id="diagnostic-status" class="muted" role="status">尚未生成</span>
   </div>
+  <div id="diagnostic-checks" class="diagnostic-checks" aria-live="polite" hidden></div>
   <label class="diagnostic-label" for="diagnostic-report-text">诊断内容（纯文本，可手动复制）</label>
   <textarea id="diagnostic-report-text" class="diagnostic-report" readonly rows="16" spellcheck="false" placeholder="点击「生成诊断报告」后显示结果"></textarea>
   <p class="footnote">如果后台直接 HTTP 500 无法打开，此页面也可能不可用。请在宝塔 PHP 错误日志中查找 Fatal error，并先遮盖绝对路径、账号、密钥及个人信息后再发送。</p>

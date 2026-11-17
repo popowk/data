@@ -46,6 +46,24 @@ if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
     $openingPlans['standard']['mobile_limit']!==5 || $openingPlans['team']['device_limit']!==10 ||
     phonehub_plan_label(null)!=='原有授权')
     throw new RuntimeException('opening plan presets invalid');
+// Parameterized filters: input cannot turn into SQL clauses or LIKE wildcards.
+$filter=phonehub_account_filters([
+  'q'=>'ci_test_01','group'=>'none','status'=>'enabled',
+  'expiry'=>'due7','plan'=>'personal','page'=>'999999999'
+]);
+if ($filter['page']!==1 || $filter['group']!=='none' ||
+    $filter['params']!==['%ci!_test!_01%','personal'] ||
+    !str_contains($filter['where'],"LIKE ? ESCAPE '!'") ||
+    !str_contains($filter['where'],'m.group_id IS NULL') ||
+    !str_contains($filter['where'],'m.opening_plan_code=?') ||
+    !str_contains($filter['where'],'INTERVAL 7 DAY'))
+    throw new RuntimeException('safe account filtering invalid');
+$filter=phonehub_account_filters([
+  'q'=>['bad'],'group'=>'0 OR 1=1','status'=>'bad',
+  'expiry'=>'bad','plan'=>'untrusted!','page'=>'-1'
+]);
+if ($filter['params']!==[] || $filter['where']!=='' || $filter['page']!==1)
+    throw new RuntimeException('invalid account filter accepted');
 // Regression: editing/stopping an opening template must not mutate an existing
 // customer's stored quotas or opening label. Disabled plans must not be offered
 // to newly created customers, but historical template lookup must still work.

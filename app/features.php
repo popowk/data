@@ -382,9 +382,31 @@ function plan_admin_action(string $action): never {
 }
 function plan_admin_view(): void {
     require_owner();
-    $plans=sql('SELECT p.*, (SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.opening_plan_code=p.plan_code) AS users FROM phonehub_plan_templates p ORDER BY p.sort_order,p.id')->fetchAll();
+    $plans=sql('SELECT p.*,COALESCE(a.users,0) AS users,
+        COALESCE(a.actual_computers,0) AS actual_computers,
+        COALESCE(a.actual_mobiles,0) AS actual_mobiles
+        FROM phonehub_plan_templates p LEFT JOIN (
+          SELECT m.opening_plan_code,COUNT(*) AS users,
+                 SUM(u.device_limit) AS actual_computers,SUM(m.mobile_limit) AS actual_mobiles
+          FROM phonehub_user_meta m JOIN phonehub_users u ON u.id=m.user_id
+          WHERE m.opening_plan_code IS NOT NULL
+          GROUP BY m.opening_plan_code
+        ) a ON a.opening_plan_code=p.plan_code
+        ORDER BY p.sort_order,p.id')->fetchAll();
+    $historical=sql("SELECT
+      SUM(CASE WHEN opening_plan_code IS NULL THEN 1 ELSE 0 END) AS legacy,
+      SUM(CASE WHEN opening_plan_code='custom' THEN 1 ELSE 0 END) AS custom
+      FROM phonehub_user_meta")->fetch();
+    $activePlans=count(array_filter($plans,static fn($p)=>(int)$p['enabled']===1));
+    $assignedAccounts=array_sum(array_map(static fn($p)=>(int)$p['users'],$plans));
     ?>
     <div class="page-title"><div><h1>套餐管理</h1><p>用于新客户开户的电脑与手机额度；不包含价格、订单或支付</p></div><button class="btn primary" type="button" data-action="new-plan">+ 新增套餐</button></div>
+    <div class="stats plan-stats">
+      <div class="stat"><span>已启用模板</span><strong><?=$activePlans?></strong><small>共 <?=count($plans)?> 个模板</small></div>
+      <div class="stat"><span>模板开户客户</span><strong><?=$assignedAccounts?></strong><small>仅统计目前仍可识别的模板代码</small></div>
+      <div class="stat"><span>自定义开户</span><strong><?=(int)($historical['custom']??0)?></strong><small>客户当前额度独立管理</small></div>
+      <div class="stat"><span>原有授权</span><strong><?=(int)($historical['legacy']??0)?></strong><small>历史创建且没有套餐标签</small></div>
+    </div>
     <div class="card editor" id="plan-editor" hidden>
       <div class="card-head"><h2 id="plan-editor-title">新增套餐</h2><button class="text-button" type="button" data-action="close-plan-editor">关闭</button></div>
       <form data-ajax="plan_save"><input type="hidden" name="action" value="plan_save"><input type="hidden" name="id" value="0">
@@ -399,19 +421,22 @@ function plan_admin_view(): void {
       </form>
     </div>
     <div class="card"><div class="card-head"><h2>开户套餐</h2><span class="count"><?=count($plans)?> 个</span></div>
-      <div class="table-scroll"><table><thead><tr><th>名称</th><th>电脑</th><th>手机</th><th>已开户客户</th><th>排序</th><th>状态</th><th>操作</th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>名称</th><th>模板电脑</th><th>模板手机</th><th>已开户客户</th><th>历史客户当前总额度</th><th>排序</th><th>状态</th><th>操作</th></tr></thead><tbody>
       <?php foreach($plans as $p):
         $edit=['id'=>(int)$p['id'],'name'=>$p['name'],'device_limit'=>(int)$p['device_limit'],
            'mobile_limit'=>(int)$p['mobile_limit'],'sort_order'=>(int)$p['sort_order']];
       ?>
         <tr><td><b><?=h($p['name'])?></b><small class="device-subline"><?=h($p['plan_code'])?></small></td>
-          <td><?=(int)$p['device_limit']?></td><td><?=(int)$p['mobile_limit']?></td><td><?=(int)$p['users']?></td><td><?=(int)$p['sort_order']?></td>
+          <td><?=(int)$p['device_limit']?></td><td><?=(int)$p['mobile_limit']?></td>
+          <td><a class="small-link" href="?view=accounts&amp;plan=<?=rawurlencode($p['plan_code'])?>"><?=(int)$p['users']?> 位</a></td>
+          <td><?=(int)$p['actual_computers']?> 台电脑 / <?=(int)$p['actual_mobiles']?> 部手机</td><td><?=(int)$p['sort_order']?></td>
           <td><span class="pill <?=(int)$p['enabled']?'ok':'off'?>"><?=(int)$p['enabled']?'启用':'停用'?></span></td>
           <td><button class="small-link" type="button" data-plan-edit="<?=h(json_encode($edit,JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_QUOT|JSON_HEX_APOS))?>">编辑</button>
           <button class="small-link <?=(int)$p['enabled']?'danger-action':''?>" type="button" data-action="plan-toggle" data-id="<?=(int)$p['id']?>"><?=(int)$p['enabled']?'停用':'启用'?></button></td>
         </tr>
       <?php endforeach ?></tbody></table></div>
     </div>
+    <p class="footnote">“模板电脑/手机”是新开户采用的额度；“历史客户当前总额度”汇总实际客户名额，修改或停用模板不会改变历史客户。点击开户客户数可查看对应客户。</p>
     <?php
 }
 

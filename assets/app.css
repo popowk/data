@@ -117,3 +117,22 @@ input[readonly]{background:#f7f8fb;color:#9099a6}
 #opening-plan-field select{min-height:43px}
 #opening-plan-field .footnote{display:block;margin-top:5px;line-height:1.6}
 @media(max-width:640px){.diagnostic-actions{align-items:stretch;flex-direction:column}.diagnostic-actions .btn{width:100%}.diagnostic-report{min-height:270px}}
+
+/* Customer search, pagination and diagnostic checks. */
+.account-filter-form{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:14px;align-items:end}
+.account-filter-form .field{margin-bottom:0}.account-filter-form .field label{display:block}
+.account-filter-form input,.account-filter-form select{min-height:42px;width:100%;padding:10px 12px;border:1px solid #dce3ef;border-radius:8px;background:#fff;color:#263c55}
+.account-filter-actions{display:flex;align-items:center;gap:8px;grid-column:1/-1}
+.account-pagination{display:flex;align-items:center;justify-content:flex-end;gap:15px;padding:19px 0 0;color:#586983;font-size:13px}
+.empty-result{text-align:center;white-space:normal;color:#7d8ba2;padding:35px}
+.plan-stats{margin-bottom:22px}
+.diagnostic-checks{border:1px solid #e3e9f3;border-radius:11px;padding:18px;margin:12px 0 22px;background:#f9fbfe}
+.diagnostic-checks[hidden]{display:none}.diagnostic-overview{margin:0 0 18px;color:#50627c;font-weight:600}
+.diagnostic-check-group{margin:14px 0}.diagnostic-check-group h3{font-size:14px;color:#344966;margin:0 0 9px}
+.diagnostic-check-group ul{margin:0;padding:0;list-style:none;display:grid;gap:8px}
+.diagnostic-check-group li{border:1px solid #e4eaf3;border-radius:8px;background:white;padding:10px 12px;display:grid;gap:3px;white-space:normal}
+.diagnostic-check-group li strong{font-size:13px}.diagnostic-check-group li span{font-size:12px;color:#5d6e86}
+.diagnostic-check-group li small{color:#55769e;font-size:12px;line-height:1.7}
+.diagnostic-check-group.error h3{color:#b44343}.diagnostic-check-group.warning h3{color:#a77916}
+@media(max-width:1100px){.account-filter-form{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:650px){.account-filter-form{grid-template-columns:repeat(2,minmax(0,1fr))}.account-pagination{justify-content:center}}

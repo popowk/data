@@ -306,7 +306,7 @@ function update_diagnostic_report(): array {
     $lines[]='说明：报告不包含原始 PHP 错误日志。如仍出现 HTTP 500，请另提供对应时间的 PHP Fatal error 并先遮盖绝对路径、账户及密钥。';
     $report=implode("\n",$lines);
     if(strlen($report)>8000) $report=substr($report,0,7900)."\n[部分诊断信息已截断]";
-    return ['report'=>$report,'summary'=>$health['summary']];
+    return ['report'=>$report,'summary'=>$health['summary'],'checks'=>$health['checks']];
 }
 function update_reset_opcache(): ?bool {
     if (!function_exists('opcache_reset')) return null;

@@ -346,6 +346,49 @@ function require_owner(): void {
     require_admin();
     if (admin_role()!=='owner') throw new RuntimeException('仅主管理员可以执行此操作');
 }
+/**
+ * Build bounded, parameterized customer list filters. No untrusted GET field
+ * may enter SQL syntax or LIMIT/OFFSET.
+ */
+function phonehub_account_filters(array $query): array {
+    $field=static fn(string $name): string =>
+        is_string($query[$name]??null)?trim($query[$name]):'';
+    $q=$field('q');
+    if (strlen($q)>64 || ($q!=='' && !preg_match('/^[A-Za-z0-9_-]+$/D',$q))) $q='';
+    $group=$field('group');
+    if ($group!=='none' && (!ctype_digit($group) || strlen($group)>10 || (int)$group<1 || (int)$group>2147483647))
+        $group='all';
+    $status=$field('status');
+    if (!in_array($status,['enabled','disabled'],true)) $status='all';
+    $expiry=$field('expiry');
+    if (!in_array($expiry,['expired','due7','due30','permanent','valid'],true)) $expiry='all';
+    $plan=$field('plan');
+    if ($plan!=='legacy' && !preg_match('/^[A-Za-z0-9_-]{1,24}$/D',$plan)) $plan='all';
+    $page=$field('page');
+    $page=(ctype_digit($page) && strlen($page)<=6 && (int)$page>0)?min((int)$page,100000):1;
+    $conditions=[];$params=[];
+    if ($q!=='') {
+        // '_' is permitted in account names; it must not become LIKE wildcard.
+        $literal=str_replace(['!','%','_'],['!!','!%','!_'],$q);
+        $conditions[]="u.username LIKE ? ESCAPE '!'";
+        $params[]='%'.$literal.'%';
+    }
+    if ($group==='none') $conditions[]='m.group_id IS NULL';
+    elseif ($group!=='all') {$conditions[]='m.group_id=?';$params[]=(int)$group;}
+    if ($status==='enabled') $conditions[]='u.enabled=1';
+    elseif ($status==='disabled') $conditions[]='u.enabled=0';
+    if ($expiry==='expired') $conditions[]='u.license_until < UTC_TIMESTAMP()';
+    elseif ($expiry==='permanent') $conditions[]='u.license_until IS NULL';
+    elseif ($expiry==='valid') $conditions[]='(u.license_until IS NULL OR u.license_until >= UTC_TIMESTAMP())';
+    elseif ($expiry==='due7' || $expiry==='due30') {
+        $conditions[]='u.license_until >= UTC_TIMESTAMP() AND u.license_until <= DATE_ADD(UTC_TIMESTAMP(), INTERVAL '.($expiry==='due7'?7:30).' DAY)';
+    }
+    if ($plan==='legacy') $conditions[]='m.opening_plan_code IS NULL';
+    elseif ($plan!=='all') {$conditions[]='m.opening_plan_code=?';$params[]=$plan;}
+    return ['where'=>$conditions?' WHERE '.implode(' AND ',$conditions):'',
+        'params'=>$params,'q'=>$q,'group'=>$group,'status'=>$status,
+        'expiry'=>$expiry,'plan'=>$plan,'page'=>$page];
+}
 function phonehub_opening_plans(bool $activeOnly=true,?PDO $connection=null): array {
     // A supplied connection supports pre-install migration tests without
     // requiring storage/config.php or modifying production configuration.
