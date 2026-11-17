@@ -1,7 +1,9 @@
 <?php
 declare(strict_types=1);
 require __DIR__.'/app/core.php';
-require_once __DIR__.'/app/accounts.php';
+// Keep login and self-update available if a legacy updater missed accounts.php.
+if (is_file(__DIR__.'/app/accounts.php'))
+    require_once __DIR__.'/app/accounts.php';
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 if (!installed()) { header('Location: install.php'); exit; }
@@ -115,11 +117,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             json_response(['ok'=>true,'message'=>'会话已撤销']);
         }
         if ($action==='account_password') {
+            if (!function_exists('account_reset_password'))
+                throw new RuntimeException('客户管理模块缺失；请在系统更新中补齐 app/accounts.php');
             $result=account_reset_password((int)($_POST['id']??0));
             json_response(['ok'=>true,'message'=>'客户密码已重置，原电脑会话已撤销','username'=>$result['username'],'password'=>$result['password']]);
         }
         if (in_array($action,['signing_generate','signing_activate'],true)) {
             require_owner();
+            if (!is_file(__DIR__.'/app/signing_admin.php'))
+                throw new RuntimeException('签名管理模块缺失；请先在系统更新中补齐必要文件');
             require_once __DIR__.'/app/signing_admin.php';
             if ($action==='signing_generate')
                 json_response(['ok'=>true]+signing_generate_and_publish(trim((string)($_POST['github_token']??''))));
