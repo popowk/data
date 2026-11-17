@@ -37,6 +37,10 @@ foreach(['ai_enabled','allow_client_ai_key','ai_daily_limit'] as $column) if(!in
 $metaColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_user_meta'")->fetchAll(PDO::FETCH_COLUMN);
 if (!in_array('opening_plan_code',$metaColumns,true))
     throw new RuntimeException('opening plan migration missing');
+$planTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_plan_templates'")->fetchColumn();
+if($planTable!==1) throw new RuntimeException('plan migration table missing');
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==10)
+    throw new RuntimeException('plan migration version incorrect');
 $openingPlans=phonehub_opening_plans();
 if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
     $openingPlans['standard']['mobile_limit']!==5 || $openingPlans['team']['device_limit']!==10 ||
