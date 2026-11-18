@@ -342,47 +342,24 @@ api() {
 before=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$before" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] is False and "绑定" in j["error"],j'
 bound=$(api mobile_bind "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"display_name\":\"CI Android\",\"phone_model\":\"Test Galaxy\",\"phone_number\":\"+8613912345678\",\"imei\":\"490154203237518\"}")
-TEST_RESPONSE="$bound" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and j["imei_bound"],j'
+TEST_RESPONSE="$bound" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and "imei_bound" not in j and "phone_number_bound" not in j,j'
+# New binding and repeated legacy heartbeat must ignore sensitive fields.
 php -r '
-require "app/core.php";require "app/devices.php";
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
-$row=$p->query("SELECT imei_encrypted,phone_number_encrypted,phone_number_hash,phone_model FROM phonehub_mobile_devices WHERE phone_id=REPEAT(CHAR(98),64) LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-if(!$row || $row["phone_model"]!=="Test Galaxy" || $row["imei_encrypted"]==="490154203237518" ||
-    device_decrypt($row["imei_encrypted"])!=="490154203237518" ||
-    device_decrypt($row["phone_number_encrypted"])!=="+8613912345678" ||
-    $row["phone_number_hash"]!==device_phone_hash("+8613912345678")) exit(3);
+$r=$p->query("SELECT imei_hash,imei_encrypted,phone_number_hash,phone_number_encrypted,phone_model FROM phonehub_mobile_devices WHERE phone_id=REPEAT(CHAR(98),64) LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+if (!$r || $r["phone_model"]!=="Test Galaxy" || $r["imei_hash"]!==null || $r["imei_encrypted"]!==null ||
+    $r["phone_number_hash"]!==null || $r["phone_number_encrypted"]!==null) exit(3);
 '
-
-
-# A real defect: old phone records may have no identity fields, and older
-# mobile_heartbeat ignored explicitly supplied identity metadata. Ensure it
-# remains empty when no fields are sent, then can be enriched safely.
+legacyIdentityHeartbeat=$(api mobile_heartbeat "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"imei\":\"490154203237518\",\"phone_number\":\"13912345678\"}")
+TEST_RESPONSE="$legacyIdentityHeartbeat" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and "imei_bound" not in j and "phone_number_bound" not in j,j'
+legacyIdentityCheck=$(api mobile_check "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"imei\":\"490154203237520\"}")
+TEST_RESPONSE="$legacyIdentityCheck" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and "imei_bound" not in j,j'
 php -r '
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
-$p->prepare("UPDATE phonehub_mobile_devices SET imei_hash=NULL,imei_encrypted=NULL,phone_number_hash=NULL,phone_number_encrypted=NULL,phone_model=? WHERE phone_id=?")
-  ->execute(["",str_repeat("b",64)]);
-'
-legacyHeartbeatWithoutIdentity=$(api mobile_heartbeat "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\"}")
-TEST_RESPONSE="$legacyHeartbeatWithoutIdentity" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and not j["imei_stored"] and not j["phone_number_bound"],j'
-identityHeartbeat=$(api mobile_heartbeat "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"imei\":\"490154203237518\",\"phone_number\":\"13912345678\",\"phone_model\":\"Test Galaxy\"}")
-TEST_RESPONSE="$identityHeartbeat" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and j["imei_bound"] and j["imei_stored"] and j["phone_number_bound"] and j["phone_model_received"],j'
-identityList=$(api mobile_list "{\"device_id\":\"$DEVICE\"}")
-TEST_RESPONSE="$identityList" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["devices"][0]["imei_stored"] and j["devices"][0]["phone_number_bound"],j'
-identityMismatch=$(api mobile_heartbeat "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"phone_number\":\"13912345679\"}")
-TEST_RESPONSE="$identityMismatch" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="PHONE_IDENTITY_MISMATCH",j'
-identityMalformed=$(api mobile_heartbeat "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"phone_number\":123456}")
-TEST_RESPONSE="$identityMalformed" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="INVALID_MOBILE_IDENTITY",j'
-php -r '
-require "app/core.php";require "app/devices.php";
-$cfg=require "storage/config.php";
-$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
-$row=$p->query("SELECT imei_encrypted,phone_number_encrypted,phone_number_hash,phone_model FROM phonehub_mobile_devices WHERE phone_id=REPEAT(CHAR(98),64) LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-if (!$row || device_decrypt($row["imei_encrypted"])!=="490154203237518"
- || device_decrypt($row["phone_number_encrypted"])!=="+8613912345678"
- || $row["phone_number_hash"]!==device_phone_hash("+8613912345678")
- || $row["phone_model"]!=="Test Galaxy") exit(3);
+$r=$p->query("SELECT imei_hash,imei_encrypted,phone_number_hash,phone_number_encrypted FROM phonehub_mobile_devices WHERE phone_id=REPEAT(CHAR(98),64) LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+if (!$r || array_filter(array_values($r),static fn($v)=>$v!==null)) exit(4);
 '
 
 after=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
@@ -398,11 +375,9 @@ TEST_RESPONSE="$batchNoPhone" python3 -c 'import os,json; j=json.loads(os.enviro
 unknownPhone=$(printf 'd%.0s' {1..64})
 batchUnknown=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$unknownPhone\"}],\"package_versions\":{\"douyin\":0}}}")
 TEST_RESPONSE="$batchUnknown" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and not j["batch"]["phones"][0]["bound"] and j["batch"]["phones"][0]["status"]=="not_bound" and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
-batchMismatch=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\",\"imei\":\"490154203237520\"}],\"package_versions\":{\"douyin\":0}}}")
-TEST_RESPONSE="$batchMismatch" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); p=j["batch"]["phones"][0]; assert j["ok"] and not p["bound"] and p["status"]=="identity_mismatch" and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
-# A separately blacklisted IMEI takes precedence over identity mismatch.
-batchBannedImei=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\",\"imei\":\"490154203237519\"}],\"package_versions\":{\"douyin\":0}}}")
-TEST_RESPONSE="$batchBannedImei" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); p=j["batch"]["phones"][0]; assert j["ok"] and not p["bound"] and p["status"]=="blacklisted" and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
+# Retired identity fields in old batch payloads are ignored.
+legacyBatch=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\",\"imei\":\"490154203237520\",\"phone_number\":\"13912345679\"}],\"package_versions\":{\"douyin\":0}}}")
+TEST_RESPONSE="$legacyBatch" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); p=j["batch"]["phones"][0]; assert j["ok"] and p["bound"] and p["status"]=="bound" and "imei_bound" not in p,j'
 batchDuplicate=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\"},{\"phone_id\":\"$PHONE\"}]}}")
 TEST_RESPONSE="$batchDuplicate" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="DUPLICATE_PHONE_ID",j'
 batchBadVersion=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[],\"package_versions\":{\"douyin\":\"not-an-int\"}}}")
@@ -411,26 +386,27 @@ tooMany=$(python3 -c 'import json; print(json.dumps({"device_id":"a"*64,"batch":
 batchTooMany=$(api client_heartbeat "$tooMany")
 TEST_RESPONSE="$batchTooMany" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="HEARTBEAT_BATCH_LIMIT",j'
 listed=$(api mobile_list "{\"device_id\":\"$DEVICE\"}")
-TEST_RESPONSE="$listed" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["active_count"]==1 and j["devices"][0]["imei_bound"],j'
-# A number-only blacklist must reject bound devices without blocking other identifiers.
+TEST_RESPONSE="$listed" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["active_count"]==1 and "imei_bound" not in j["devices"][0],j'
+# Historical hashed bans on existing rows continue to work without
+# exposing old IMEI/number creation APIs.
 php -r '
-require "app/core.php"; require "app/devices.php";
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
-$hash=device_phone_hash("+8613912345678");
-$p->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES(?,?,?,1,0)")->execute(["phone_hash",$hash,"CI number block"]);
+$hash=hash("sha256","historical-row-fixture");
+$p->prepare("UPDATE phonehub_mobile_devices SET phone_number_hash=? WHERE phone_id=?")
+  ->execute([$hash,str_repeat("b",64)]);
+$p->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES(?,?,?,1,0)")
+  ->execute(["phone_hash",$hash,"CI historical block"]);
 '
 numberBlocked=$(api mobile_check "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\"}")
 TEST_RESPONSE="$numberBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="DEVICE_BLACKLISTED",j'
-
 batchBlocked=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\"}],\"package_versions\":{\"douyin\":0}}}")
-TEST_RESPONSE="$batchBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); p=j["batch"]["phones"][0]; assert j["ok"] and not p["bound"] and p["status"]=="blacklisted" and not any(x["download_allowed"] for x in j["batch"]["packages"]),j'
+TEST_RESPONSE="$batchBlocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); p=j["batch"]["phones"][0]; assert j["ok"] and not p["bound"] and p["status"]=="blacklisted",j'
 php -r '
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
-$p->exec("UPDATE phonehub_mobile_blacklist SET enabled=0 WHERE identifier_type=\x27phone_hash\x27 AND reason=\x27CI number block\x27");
+$p->prepare("UPDATE phonehub_mobile_blacklist SET enabled=0 WHERE identifier_type=? AND reason=?")->execute(["phone_hash","CI historical block"]);
 '
-
 # Lowering a mobile quota must prevent excess, newer devices from passing mobile_check.
 php -r '
 $cfg=require "storage/config.php";
@@ -511,15 +487,12 @@ rangeCode=$(curl -sS -w '%{http_code}' -X POST "$BASE""update_download" \
   --data "{\"device_id\":\"$DEVICE\",\"release_id\":$releaseId}")
 [ "$rangeCode" = 206 ] && [ "$(wc -c </tmp/phonehub-ci-range.bin)" = 10 ]
 rm -f /tmp/phonehub-ci-update.zip /tmp/phonehub-ci-range.bin
-# Blacklist the keyed IMEI digest. Raw IMEI is never stored in the blacklist.
+# New blacklist action uses only phone fingerprint, not IMEI/SIM number.
 php -r '
-define("APP_STORE",getcwd()."/storage");
-require "app/mobile.php";
 $cfg=require "storage/config.php";
 $pdo=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
-$hash=mobile_imei_hash("490154203237518");
 $s=$pdo->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES(?,?,?,1,0)");
-$s->execute(["imei_hash",$hash,"CI blacklist"]);
+$s->execute(["phone_id",str_repeat("b",64),"CI fingerprint blacklist"]);
 '
 blocked=$(api mobile_check "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\"}")
 TEST_RESPONSE="$blocked" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="DEVICE_BLACKLISTED",j'
