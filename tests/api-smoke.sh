@@ -12,6 +12,20 @@ for i in $(seq 1 40); do
   if curl -fsS 'http://127.0.0.1:18765/api/phonehub.php?action=health' >/dev/null 2>&1; then break; fi
   sleep 0.5
 done
+# Public startup discovery is GET-only, authenticates no customer,
+# and caches only the ZIP URL metadata (not the actual archive).
+scrcpyBody=$(mktemp);scrcpyHeaders=$(mktemp)
+scrcpyPath='http://127.0.0.1:18765/api/phonehub.php?action=scrcpy_download'
+curl -fsS -D "$scrcpyHeaders" "$scrcpyPath" -o "$scrcpyBody"
+TEST_BODY="$scrcpyBody" python3 -c 'import os,json;j=json.load(open(os.environ["TEST_BODY"]));assert j=={"ok":True,"download_url":"https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip","cache_ttl_seconds":300},j'
+grep -qi '^cache-control: public, max-age=300, must-revalidate' "$scrcpyHeaders"
+etag=$(awk 'tolower($1)=="etag:" {gsub(/\\r/,"",$2);print $2}' "$scrcpyHeaders")
+test -n "$etag"
+unchanged=$(curl -sS -H "If-None-Match: $etag" -o "$scrcpyBody" -w '%{http_code}' "$scrcpyPath")
+test "$unchanged" = 304 || { echo "scrcpy conditional GET did not return 304 ($unchanged)" >&2;exit 1; }
+methodRejected=$(curl -sS -X POST -o "$scrcpyBody" -w '%{http_code}' "$scrcpyPath")
+test "$methodRejected" = 405 || { echo "scrcpy POST unexpectedly allowed" >&2;exit 1; }
+rm -f "$scrcpyBody" "$scrcpyHeaders"
 # Render the PHP management entry point and authenticated update page. This catches
 # the class of post-update 500 errors caused by a missing app/accounts.php.
 adminHtml=$(mktemp)
@@ -57,6 +71,32 @@ grep -q '服务端 AI 中转' "$adminHtml"
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases' -o "$adminHtml"
 grep -q '操作包管理中心' "$adminHtml"
 grep -q 'data-ajax="package_publish"' "$adminHtml"
+grep -q 'id="scrcpy-download-settings"' "$adminHtml"
+grep -q 'name="download_url"' "$adminHtml"
+grep -q 'api/phonehub.php?action=scrcpy_download' "$adminHtml"
+# Changing the address updates the next server GET and its ETag;
+# clients already caching a response may retain it for at most 300 seconds.
+scrcpyBeforeHeaders=$(mktemp);scrcpyAfterHeaders=$(mktemp);scrcpyBody=$(mktemp)
+curl -fsS -D "$scrcpyBeforeHeaders" 'http://127.0.0.1:18765/api/phonehub.php?action=scrcpy_download' -o "$scrcpyBody"
+scrcpyBeforeEtag=$(awk 'tolower($1)=="etag:" {gsub(/\\r/,"",$2);print $2}' "$scrcpyBeforeHeaders")
+scrcpyChanged=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=scrcpy_url_save' \
+  --data-urlencode 'download_url=https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.2.zip')
+TEST_RESPONSE="$scrcpyChanged" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+curl -fsS -D "$scrcpyAfterHeaders" -H "If-None-Match: $scrcpyBeforeEtag" 'http://127.0.0.1:18765/api/phonehub.php?action=scrcpy_download' -o "$scrcpyBody"
+TEST_BODY="$scrcpyBody" python3 -c 'import os,json;j=json.load(open(os.environ["TEST_BODY"]));assert j["download_url"]=="https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.2.zip",j'
+scrcpyAfterEtag=$(awk 'tolower($1)=="etag:" {gsub(/\\r/,"",$2);print $2}' "$scrcpyAfterHeaders")
+test "$scrcpyBeforeEtag" != "$scrcpyAfterEtag"
+for badUrl in 'http://down.tmd.pet/a.zip' 'https://127.0.0.1/a.zip' 'https://example.com/a.exe' 'https://user:secret@example.com/a.zip'; do
+  invalidScrcpy=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+    --data-urlencode "csrf=$CSRF" --data-urlencode 'action=scrcpy_url_save' --data-urlencode "download_url=$badUrl")
+  TEST_RESPONSE="$invalidScrcpy" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+done
+scrcpyRestored=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=scrcpy_url_save' \
+  --data-urlencode 'download_url=https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')
+TEST_RESPONSE="$scrcpyRestored" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+rm -f "$scrcpyBeforeHeaders" "$scrcpyAfterHeaders" "$scrcpyBody"
 # Keep the package summary and history in separate non-overlapping layout sections.
 grep -q 'class="table-scroll package-summary-table"' "$adminHtml"
 grep -q 'class="card-head package-subsection-head package-history-head"' "$adminHtml"
@@ -166,6 +206,9 @@ for page in releases cloud_features admins audit update groups; do
   status=$(curl -sS -b "$globalCookies" -o "$globalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 200 || { echo "global GET denied $page ($status)" >&2; exit 1; }
 done
+# Global administrators can edit the public URL; ordinary administrators cannot.
+globalScrcpy=$(curl -sS -b "$globalCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$globalCsrf" --data-urlencode 'action=scrcpy_url_save' --data-urlencode 'download_url=https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')
+TEST_RESPONSE="$globalScrcpy" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
 # Sensitive owner functions must remain inaccessible even to global admins.
 for action in admin_create admin_role_change backup_key_generate update_apply signing_generate automation_token_create; do
   status=$(curl -sS -b "$globalCookies" -o "$globalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$globalCsrf" --data-urlencode "action=$action")
@@ -179,7 +222,7 @@ for page in dashboard groups group_bulk packages releases cloud_features update 
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 403 || { echo "ordinary GET allowed $page ($status)" >&2; exit 1; }
 done
-for action in group_create group_bulk_preview release_publish package_publish admin_create backup_key_generate update_apply cloud_features_save; do
+for action in group_create group_bulk_preview release_publish package_publish scrcpy_url_save admin_create backup_key_generate update_apply cloud_features_save; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=$action")
   test "$status" = 403 || { echo "ordinary POST allowed $action ($status)" >&2; exit 1; }
 done

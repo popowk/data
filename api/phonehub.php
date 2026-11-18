@@ -45,8 +45,40 @@ function api_out(array $data,int $status=200): never {
 }
 function api_error(string $message,int $code=400): never {api_out(['ok'=>false,'error'=>$message],$code);}
 try {
-    if (($_GET['action']??'health')==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true]);
     $action=(string)($_GET['action']??'health');
+    if ($action==='scrcpy_download') {
+        if (($_SERVER['REQUEST_METHOD']??'GET')!=='GET') api_error('此接口仅允许 GET',405);
+        try {
+            require_once dirname(__DIR__).'/app/releases.php';
+            $cfg=require dirname(__DIR__).'/storage/config.php';
+            if (!is_array($cfg)) throw new RuntimeException('download config missing');
+            $readDb=new PDO('mysql:host='.$cfg['db_host'].';port='.(int)$cfg['db_port'].
+                ';dbname='.$cfg['db_name'].';charset=utf8mb4',
+                $cfg['db_user'],$cfg['db_pass'],
+                [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,
+                 PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC,
+                 PDO::ATTR_EMULATE_PREPARES=>false]);
+            $q=$readDb->prepare('SELECT download_url FROM phonehub_download_settings WHERE resource=?');
+            $q->execute(['scrcpy']);
+            $url=$q->fetchColumn();
+            $url=scrcpy_validate_download_url(is_string($url) && $url!=='' ? $url : SCRCPY_DEFAULT_DOWNLOAD_URL);
+        } catch (Throwable $e) {
+            error_log('PhoneHub public scrcpy URL lookup: '.get_class($e));
+            api_error('暂时无法获取 scrcpy 下载地址',503);
+        }
+        $etag='"scrcpy-'.hash('sha256',$url).'"';
+        header('Cache-Control: public, max-age='.SCRCPY_DOWNLOAD_CACHE_SECONDS.', must-revalidate');
+        header('ETag: '.$etag);
+        // Re-read current database value before issuing 304: stale client ETags
+        // are not considered valid once an administrator changes the URL.
+        $ifNoneMatch=trim((string)($_SERVER['HTTP_IF_NONE_MATCH']??''));
+        if ($ifNoneMatch!=='' && in_array($etag,array_map('trim',explode(',',$ifNoneMatch)),true)) {
+            http_response_code(304);
+            exit;
+        }
+        api_out(['ok'=>true,'download_url'=>$url,'cache_ttl_seconds'=>SCRCPY_DOWNLOAD_CACHE_SECONDS]);
+    }
+    if ($action==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true]);
     $sampleRate=max(0,min(100,(int)(getenv('PHONEHUB_PERF_SAMPLE_PERCENT')?:0)));
     if ($action==='client_heartbeat' && $sampleRate>0 && random_int(1,100)<=$sampleRate)
         $GLOBALS['phonehub_perf']['sample']=true;

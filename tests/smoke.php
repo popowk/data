@@ -41,8 +41,29 @@ if (!in_array('opening_plan_code',$metaColumns,true))
     throw new RuntimeException('opening plan migration missing');
 $planTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_plan_templates'")->fetchColumn();
 if($planTable!==1) throw new RuntimeException('plan migration table missing');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==11)
-    throw new RuntimeException('automation migration version incorrect');
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==12)
+    throw new RuntimeException('download settings migration version incorrect');
+$defaultScrcpy=$pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn();
+if($defaultScrcpy!==SCRCPY_DEFAULT_DOWNLOAD_URL)
+    throw new RuntimeException('scrcpy download default is missing');
+migrate($pdo);
+if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn()!==1)
+    throw new RuntimeException('scrcpy migration seeded duplicate rows');
+foreach ([
+    'http://down.tmd.pet/scrcpy/download.zip',
+    'https://127.0.0.1/scrcpy.zip',
+    'https://localhost/scrcpy.zip',
+    'https://user:pass@example.com/scrcpy.zip',
+    'https://example.com/scrcpy.exe',
+    'https://example.com/scrcpy.zip#unsafe',
+    "https://example.com/scrcpy.zip\\r\\nInjected"
+] as $bad) {
+    try {scrcpy_validate_download_url($bad);}
+    catch (RuntimeException $e) {continue;}
+    throw new RuntimeException('unsafe download URL was accepted: '.$bad);
+}
+if(scrcpy_validate_download_url(SCRCPY_DEFAULT_DOWNLOAD_URL)!==SCRCPY_DEFAULT_DOWNLOAD_URL)
+    throw new RuntimeException('default scrcpy URL failed validation');
 foreach(['phonehub_automation_tokens','phonehub_automation_releases',
          'phonehub_automation_rate','phonehub_automation_audit'] as $table) {
     $q=$pdo->prepare('SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?');

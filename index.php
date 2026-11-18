@@ -201,7 +201,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             require __DIR__.'/app/automation.php';
             automation_admin_action($action);
         }
-        if (in_array($action,['release_publish','release_toggle','package_publish','package_toggle','logs_purge'],true)) {
+        if (in_array($action,['release_publish','release_toggle','package_publish','package_toggle','scrcpy_url_save','logs_purge'],true)) {
             require __DIR__.'/app/release_admin.php';
             release_admin_action($action);
         }

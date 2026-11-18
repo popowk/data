@@ -111,6 +111,15 @@ function operation_package_toggle(int $id): array {
 
 function release_admin_action(string $action): never {
     require_global_admin();
+    if ($action==='scrcpy_url_save') {
+        $url=scrcpy_validate_download_url((string)($_POST['download_url']??''));
+        sql('INSERT INTO phonehub_download_settings(resource,download_url)
+            VALUES(?,?) ON DUPLICATE KEY UPDATE download_url=VALUES(download_url)',
+            ['scrcpy',$url]);
+        // Avoid recording the full public URL or signed query tokens in audit.
+        audit('scrcpy_url_save','scrcpy');
+        json_response(['ok'=>true,'message'=>'scrcpy 下载地址已保存；客户端缓存最长约 5 分钟更新']);
+    }
     if ($action==='release_publish') {
         $r=release_publish($_FILES['file']??[],$_POST);
         json_response(['ok'=>true,'message'=>'已发布签名更新包 '.$r['platform'].' v'.$r['version']]+$r);
@@ -198,9 +207,24 @@ function release_package_overview(): void {
 }
 function release_admin_view(): void {
     require_global_admin();
+    $scrcpyUrl=sql('SELECT download_url FROM phonehub_download_settings WHERE resource=?',['scrcpy'])->fetchColumn();
+    if (!is_string($scrcpyUrl) || $scrcpyUrl==='') $scrcpyUrl=SCRCPY_DEFAULT_DOWNLOAD_URL;
     $list=sql('SELECT id,platform,channel,version,min_client,size_bytes,sha256,signature,enabled,created_at FROM phonehub_releases ORDER BY id DESC LIMIT 200')->fetchAll();
     ?>
     <div class="page-title"><div><h1>版本发布与操作包</h1><p>分别管理客户端签名 ZIP 更新和加密操作包，支持加密操作包发布、上下架及下载统计</p></div></div>
+    <div class="card" id="scrcpy-download-settings">
+      <div class="card-head"><h2>scrcpy 下载地址</h2><span class="count">客户端启动时查询</span></div>
+      <p class="muted">Windows 客户端可通过无需登录的 JSON 接口获取当前 ZIP 下载地址；接口支持 ETag / HTTP 304 和 300 秒缓存，后台修改后客户端最多使用旧缓存 5 分钟。</p>
+      <form data-ajax="scrcpy_url_save">
+        <input type="hidden" name="action" value="scrcpy_url_save">
+        <div class="field">
+          <label for="scrcpy-download-url">scrcpy Windows ZIP 下载地址（HTTPS）</label>
+          <input id="scrcpy-download-url" name="download_url" type="url" maxlength="512" value="<?=h($scrcpyUrl)?>" placeholder="https://example.com/scrcpy-win64.zip" required>
+        </div>
+        <div class="editor-actions"><button type="submit" class="btn primary" data-confirm-submit="确认更新 scrcpy 下载地址？客户端会在缓存到期后获取新地址。">保存下载地址</button></div>
+      </form>
+      <p class="footnote">公开查询接口：<a href="api/phonehub.php?action=scrcpy_download" target="_blank" rel="noopener">api/phonehub.php?action=scrcpy_download</a>。接口仅提供地址，不转发文件，也不要求客户端携带授权 Token。</p>
+    </div>
     <div class="card"><div class="card-head"><h2>上传新版本（50 MB 以内）</h2></div>
       <form data-ajax="release_publish" enctype="multipart/form-data">
        <input type="hidden" name="action" value="release_publish">

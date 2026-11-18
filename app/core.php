@@ -346,6 +346,18 @@ function migrate(PDO $conn): void {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(11,UTC_TIMESTAMP())");
     }
+    if ($version < 12) {
+        // A full HTTPS URL cannot fit the feature switches' VARCHAR(8);
+        // keep public download metadata in a separate, nonsecret table.
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_download_settings (
+          resource VARCHAR(32) NOT NULL PRIMARY KEY,
+          download_url VARCHAR(512) NOT NULL,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_download_settings(resource,download_url)
+          VALUES ('scrcpy','https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(12,UTC_TIMESTAMP())");
+    }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
@@ -417,7 +429,7 @@ function phonehub_role_can_action(string $role,string $action): bool {
     $global=array_merge($staff,[
         'group_create','group_delete','group_bulk','group_bulk_preview',
         'release_publish','release_toggle','package_publish','package_toggle',
-        'ai_settings_save','cloud_features_save','logs_purge',
+        'scrcpy_url_save','ai_settings_save','cloud_features_save','logs_purge',
         'update_check','update_diagnostics'
     ]);
     // Only the protected original owner may change trust, runtime installation,

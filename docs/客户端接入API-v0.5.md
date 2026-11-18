@@ -466,3 +466,32 @@ client_heartbeat.batch.phones[].imei 依旧只是身份核验，不执行原号�
 主管理员在「版本发布与操作包 → 操作包管理中心」通过 `package_publish` 上传客户端加密工具生成的 JSON，并用 `package_toggle` 单独启用或停用操作包历史版本；只读管理员无权提交这些动作。新增版本不可覆盖，最高的有效启用版本仍通过 `package_list`、`package_check`、`client_heartbeat.batch`、`package` 原接口提供给合格客户。当前服务端不会给原 `phonehub_package_downloads` 补造历史版本号，下载统计只按 `package_id` 汇总。
 
 加密 JSON 顶层含 `envelope` 对象与 Base64 的 32 字节 `content_key`，其中 envelope 的 `manifest`、`signature`、`nonce`、`ciphertext` 为非空 Base64；该格式与签名 ZIP 不可互换。上传校验不证明密文真实可解密或客户端签名可信，应在真实客户端联调验收。服务端从不在后台 GET 页、保存响应或审计日志输出解密密钥。
+
+
+## Windows 启动时查询 scrcpy 下载地址（v0.5.24）
+
+无需登录的公开只读 GET 接口，与客户授权登录接口互不影响：
+
+```http
+GET /license/api/phonehub.php?action=scrcpy_download HTTP/1.1
+Accept: application/json
+```
+
+将 `/license` 替换为 PhoneHub 实际部署目录（如部署在网站根目录则使用 `/api/phonehub.php?action=scrcpy_download`）。
+
+成功返回 HTTP 200：
+
+```json
+{
+  "ok": true,
+  "download_url": "https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip",
+  "cache_ttl_seconds": 300
+}
+```
+
+- 首次启动时 GET 一次；客户端可保留成功结果 **300 秒**，后续启动优先使用未过期本地缓存。查询失败时可使用已验证的上次成功值并安排重试；不要使用不可信输入作为下载链接。
+- HTTP 响应包含 `Cache-Control: public, max-age=300, must-revalidate` 与基于当前 URL 计算的 `ETag`。缓存到期后可带 `If-None-Match`：未改变时返回 HTTP 304（无响应体），修改 URL 后返回新的 HTTP 200 与 ETag。
+- API 只返回配置中的 HTTPS ZIP 地址，不代理文件、下载文件或重定向。客户端自行下载，并按需求校验压缩包安全性；**仅凭 HTTPS 不表示 ZIP 来自可信发布者**。
+- 后台操作路径：**版本发布与操作包 → scrcpy 下载地址**。全局管理员或受保护主账号可修改；普通管理员不能访问或修改。
+- 服务端限制为 HTTPS、标准端口、公开 DNS 域名和 `.zip` 后缀；禁止在 URL 中嵌入账号、密码或片段（fragment）。修改保存后新 GET 立即可获取新值，已缓存的客户端最长可能延迟 5 分钟。
+- 数据库存储使用独立的 `phonehub_download_settings`，由增量迁移 v12 建立；不修改原有 `phonehub_feature_settings` 的短字符串开关，也不会覆盖既有用户授权。

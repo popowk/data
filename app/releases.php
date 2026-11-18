@@ -2,6 +2,31 @@
 declare(strict_types=1);
 // Client core release publishing, kept separate from admin panel software self-updates.
 const CLIENT_RELEASE_LIMIT=52428800; // 50 MiB compressed
+const SCRCPY_DEFAULT_DOWNLOAD_URL='https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip';
+const SCRCPY_DOWNLOAD_CACHE_SECONDS=300;
+
+/** Validate a public client download target; the server never fetches it. */
+function scrcpy_validate_download_url(string $url): string {
+    $url=trim($url);
+    if ($url==='' || strlen($url)>512 || preg_match('/[\\x00-\\x20\\x7f]/',$url))
+        throw new RuntimeException('scrcpy 下载地址不能为空、包含空格或超过 512 字节');
+    if (filter_var($url,FILTER_VALIDATE_URL)===false)
+        throw new RuntimeException('scrcpy 下载地址必须是完整 URL');
+    $parts=parse_url($url);
+    if (!is_array($parts) || strtolower((string)($parts['scheme']??''))!=='https'
+        || !is_string($parts['host']??null)
+        || isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment'])
+        || (isset($parts['port']) && $parts['port']!==443))
+        throw new RuntimeException('scrcpy 下载地址仅允许无凭据的 HTTPS 链接（标准 443 端口）');
+    $host=$parts['host'];
+    if (filter_var($host,FILTER_VALIDATE_IP)!==false ||
+        filter_var($host,FILTER_VALIDATE_DOMAIN,FILTER_FLAG_HOSTNAME)===false ||
+        !str_contains($host,'.'))
+        throw new RuntimeException('scrcpy 下载地址需要有效的公开域名，不接受 IP 或本地域名');
+    if (!preg_match('~^/.+\\.zip$~iD',(string)($parts['path']??'')))
+        throw new RuntimeException('scrcpy 下载地址必须以 .zip 文件结尾');
+    return $url;
+}
 function release_store(): string {
     $root=realpath(APP_STORE);
     if (!$root || is_link(APP_STORE)) throw new RuntimeException('服务器存储目录不可用');

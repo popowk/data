@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.5.23",
+  "version": "0.5.24",
   "channel": "stable",
-  "released_at": "2026-11-18",
-  "notes": "管理员管理改为全局管理员与普通管理员两种可创建角色。全局管理员可维护业务设置与发布，服务器自更新、信任签名、备份密钥、发布令牌及管理员权限调整仅受保护主账号可操作；普通管理员仅客户授权、设备管理、套餐管理和客户端日志。旧只读账号不自动提权，可手动转换。客户端授权心跳将云能力开关读取合并为一次 SQL 查询，保持实时授权校验及现有响应格式。"
+  "released_at": "2026-11-19",
+  "notes": "新增公开 GET /api/phonehub.php?action=scrcpy_download，返回 scrcpy ZIP 下载地址并提供 ETag、304、5 分钟浏览器缓存；默认 https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip。全局管理员在「版本发布与操作包」修改目标地址，安全校验 HTTPS、公开域名与 ZIP 后缀；数据库迁移 12 独立存储 URL，不影响原有 feature settings 或已签名 V3 更新。"
 }
