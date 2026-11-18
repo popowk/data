@@ -5,6 +5,7 @@ require dirname(__DIR__).'/app/ai.php';
 require dirname(__DIR__).'/app/mobile.php';
 require dirname(__DIR__).'/app/releases.php';
 require dirname(__DIR__).'/app/accounts.php';
+require dirname(__DIR__).'/app/features.php';
 require dirname(__DIR__).'/app/updater.php';
 
 $pdo=new PDO('mysql:host=127.0.0.1;port=3306;dbname=phonehub_ci;charset=utf8mb4','root','ci_password',[
@@ -105,6 +106,34 @@ $filter=phonehub_account_filters([
 ]);
 if ($filter['params']!==[] || $filter['where']!=='' || $filter['page']!==1)
     throw new RuntimeException('invalid account filter accepted');
+// Client log filtering must stay parameterized, bounded and literal for '%'
+// and '_' in usernames / error messages. Only level=error is text-searched.
+$logs=phonehub_client_log_filters([
+    'q'=>'CI_log%!', 'search_by'=>'all','page'=>'2'
+]);
+if ($logs['page']!==2 || $logs['search_by']!=='all' ||
+    $logs['params']!==array_fill(0,3,'%CI!_log!%!!%') ||
+    !str_contains($logs['where'],"l.level='error'") ||
+    !str_contains($logs['where'],"LIKE ? ESCAPE '!'"))
+    throw new RuntimeException('client log combined search is not literal or safely parameterized');
+$logs=phonehub_client_log_filters(['q'=>'my_error','search_by'=>'error','page'=>'999999999']);
+if ($logs['page']!==1 || $logs['params']!==['%my!_error%','%my!_error%'] ||
+    !str_starts_with($logs['where']," WHERE l.level='error' AND "))
+    throw new RuntimeException('client error log scope or page validation invalid');
+$logs=phonehub_client_log_filters(['search_by'=>'error']);
+if ($logs['where']!==" WHERE l.level='error'" || $logs['params']!==[])
+    throw new RuntimeException('error-only log filter must support a blank query');
+$logs=phonehub_client_log_filters(['q'=>'abc','search_by'=>'username','page'=>'21']);
+if ($logs['where']!==" WHERE u.username LIKE ? ESCAPE '!'" ||
+    $logs['params']!==['%abc%'] || $logs['page']!==21)
+    throw new RuntimeException('username-only client log filter invalid');
+$logs=phonehub_client_log_filters(['q'=>['malicious'],'search_by'=>['error'],'page'=>['1']]);
+if ($logs['q']!=='' || $logs['search_by']!=='all' || $logs['page']!==1 ||
+    $logs['where']!=='' || $logs['params']!==[])
+    throw new RuntimeException('malformed client log GET arrays must be ignored');
+$logs=phonehub_client_log_filters(['q'=>str_repeat('a',400),'search_by'=>'username']);
+if (utf8_length($logs['q'])!==160) throw new RuntimeException('client log search is not bounded');
+
 // Regression: editing/stopping an opening template must not mutate an existing
 // customer's stored quotas or opening label. Disabled plans must not be offered
 // to newly created customers, but historical template lookup must still work.

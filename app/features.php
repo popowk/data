@@ -6,6 +6,41 @@ require_once __DIR__.'/mobile.php';
 if (is_file(__DIR__.'/devices.php') && is_file(__DIR__.'/device_admin.php'))
     require_once __DIR__.'/device_admin.php';
 
+/**
+ * Bounded client-log search. All text is bound to PDO parameters, including
+ * escaped LIKE wildcards; LIMIT/OFFSET are derived only from validated ints.
+ * "all" means username OR error-level event/message, not arbitrary info logs.
+ */
+function phonehub_client_log_filters(array $query): array {
+    $rawQ=is_string($query['q']??null)?trim($query['q']):'';
+    $q=preg_match('//u',$rawQ)===1?utf8_limit($rawQ,160):'';
+    $mode=is_string($query['search_by']??null)?$query['search_by']:'all';
+    if (!in_array($mode,['all','username','error'],true)) $mode='all';
+    $rawPage=$query['page']??'1';
+    $page=is_string($rawPage)||is_int($rawPage)?(string)$rawPage:'1';
+    $page=(ctype_digit($page) && strlen($page)<=6 && (int)$page>=1)
+        ?min((int)$page,100000):1;
+
+    $conditions=[];$params=[];
+    if ($mode==='error') $conditions[]="l.level='error'";
+    if ($q!=='') {
+        $like='%'.str_replace(['!','%','_'],['!!','!%','!_'],$q).'%';
+        if ($mode==='username') {
+            $conditions[]="u.username LIKE ? ESCAPE '!'";
+            $params[]=$like;
+        } elseif ($mode==='error') {
+            $conditions[]="(l.message LIKE ? ESCAPE '!' OR l.event LIKE ? ESCAPE '!')";
+            array_push($params,$like,$like);
+        } else {
+            $conditions[]="(u.username LIKE ? ESCAPE '!' OR (l.level='error' AND (l.message LIKE ? ESCAPE '!' OR l.event LIKE ? ESCAPE '!')))";
+            array_push($params,$like,$like,$like);
+        }
+    }
+    return ['q'=>$q,'search_by'=>$mode,'page'=>$page,
+        'where'=>$conditions?' WHERE '.implode(' AND ',$conditions):'',
+        'params'=>$params];
+}
+
 function phonehub_group_member_snapshot(array $ids): string {
     // The list is ordered by user ID by both preview and the locked apply.
     return hash('sha256',implode(',',array_map(static fn($id)=>(string)(int)$id,$ids)));
@@ -357,8 +392,70 @@ function feature_view(string $view): void {
         <?php if($status['can_install']): ?><button class="btn primary" data-action="gateway-install">备份并启用安卓手机绑定校验</button><?php endif ?>
         <p class="footnote">一旦接管，所有操作包下载必须先成功绑定手机。旧版客户端尚不支持 mobile_bind，接管前请为客户规划客户端升级或手工绑定设备。接管时保留旧接口文件备份，不修改签名密钥。</p></div><?php
     } elseif($view==='client_logs') {
-        $logs=sql("SELECT l.level,l.event,l.message,l.created_at,u.username,LEFT(l.device_id,12) AS device_short FROM phonehub_client_logs l JOIN phonehub_users u ON u.id=l.user_id ORDER BY l.id DESC LIMIT 200")->fetchAll();
-        ?><div class="page-title"><div><h1>客户端运行日志</h1><p>展示最新 200 条日志，客户端使用已授权会话上传</p></div></div><div class="card"><div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>客户</th><th>级别</th><th>事件</th><th>内容（最多 2000 字）</th></tr></thead><tbody><?php foreach($logs as $l): ?><tr><td><?=h(utc_to_cn($l['created_at']))?></td><td><?=h($l['username'])?></td><td><?=h($l['level'])?></td><td><?=h($l['event'])?></td><td style="white-space:normal;min-width:280px"><?=h($l['message'])?></td></tr><?php endforeach ?></tbody></table></div></div><?php
+        $filters=phonehub_client_log_filters($_GET);
+        $from=' FROM phonehub_client_logs l JOIN phonehub_users u ON u.id=l.user_id';
+        $where=$filters['where'];
+        $params=$filters['params'];
+        $total=(int)sql('SELECT COUNT(*)'.$from.$where,$params)->fetchColumn();
+        $pages=max(1,(int)ceil($total/50));
+        $page=min($filters['page'],$pages);
+        $offset=($page-1)*50;
+        $logs=sql('SELECT l.level,l.event,l.message,l.created_at,u.username'.
+            $from.$where.' ORDER BY l.id DESC LIMIT 50 OFFSET '.$offset,$params)->fetchAll();
+        $pageLink=static function(int $number) use ($filters): string {
+            return 'index.php?'.http_build_query([
+                'view'=>'client_logs','q'=>$filters['q'],'search_by'=>$filters['search_by'],
+                'page'=>$number
+            ],'','&',PHP_QUERY_RFC3986);
+        };
+        ?><div class="page-title"><div><h1>客户端运行日志</h1><p>按时间倒序展示客户端上传的运行日志，每页 50 条</p></div></div>
+        <div class="card">
+          <form method="get" action="index.php" class="client-log-filter-form" aria-label="搜索客户端运行日志">
+            <input type="hidden" name="view" value="client_logs">
+            <div class="field">
+              <label for="client-log-search-by">搜索范围</label>
+              <select id="client-log-search-by" name="search_by">
+                <option value="all" <?=$filters['search_by']==='all'?'selected':''?>>用户名或错误日志</option>
+                <option value="username" <?=$filters['search_by']==='username'?'selected':''?>>仅用户名</option>
+                <option value="error" <?=$filters['search_by']==='error'?'selected':''?>>仅错误日志</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="client-log-keyword">搜索关键词</label>
+              <input id="client-log-keyword" name="q" maxlength="160" value="<?=h($filters['q'])?>" placeholder="输入用户名、错误事件或错误内容">
+            </div>
+            <div class="client-log-filter-actions">
+              <button class="btn primary" type="submit">搜索</button>
+              <a class="btn" href="index.php?view=client_logs">重置</a>
+            </div>
+          </form>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>日志列表</h2><span class="count">匹配 <?=number_format($total)?> 条 · 第 <?=$page?> / <?=$pages?> 页（每页 50 条）</span></div>
+          <div class="table-scroll"><table><thead><tr>
+          <th>时间（北京时间）</th><th>客户</th><th>级别</th><th>事件</th><th>内容（最多 2000 字）</th>
+          </tr></thead><tbody>
+          <?php foreach($logs as $l): ?><tr>
+            <td><?=h(utc_to_cn($l['created_at']))?></td>
+            <td><?=h($l['username'])?></td>
+            <td><?=h($l['level'])?></td>
+            <td><?=h($l['event'])?></td>
+            <td style="white-space:normal;min-width:280px"><?=h($l['message'])?></td>
+          </tr><?php endforeach ?>
+          <?php if (!$logs): ?><tr><td colspan="5" class="empty-result">没有符合条件的日志，请调整关键词或搜索范围。</td></tr><?php endif ?>
+          </tbody></table></div>
+          <nav class="account-pagination" aria-label="客户端日志分页">
+            <?php if($page>1): ?>
+              <a class="btn" href="<?=h($pageLink(1))?>">首页</a>
+              <a class="btn" href="<?=h($pageLink($page-1))?>">上一页</a>
+            <?php endif ?>
+            <span>第 <?=$page?> / <?=$pages?> 页</span>
+            <?php if($page<$pages): ?>
+              <a class="btn" href="<?=h($pageLink($page+1))?>">下一页</a>
+              <a class="btn" href="<?=h($pageLink($pages))?>">末页</a>
+            <?php endif ?>
+          </nav>
+        </div><?php
     }
 }
 

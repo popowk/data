@@ -118,12 +118,21 @@ input[readonly]{background:#f7f8fb;color:#9099a6}
 #opening-plan-field .footnote{display:block;margin-top:5px;line-height:1.6}
 @media(max-width:640px){.diagnostic-actions{align-items:stretch;flex-direction:column}.diagnostic-actions .btn{width:100%}.diagnostic-report{min-height:270px}}
 
+/* Client log keyword/mode search, responsive at narrow widths. */
+.client-log-filter-form{display:grid;grid-template-columns:minmax(175px,230px) minmax(250px,1fr) auto;gap:14px;align-items:end}
+.client-log-filter-form .field{margin-bottom:0}
+.client-log-filter-form .field label{display:block}
+.client-log-filter-form input,.client-log-filter-form select{min-height:42px;width:100%;padding:10px 12px;border:1px solid #dce3ef;border-radius:8px;background:#fff;color:#263c55}
+.client-log-filter-actions{display:flex;gap:8px;align-items:center;padding-bottom:1px}
+@media(max-width:750px){.client-log-filter-form{grid-template-columns:1fr 1fr}.client-log-filter-actions{grid-column:1/-1}}
+@media(max-width:500px){.client-log-filter-form{grid-template-columns:1fr}.client-log-filter-actions{grid-column:1}}
+
 /* Customer search, pagination and diagnostic checks. */
 .account-filter-form{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:14px;align-items:end}
 .account-filter-form .field{margin-bottom:0}.account-filter-form .field label{display:block}
 .account-filter-form input,.account-filter-form select{min-height:42px;width:100%;padding:10px 12px;border:1px solid #dce3ef;border-radius:8px;background:#fff;color:#263c55}
 .account-filter-actions{display:flex;align-items:center;gap:8px;grid-column:1/-1}
-.account-pagination{display:flex;align-items:center;justify-content:flex-end;gap:15px;padding:19px 0 0;color:#586983;font-size:13px}
+.account-pagination{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12px;padding:19px 0 0;color:#586983;font-size:13px}
 .empty-result{text-align:center;white-space:normal;color:#7d8ba2;padding:35px}
 .plan-stats{margin-bottom:22px}
 .diagnostic-checks{border:1px solid #e3e9f3;border-radius:11px;padding:18px;margin:12px 0 22px;background:#f9fbfe}

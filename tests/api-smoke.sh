@@ -303,6 +303,8 @@ TEST_RESPONSE="$secondAttempt" python3 -c 'import json,os; j=json.loads(os.envir
 rm -f "$downloadedKey" "$downloadHeaders" storage/backup-recipient.pub
 echo 'CI HTTP smoke: entering automation scenarios'
 source tests/automation-smoke.sh
+echo 'CI HTTP smoke: client log filters and 50-record pagination'
+source tests/client-log-smoke.sh
 rm -f "$adminCookies" "$adminHtml"
 BASE='http://127.0.0.1:18765/api/phonehub.php?action='
 DEVICE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
