@@ -86,7 +86,7 @@ function inspect_release_zip(string $path): void {
     } finally {$zip->close();}
 }
 function release_publish(array $file,array $post): array {
-    require_owner();
+    require_global_admin();
     if (!isset($file['error']) || (int)$file['error']!==UPLOAD_ERR_OK || !is_uploaded_file((string)($file['tmp_name']??'')))
         throw new RuntimeException('上传失败；请检查 PHP upload_max_filesize/post_max_size 与网站限制');
     $tmp=(string)($file['tmp_name']??'');
@@ -128,7 +128,7 @@ function release_publish(array $file,array $post): array {
     } catch(Throwable $e) { @unlink($path);throw $e; }
 }
 function release_toggle(int $id): array {
-    require_owner();
+    require_global_admin();
     $row=sql('SELECT id,platform,version,enabled FROM phonehub_releases WHERE id=?',[$id])->fetch();
     if (!$row) throw new RuntimeException('更新版本不存在');
     $next=!(int)$row['enabled']?1:0;
