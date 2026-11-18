@@ -12,6 +12,19 @@ const UPDATE_FILES = [
 ];
 
 /**
+ * Transitional signed bridge for old v0.5.10 clients. Their pinned updater
+ * compares the exact manifest file list; keep this list byte-for-byte.
+ * New installations never install these deprecated docs.
+ */
+const UPDATE_LEGACY_FILES = [
+    'index.php','install.php','version.json','.htaccess',
+    'app/core.php','app/accounts.php','app/updater.php','app/features.php','app/gateway.php',
+    'app/devices.php','app/device_admin.php','app/signing_admin.php',
+    'app/releases.php','app/release_admin.php','app/ai.php','app/mobile.php',
+    'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','docs/客户端接入API-v0.5.md','docs/运维备份与升级.md','docs/设备管理与签名-v0.5.2.md','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','tools/bootstrap-self-update.php','assets/app.css','assets/app.js'
+];
+
+/**
  * Fail before touching live files. The update catalog is an exact runtime
  * manifest: optional files must be removed from UPDATE_FILES intentionally.
  * TOKEN_PARSE checks PHP syntax without executing downloaded code.
@@ -51,9 +64,9 @@ function update_trust_public_key(string $store): ?string {
         throw new RuntimeException('更新签名信任公钥格式错误，已拒绝安装');
     return $key;
 }
-function update_signed_manifest(array $files,string $version): string {
+function update_signed_manifest_for_list(array $files,string $version,array $fileList): string {
     $hashes=[];
-    foreach(UPDATE_FILES as $path) {
+    foreach($fileList as $path) {
         if (!isset($files[$path]) || !is_string($files[$path]))
             throw new RuntimeException('签名清单缺少程序文件：'.$path);
         $hashes[$path]=hash('sha256',$files[$path]);
@@ -62,7 +75,10 @@ function update_signed_manifest(array $files,string $version): string {
     return json_encode(['format'=>1,'version'=>$version,'files'=>$hashes],
         JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
 }
-function update_verify_signed_archive(array $files,string $version,?string $manifest,?string $signature,string $publicKey): void {
+function update_signed_manifest(array $files,string $version): string {
+    return update_signed_manifest_for_list($files,$version,UPDATE_FILES);
+}
+function update_verify_signed_archive_for_list(array $files,string $version,?string $manifest,?string $signature,string $publicKey,array $fileList): void {
     if (!extension_loaded('sodium')) throw new RuntimeException('独立签名更新需要 PHP sodium 扩展');
     if (!is_string($manifest) || !is_string($signature) || $manifest==='' || $signature==='')
         throw new RuntimeException('更新源缺少独立签名清单，已拒绝安装');
@@ -74,9 +90,12 @@ function update_verify_signed_archive(array $files,string $version,?string $mani
     if (!is_array($decoded) || ($decoded['format']??null)!==1 ||
         ($decoded['version']??null)!==$version || !is_array($decoded['files']??null))
         throw new RuntimeException('已签名更新清单版本或格式错误');
-    $expected=json_decode(update_signed_manifest($files,$version),true,512,JSON_THROW_ON_ERROR);
+    $expected=json_decode(update_signed_manifest_for_list($files,$version,$fileList),true,512,JSON_THROW_ON_ERROR);
     if ($decoded['files']!==$expected['files'])
         throw new RuntimeException('更新内容与已签名文件摘要不一致，已拒绝安装');
+}
+function update_verify_signed_archive(array $files,string $version,?string $manifest,?string $signature,string $publicKey): void {
+    update_verify_signed_archive_for_list($files,$version,$manifest,$signature,$publicKey,UPDATE_FILES);
 }
 function update_download(string $destination): void {
     if (!extension_loaded('curl') || !extension_loaded('zip')) throw new RuntimeException('请在 PHP 中启用 curl 与 zip 扩展');
@@ -151,8 +170,11 @@ function update_archive(): array {
             $trusted=update_trust_public_key(APP_STORE);
             $verified=false;
             if ($trusted!==null) {
-                $manifest=$zip->getFromName($prefix.'deploy/self-update-manifest.json');
-                $signature=$zip->getFromName($prefix.'deploy/self-update-manifest.sig');
+                // v1 stays signed exclusively for pinned legacy v0.5.10 clients.
+                // v2 authenticates every current runtime file, including modules
+                // that the old updater cannot install on its first pass.
+                $manifest=$zip->getFromName($prefix.'deploy/self-update-manifest-v2.json');
+                $signature=$zip->getFromName($prefix.'deploy/self-update-manifest-v2.sig');
                 update_verify_signed_archive($files,$number,
                     is_string($manifest)?$manifest:null,is_string($signature)?$signature:null,$trusted);
                 $verified=true;

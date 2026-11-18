@@ -54,6 +54,13 @@ function release_admin_view(): void {
       </tbody></table></div>
     </div>
     <?php
-    require_once __DIR__.'/automation.php';
-    automation_admin_view();
+    if (is_file(__DIR__.'/automation.php')) {
+        require_once __DIR__.'/automation.php';
+        automation_admin_view();
+    } else {
+        // An old pinned updater can only install its historical allowlist on
+        // pass one. Keep the release page usable until the second repair pass
+        // installs the new automation module.
+        echo '<div class="card"><p>旧版更新器已更新基础程序，但自动化发布模块尚未补齐。请前往「系统更新」再次检查，执行「补齐缺失模块」。</p><a href="index.php?view=update">系统更新</a></div>';
+    }
 }

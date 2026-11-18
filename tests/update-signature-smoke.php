@@ -16,6 +16,15 @@ $pub=sodium_crypto_sign_publickey($pair);
 $manifest=update_signed_manifest($files,$version);
 $sig=base64_encode(sodium_crypto_sign_detached($manifest,$secret));
 update_verify_signed_archive($files,$version,$manifest,$sig,$pub);
+$legacyFiles=[];
+foreach (UPDATE_LEGACY_FILES as $path) {
+    $bytes=file_get_contents(APP_ROOT.'/'.$path);
+    if (!is_string($bytes) || $bytes==='') throw new RuntimeException('Missing legacy bridge file: '.$path);
+    $legacyFiles[$path]=$bytes;
+}
+$legacyManifest=update_signed_manifest_for_list($legacyFiles,$version,UPDATE_LEGACY_FILES);
+$legacySig=base64_encode(sodium_crypto_sign_detached($legacyManifest,$secret));
+update_verify_signed_archive_for_list($legacyFiles,$version,$legacyManifest,$legacySig,$pub,UPDATE_LEGACY_FILES);
 function must_deny(callable $f,string $which): void {
     try {$f();}
     catch(RuntimeException $e) {return;}
@@ -28,6 +37,9 @@ must_deny(static fn()=>update_verify_signed_archive($files,'99.99.99',$manifest,
 $changed=$files;
 $changed['index.php'].="\n//tampered\n";
 must_deny(static fn()=>update_verify_signed_archive($changed,$version,$manifest,$sig,$pub),'modified PHP file');
+$legacyTampered=$legacyFiles;
+$legacyTampered['docs/客户端接入API-v0.3.md'].="\ntampered";
+must_deny(static fn()=>update_verify_signed_archive_for_list($legacyTampered,$version,$legacyManifest,$legacySig,$pub,UPDATE_LEGACY_FILES),'modified legacy bridge doc');
 $dir=sys_get_temp_dir().'/phonehub-pub-'.bin2hex(random_bytes(8));
 mkdir($dir,0700);
 try {
@@ -37,4 +49,4 @@ try {
     file_put_contents($dir.'/self-update-trust.pub','INVALID');
     must_deny(static fn()=>update_trust_public_key($dir),'invalid trust key');
 } finally {unlink($dir.'/self-update-trust.pub');rmdir($dir);}
-echo "PASS: Ed25519 self-update verified; missing/invalid signature, wrong key, replay and tampering rejected\n";
+echo "PASS: Ed25519 modern and legacy self-update verified; missing/invalid signature, wrong key, replay and tampering rejected\n";
