@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=11) return;
+        if ($ready>=12) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
