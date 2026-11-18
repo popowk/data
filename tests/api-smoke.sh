@@ -301,6 +301,8 @@ secondAttempt=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/inde
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=backup_key_generate")
 TEST_RESPONSE="$secondAttempt" python3 -c 'import json,os; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"],j'
 rm -f "$downloadedKey" "$downloadHeaders" storage/backup-recipient.pub
+echo 'CI HTTP smoke: entering automation scenarios'
+source tests/automation-smoke.sh
 rm -f "$adminCookies" "$adminHtml"
 BASE='http://127.0.0.1:18765/api/phonehub.php?action='
 DEVICE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -492,6 +494,4 @@ TEST_RESPONSE="$loginBlocked" python3 -c 'import os,json; j=json.loads(os.enviro
 grep -q 'PhoneHub heartbeat_perf status=200 ' /tmp/phonehub-ci-server.log
 grep -q 'connect_ms=.*auth_ms=.*db_ms=.*package_ms=.*response_ms=' /tmp/phonehub-ci-server.log
 if grep -Fq "$TOKEN" /tmp/phonehub-ci-server.log; then echo 'Bearer leaked to timing logs' >&2; exit 10; fi
-echo 'CI HTTP smoke: entering automation scenarios'
-source tests/automation-smoke.sh
 echo 'PASS: authenticated mobile/model/IMEI/phone ciphertext, phone and computer blacklist, authorization, logs and signed updates + automation'
