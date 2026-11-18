@@ -344,6 +344,46 @@ function update_reset_opcache(): ?bool {
  *
  * The optional callback is a test-only failure injection point.
  */
+/**
+ * Check each path component under the trusted installation root. If $create
+ * is false, the nearest existing ancestor must be writable; missing nested
+ * directories are valid for new runtime modules.
+ *
+ * Never follow symlinks or overwrite a non-directory. The installer creates
+ * missing directories only AFTER all files have been staged and backed up,
+ * and records each one so rollback can remove empty directories it created.
+ */
+function update_target_parent(string $root,string $path,bool $create,array &$createdDirs): void {
+    $relative=dirname($path);
+    $dir=$root;
+    if (is_link($dir) || !is_dir($dir))
+        throw new RuntimeException('更新网站根目录不可用');
+    if ($relative==='.') {
+        if (!is_writable($dir)) throw new RuntimeException('更新目标目录不可写：'.$path);
+        return;
+    }
+    foreach (explode('/',$relative) as $part) {
+        if (!preg_match('/^[A-Za-z0-9_.-]+$/D',$part) || $part==='.' || $part==='..')
+            throw new RuntimeException('更新目标目录路径无效：'.$path);
+        $next=$dir.'/'.$part;
+        if (is_link($next))
+            throw new RuntimeException('更新路径包含符号链接：'.$path);
+        if (is_dir($next)) {
+            $dir=$next;
+            continue;
+        }
+        if (file_exists($next))
+            throw new RuntimeException('更新目标父目录不是目录：'.$path);
+        if (!is_writable($dir))
+            throw new RuntimeException('更新目标目录不可写：'.$path);
+        if (!$create) return; // Remaining descendants cannot yet exist.
+        if (!@mkdir($next,0755) || is_link($next) || !is_dir($next))
+            throw new RuntimeException('无法安全创建更新目标目录：'.$path);
+        $createdDirs[]=$next;
+        $dir=$next;
+    }
+    if (!is_writable($dir)) throw new RuntimeException('更新目标目录不可写：'.$path);
+}
 function update_install_files(array $files,string $root,string $store,?callable $beforeReplace=null): array {
     update_validate_files($files);
     $root=rtrim($root,'/');
@@ -353,21 +393,17 @@ function update_install_files(array $files,string $root,string $store,?callable 
     $backup=$store.'/backups/'.gmdate('Ymd-His').'-'.$nonce;
     if (!is_dir($store) || !mkdir($stage,0700))
         throw new RuntimeException('更新暂存目录不可写');
-    $installed=[];$changed=[];
+    $installed=[];$changed=[];$createdDirs=[];
     try {
         // Pre-stage and verify the full archive before any live replacement.
         foreach ($files as $path=>$bytes) {
             if (!in_array($path,UPDATE_FILES,true)) throw new RuntimeException('更新文件不在白名单内');
             $dest=$root.'/'.$path;
-            if (is_link($dest) || is_link(dirname($dest)))
+            if (is_link($dest))
                 throw new RuntimeException('更新路径包含符号链接：'.$path);
             if (file_exists($dest) && !is_file($dest))
                 throw new RuntimeException('更新目标不是普通文件：'.$path);
-            $parent=dirname($dest);
-            if (!is_dir($parent) && !is_dir(dirname($parent)))
-                throw new RuntimeException('更新目标父目录不存在：'.$path);
-            if (!is_writable(is_dir($parent)?$parent:dirname($parent)))
-                throw new RuntimeException('更新目标目录不可写：'.$path);
+            update_target_parent($root,$path,false,$createdDirs);
             $source=$stage.'/'.$path;
             if (!is_dir(dirname($source)) && !mkdir(dirname($source),0700,true))
                 throw new RuntimeException('创建更新暂存目录失败：'.$path);
@@ -398,9 +434,8 @@ function update_install_files(array $files,string $root,string $store,?callable 
         foreach ($ordered as $path=>$bytes) {
             if ($beforeReplace!==null) $beforeReplace($path,count($installed));
             $dest=$root.'/'.$path;
+            update_target_parent($root,$path,true,$createdDirs);
             $dir=dirname($dest);
-            if (!is_dir($dir) && !mkdir($dir,0755,true))
-                throw new RuntimeException('无法创建更新目标目录：'.$path);
             $tmp=tempnam($dir,'.phup-');
             if ($tmp===false) throw new RuntimeException('创建更新目标临时文件失败：'.$path);
             try {
@@ -438,6 +473,12 @@ function update_install_files(array $files,string $root,string $store,?callable 
             } finally {
                 if (is_file($tmp)) @unlink($tmp);
             }
+        }
+        // Roll back new nested directories in reverse order, but do not remove
+        // pre-existing folders or delete any non-empty directories.
+        foreach (array_reverse($createdDirs) as $dir) {
+            if (is_dir($dir) && !is_link($dir) && !@rmdir($dir))
+                $restored=false;
         }
         throw new RuntimeException($e->getMessage().($restored?'；已恢复升级前程序文件':'；自动恢复未完成，请检查备份目录'),0,$e);
     } finally {

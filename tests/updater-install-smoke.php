@@ -29,6 +29,15 @@ try {
         if (!is_dir(dirname($dest))) mkdir(dirname($dest),0700,true);
         verify(file_put_contents($dest,$bytes)!==false,'failed preparing fixture: '.$path);
     }
+    // A legacy two-pass upgrade reaches this point WITHOUT automation/v1.
+    // Verify the installer may create both missing levels, not just one.
+    $nested='automation/v1/index.php';
+    verify(isset($files[$nested]),'nested automation entry point is missing from runtime catalog');
+    verify(unlink($root.'/'.$nested),'cannot remove nested test fixture');
+    verify(rmdir($root.'/automation/v1'),'cannot remove nested v1 fixture directory');
+    verify(rmdir($root.'/automation'),'cannot remove nested automation fixture directory');
+    verify(!file_exists($root.'/automation'),'nested fixture must start absent');
+
     file_put_contents($root.'/README.md',"This README is user-owned. Do not overwrite.\n");
     file_put_contents($store.'/config.php',"secret fixture - never replace\n");
 
@@ -57,19 +66,49 @@ try {
     $version['version']='9.9.9';
     $changed['version.json']=json_encode($version,JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT)."\n";
 
+    // Do not traverse a symlinked ancestor or treat an existing regular
+    // file as a directory, even when the downstream file is allowlisted.
+    $outside=$store.'/outside';
+    verify(mkdir($outside,0700),'failed creating symlink target');
+    verify(symlink($outside,$root.'/automation'),'failed creating symlink fixture');
     try {
-        update_install_files($changed,$root,$store,static function(string $path,int $installed): void {
-            if ($installed>=3) throw new RuntimeException('CI simulated failure');
+        update_install_files($changed,$root,$store);
+        throw new RuntimeException('symlinked parent was accepted');
+    } catch (RuntimeException $e) {
+        verify(str_contains($e->getMessage(),'符号链接'),'symlink rejection missing');
+    }
+    verify(unlink($root.'/automation'),'failed removing symlink fixture');
+    file_put_contents($root.'/automation','blocking file');
+    try {
+        update_install_files($changed,$root,$store);
+        throw new RuntimeException('non-directory parent was accepted');
+    } catch (RuntimeException $e) {
+        verify(str_contains($e->getMessage(),'不是目录'),'non-directory rejection missing');
+    }
+    verify(unlink($root.'/automation'),'failed removing blocking parent file');
+
+    // Inject failure only after the new two-level file has been installed.
+    // Rollback must restore every old file AND remove the new entry and dirs.
+    try {
+        update_install_files($changed,$root,$store,static function(string $path,int $installed) use ($changed): void {
+            if ($installed>=count($changed)-1)
+                throw new RuntimeException('CI simulated failure');
         });
         throw new RuntimeException('simulated failure unexpectedly installed');
     } catch (RuntimeException $e) {
         verify(str_contains($e->getMessage(),'CI simulated failure'),'unexpected rollback failure');
     }
     foreach($files as $path=>$bytes) {
+        if ($path===$nested) {
+            verify(!file_exists($root.'/'.$nested),'rollback left new nested file');
+            continue;
+        }
         verify(hash_equals(hash('sha256',$bytes),(string)hash_file('sha256',$root.'/'.$path)),
             'rollback content mismatch: '.$path);
     }
+    verify(!file_exists($root.'/automation'),'rollback left new automation directory');
     $result=update_install_files($changed,$root,$store);
+    verify(is_file($root.'/'.$nested),'fresh install failed to create nested API entry point');
     verify($result['installed_count']===count(UPDATE_FILES),'installed file count mismatch');
     foreach($changed as $path=>$bytes) {
         verify(hash_equals(hash('sha256',$bytes),(string)hash_file('sha256',$root.'/'.$path)),
@@ -81,7 +120,7 @@ try {
         'storage/config.php was overwritten');
     verify(is_file($store.'/backups/'.$result['backup'].'/app/accounts.php'),
         'rollback backup missing app/accounts.php');
-    echo "PASS: staged updater, required modules, PHP syntax validation, failure rollback, install checks and README/storage preservation\n";
+    echo "PASS: staged updater, nested directory creation, parent symlink/blocker rejection, rollback cleanup, hashes, and README/storage preservation\n";
 } finally {
     delete_fixture($root);
 }
