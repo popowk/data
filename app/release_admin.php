@@ -111,6 +111,14 @@ function operation_package_toggle(int $id): array {
 
 function release_admin_action(string $action): never {
     require_global_admin();
+    if ($action==='main_program_url_save') {
+        $url=main_program_validate_download_url((string)($_POST['download_url']??''));
+        sql('INSERT INTO phonehub_download_settings(resource,download_url)
+            VALUES(?,?) ON DUPLICATE KEY UPDATE download_url=VALUES(download_url)',
+            ['main_program',$url]);
+        audit('main_program_url_save','main_program');
+        json_response(['ok'=>true,'message'=>'官网主程序下载地址已保存；客户端缓存最长约 5 分钟更新']);
+    }
     if ($action==='scrcpy_url_save') {
         $url=scrcpy_validate_download_url((string)($_POST['download_url']??''));
         sql('INSERT INTO phonehub_download_settings(resource,download_url)
@@ -207,8 +215,10 @@ function release_package_overview(): void {
 }
 function release_admin_view(): void {
     require_global_admin();
-    $scrcpyUrl=sql('SELECT download_url FROM phonehub_download_settings WHERE resource=?',['scrcpy'])->fetchColumn();
-    if (!is_string($scrcpyUrl) || $scrcpyUrl==='') $scrcpyUrl=SCRCPY_DEFAULT_DOWNLOAD_URL;
+    $urls=sql("SELECT resource,download_url FROM phonehub_download_settings
+        WHERE resource IN ('scrcpy','main_program')")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $scrcpyUrl=(string)($urls['scrcpy']??SCRCPY_DEFAULT_DOWNLOAD_URL);
+    $mainProgramUrl=(string)($urls['main_program']??MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL);
     $list=sql('SELECT id,platform,channel,version,min_client,size_bytes,sha256,signature,enabled,created_at FROM phonehub_releases ORDER BY id DESC LIMIT 200')->fetchAll();
     ?>
     <div class="page-title"><div><h1>版本发布与操作包</h1><p>分别管理客户端签名 ZIP 更新和加密操作包，支持加密操作包发布、上下架及下载统计</p></div></div>
@@ -224,6 +234,19 @@ function release_admin_view(): void {
         <div class="editor-actions"><button type="submit" class="btn primary" data-confirm-submit="确认更新 scrcpy 下载地址？客户端会在缓存到期后获取新地址。">保存下载地址</button></div>
       </form>
       <p class="footnote">公开查询接口：<a href="api/phonehub.php?action=scrcpy_download" target="_blank" rel="noopener">api/phonehub.php?action=scrcpy_download</a>。接口仅提供地址，不转发文件，也不要求客户端携带授权 Token。</p>
+    </div>
+    <div class="card" id="main-program-download-settings">
+      <div class="card-head"><h2>官网主程序下载地址</h2><span class="count">程序启动时查询</span></div>
+      <p class="muted">独立于 scrcpy 的主程序下载链接配置，暂时使用相同 ZIP 地址作为占位值。正式下载文件确定后请替换；支持 ZIP / EXE / MSI，查询接口使用 300 秒缓存。</p>
+      <form data-ajax="main_program_url_save">
+        <input type="hidden" name="action" value="main_program_url_save">
+        <div class="field">
+          <label for="main-program-download-url">官网主程序下载地址（HTTPS）</label>
+          <input id="main-program-download-url" name="download_url" type="url" maxlength="512" value="<?=h($mainProgramUrl)?>" placeholder="https://example.com/PhoneHub-setup.exe" required>
+        </div>
+        <div class="editor-actions"><button type="submit" class="btn primary" data-confirm-submit="确认修改官网主程序下载地址？该项不会影响 scrcpy 下载配置。">保存主程序地址</button></div>
+      </form>
+      <p class="footnote">公开查询接口：<a href="api/phonehub.php?action=main_program_download" target="_blank" rel="noopener">api/phonehub.php?action=main_program_download</a>。只返回地址，不执行跳转或文件下载。</p>
     </div>
     <div class="card"><div class="card-head"><h2>上传新版本（50 MB 以内）</h2></div>
       <form data-ajax="release_publish" enctype="multipart/form-data">

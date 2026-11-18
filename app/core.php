@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=12) return;
+        if ($ready>=13) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -358,6 +358,13 @@ function migrate(PDO $conn): void {
           VALUES ('scrcpy','https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(12,UTC_TIMESTAMP())");
     }
+    if ($version < 13) {
+        // Second public URL is independently configurable. Preserve the
+        // existing scrcpy setting, including any administrator changes.
+        $conn->exec("INSERT IGNORE INTO phonehub_download_settings(resource,download_url)
+          VALUES ('main_program','https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(13,UTC_TIMESTAMP())");
+    }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
@@ -429,7 +436,7 @@ function phonehub_role_can_action(string $role,string $action): bool {
     $global=array_merge($staff,[
         'group_create','group_delete','group_bulk','group_bulk_preview',
         'release_publish','release_toggle','package_publish','package_toggle',
-        'scrcpy_url_save','ai_settings_save','cloud_features_save','logs_purge',
+        'scrcpy_url_save','main_program_url_save','ai_settings_save','cloud_features_save','logs_purge',
         'update_check','update_diagnostics'
     ]);
     // Only the protected original owner may change trust, runtime installation,

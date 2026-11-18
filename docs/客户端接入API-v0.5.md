@@ -495,3 +495,31 @@ Accept: application/json
 - 后台操作路径：**版本发布与操作包 → scrcpy 下载地址**。全局管理员或受保护主账号可修改；普通管理员不能访问或修改。
 - 服务端限制为 HTTPS、标准端口、公开 DNS 域名和 `.zip` 后缀；禁止在 URL 中嵌入账号、密码或片段（fragment）。修改保存后新 GET 立即可获取新值，已缓存的客户端最长可能延迟 5 分钟。
 - 数据库存储使用独立的 `phonehub_download_settings`，由增量迁移 v12 建立；不修改原有 `phonehub_feature_settings` 的短字符串开关，也不会覆盖既有用户授权。
+
+
+## 官网主程序下载地址查询（v0.5.25）
+
+新增**独立于 scrcpy** 的公开只读 GET 接口：
+
+```http
+GET /license/api/phonehub.php?action=main_program_download HTTP/1.1
+Accept: application/json
+```
+
+该路径以部署在 `/license` 为例；部署于根目录时用 `/api/phonehub.php?action=main_program_download`。
+
+HTTP 200 返回示例：
+
+```json
+{
+  "ok": true,
+  "download_url": "https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip",
+  "cache_ttl_seconds": 300
+}
+```
+
+- **当前 URL 仅为用户指定的临时占位地址（scrcpy ZIP），不是已验证的官网主程序安装包。** 正式安装包发布后，请在后台替换为真正的主程序下载地址。
+- 后台入口：**版本发布与操作包 → 官网主程序下载地址**。仅全局管理员与受保护的主账号可修改，和「scrcpy 下载地址」互不影响。
+- 同样支持 `ETag`、`If-None-Match` / HTTP 304 和 `Cache-Control: public, max-age=300, must-revalidate`。客户端可缓存 300 秒。每个资源有独立的 ETag，后台保存的新地址会在新的 GET 请求中立即返回。
+- 官网主程序地址接受 HTTPS 公开域名的 `.zip` / `.exe` / `.msi` 文件 URL，禁止用户名、密码、fragment、IP、本地域名和非标准端口；接口只返回字符串，不重定向或代理下载，下载与文件验签由客户端自行完成。
+- 数据库迁移 13 在 `phonehub_download_settings` 表中添加 `main_program` 项，使用 `INSERT IGNORE`，不会修改既有 scrcpy 配置。

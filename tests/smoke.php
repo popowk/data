@@ -41,14 +41,36 @@ if (!in_array('opening_plan_code',$metaColumns,true))
     throw new RuntimeException('opening plan migration missing');
 $planTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_plan_templates'")->fetchColumn();
 if($planTable!==1) throw new RuntimeException('plan migration table missing');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==12)
-    throw new RuntimeException('download settings migration version incorrect');
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==13)
+    throw new RuntimeException('main program download migration version incorrect');
 $defaultScrcpy=$pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn();
 if($defaultScrcpy!==SCRCPY_DEFAULT_DOWNLOAD_URL)
     throw new RuntimeException('scrcpy download default is missing');
+$defaultMain=$pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='main_program'")->fetchColumn();
+if($defaultMain!==MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL)
+    throw new RuntimeException('main program URL placeholder is missing');
+$pdo->exec("UPDATE phonehub_download_settings SET download_url='https://example.com/custom-scrcpy.zip' WHERE resource='scrcpy'");
+$pdo->exec("DELETE FROM phonehub_admin_migrations WHERE version=13");
+migrate($pdo);
+if($pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn()!=='https://example.com/custom-scrcpy.zip')
+    throw new RuntimeException('main program migration overwrote administrator scrcpy URL');
+$pdo->exec("UPDATE phonehub_download_settings SET download_url='".SCRCPY_DEFAULT_DOWNLOAD_URL."' WHERE resource='scrcpy'");
 migrate($pdo);
 if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn()!==1)
     throw new RuntimeException('scrcpy migration seeded duplicate rows');
+if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resource='main_program'")->fetchColumn()!==1)
+    throw new RuntimeException('main program migration seeded duplicate rows');
+foreach (['https://example.com/PhoneHub.exe','https://example.com/PhoneHub.msi',
+          MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL] as $validMain) {
+    if(main_program_validate_download_url($validMain)!==$validMain)
+        throw new RuntimeException('main program executable URL was rejected');
+}
+foreach (['http://example.com/PhoneHub.exe','https://127.0.0.1/PhoneHub.exe',
+          'https://example.com/PhoneHub.bat','https://user:pass@example.com/PhoneHub.msi'] as $badMain) {
+    try { main_program_validate_download_url($badMain); }
+    catch (RuntimeException $e) { continue; }
+    throw new RuntimeException('unsafe main program URL was accepted');
+}
 foreach ([
     'http://down.tmd.pet/scrcpy/download.zip',
     'https://127.0.0.1/scrcpy.zip',
@@ -98,7 +120,7 @@ foreach (['owner','global','admin','viewer','not_a_role'] as $role)
 foreach (['admin','viewer','not_a_role'] as $role)
     foreach (['group_create','group_bulk_preview','release_publish','backup_key_generate',
         'update_apply','admin_create','admin_role_change','automation_token_create',
-        'cloud_features_save'] as $action)
+        'cloud_features_save','main_program_url_save'] as $action)
         if (phonehub_role_can_action($role,$action))
             throw new RuntimeException('staff operator can use '.$action);
 foreach (['global','admin','viewer','not_a_role'] as $role)
@@ -112,7 +134,7 @@ foreach (['account_save','plan_save','plan_toggle','mobile_revoke',
     if (!phonehub_role_can_action('admin',$action))
         throw new RuntimeException('ordinary admin missing '.$action);
 foreach (['release_publish','cloud_features_save','update_check','update_diagnostics',
-    'group_bulk','ai_settings_save'] as $action)
+    'group_bulk','ai_settings_save','main_program_url_save'] as $action)
     if (!phonehub_role_can_action('global',$action))
         throw new RuntimeException('global admin missing '.$action);
 if (!phonehub_role_can_action('viewer','logout') ||

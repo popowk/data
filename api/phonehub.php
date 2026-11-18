@@ -46,8 +46,9 @@ function api_out(array $data,int $status=200): never {
 function api_error(string $message,int $code=400): never {api_out(['ok'=>false,'error'=>$message],$code);}
 try {
     $action=(string)($_GET['action']??'health');
-    if ($action==='scrcpy_download') {
+    if (in_array($action,['scrcpy_download','main_program_download'],true)) {
         if (($_SERVER['REQUEST_METHOD']??'GET')!=='GET') api_error('此接口仅允许 GET',405);
+        $resource=$action==='scrcpy_download'?'scrcpy':'main_program';
         try {
             require_once dirname(__DIR__).'/app/releases.php';
             $cfg=require dirname(__DIR__).'/storage/config.php';
@@ -59,15 +60,16 @@ try {
                  PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC,
                  PDO::ATTR_EMULATE_PREPARES=>false]);
             $q=$readDb->prepare('SELECT download_url FROM phonehub_download_settings WHERE resource=?');
-            $q->execute(['scrcpy']);
+            $q->execute([$resource]);
             $url=$q->fetchColumn();
-            $url=scrcpy_validate_download_url(is_string($url) && $url!=='' ? $url : SCRCPY_DEFAULT_DOWNLOAD_URL);
+            $defaultUrl=$resource==='scrcpy'?SCRCPY_DEFAULT_DOWNLOAD_URL:MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL;
+            $url=phonehub_validate_download_url(is_string($url) && $url!=='' ? $url : $defaultUrl,$resource);
         } catch (Throwable $e) {
-            error_log('PhoneHub public scrcpy URL lookup: '.get_class($e));
-            api_error('暂时无法获取 scrcpy 下载地址',503);
+            error_log('PhoneHub public download URL lookup (' . $resource . '): '.get_class($e));
+            api_error('暂时无法获取下载地址',503);
         }
-        $etag='"scrcpy-'.hash('sha256',$url).'"';
-        header('Cache-Control: public, max-age='.SCRCPY_DOWNLOAD_CACHE_SECONDS.', must-revalidate');
+        $etag='"'.$resource.'-'.hash('sha256',$url).'"';
+        header('Cache-Control: public, max-age='.DOWNLOAD_URL_CACHE_SECONDS.', must-revalidate');
         header('ETag: '.$etag);
         // Re-read current database value before issuing 304: stale client ETags
         // are not considered valid once an administrator changes the URL.
@@ -76,7 +78,7 @@ try {
             http_response_code(304);
             exit;
         }
-        api_out(['ok'=>true,'download_url'=>$url,'cache_ttl_seconds'=>SCRCPY_DOWNLOAD_CACHE_SECONDS]);
+        api_out(['ok'=>true,'download_url'=>$url,'cache_ttl_seconds'=>DOWNLOAD_URL_CACHE_SECONDS]);
     }
     if ($action==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true]);
     $sampleRate=max(0,min(100,(int)(getenv('PHONEHUB_PERF_SAMPLE_PERCENT')?:0)));

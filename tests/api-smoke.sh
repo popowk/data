@@ -26,6 +26,20 @@ test "$unchanged" = 304 || { echo "scrcpy conditional GET did not return 304 ($u
 methodRejected=$(curl -sS -X POST -o "$scrcpyBody" -w '%{http_code}' "$scrcpyPath")
 test "$methodRejected" = 405 || { echo "scrcpy POST unexpectedly allowed" >&2;exit 1; }
 rm -f "$scrcpyBody" "$scrcpyHeaders"
+# Separate public endpoint for the main program, initially using a ZIP
+# placeholder. Its conditional requests must work independently of scrcpy.
+mainBody=$(mktemp);mainHeaders=$(mktemp)
+mainPath='http://127.0.0.1:18765/api/phonehub.php?action=main_program_download'
+curl -fsS -D "$mainHeaders" "$mainPath" -o "$mainBody"
+TEST_BODY="$mainBody" python3 -c 'import os,json;j=json.load(open(os.environ["TEST_BODY"]));assert j=={"ok":True,"download_url":"https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip","cache_ttl_seconds":300},j'
+grep -qi '^cache-control: public, max-age=300, must-revalidate' "$mainHeaders"
+mainEtag=$(awk 'tolower($1)=="etag:" {gsub(/\r/,"",$2);print $2}' "$mainHeaders")
+test -n "$mainEtag"
+unchangedMain=$(curl -sS -H "If-None-Match: $mainEtag" -o "$mainBody" -w '%{http_code}' "$mainPath")
+test "$unchangedMain" = 304 || { echo "main program conditional GET returned $unchangedMain" >&2;exit 1; }
+wrongMainMethod=$(curl -sS -X POST -o "$mainBody" -w '%{http_code}' "$mainPath")
+test "$wrongMainMethod" = 405 || { echo "main program POST unexpectedly allowed" >&2;exit 1; }
+rm -f "$mainBody" "$mainHeaders"
 # Render the PHP management entry point and authenticated update page. This catches
 # the class of post-update 500 errors caused by a missing app/accounts.php.
 adminHtml=$(mktemp)
@@ -74,6 +88,9 @@ grep -q 'data-ajax="package_publish"' "$adminHtml"
 grep -q 'id="scrcpy-download-settings"' "$adminHtml"
 grep -q 'name="download_url"' "$adminHtml"
 grep -q 'api/phonehub.php?action=scrcpy_download' "$adminHtml"
+grep -q 'id="main-program-download-settings"' "$adminHtml"
+grep -q 'data-ajax="main_program_url_save"' "$adminHtml"
+grep -q 'api/phonehub.php?action=main_program_download' "$adminHtml"
 # Changing the address updates the next server GET and its ETag;
 # clients already caching a response may retain it for at most 300 seconds.
 scrcpyBeforeHeaders=$(mktemp);scrcpyAfterHeaders=$(mktemp);scrcpyBody=$(mktemp)
@@ -97,6 +114,30 @@ scrcpyRestored=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/ind
   --data-urlencode 'download_url=https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')
 TEST_RESPONSE="$scrcpyRestored" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
 rm -f "$scrcpyBeforeHeaders" "$scrcpyAfterHeaders" "$scrcpyBody"
+# Main program and scrcpy are independent settings, including cache validators.
+mainFirstHeaders=$(mktemp);mainNextHeaders=$(mktemp);mainResponse=$(mktemp)
+curl -fsS -D "$mainFirstHeaders" 'http://127.0.0.1:18765/api/phonehub.php?action=main_program_download' -o "$mainResponse"
+mainFirstEtag=$(awk 'tolower($1)=="etag:" {gsub(/\r/,"",$2);print $2}' "$mainFirstHeaders")
+mainSaved=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=main_program_url_save' \
+  --data-urlencode 'download_url=https://example.com/PhoneHub-v2.0.0.exe')
+TEST_RESPONSE="$mainSaved" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+curl -fsS -D "$mainNextHeaders" -H "If-None-Match: $mainFirstEtag" \
+  'http://127.0.0.1:18765/api/phonehub.php?action=main_program_download' -o "$mainResponse"
+TEST_BODY="$mainResponse" python3 -c 'import os,json;j=json.load(open(os.environ["TEST_BODY"]));assert j["download_url"]=="https://example.com/PhoneHub-v2.0.0.exe",j'
+mainNextEtag=$(awk 'tolower($1)=="etag:" {gsub(/\r/,"",$2);print $2}' "$mainNextHeaders")
+test "$mainFirstEtag" != "$mainNextEtag"
+curl -fsS 'http://127.0.0.1:18765/api/phonehub.php?action=scrcpy_download' -o "$mainResponse"
+TEST_BODY="$mainResponse" python3 -c 'import os,json;j=json.load(open(os.environ["TEST_BODY"]));assert j["download_url"]=="https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip",j'
+invalidMain=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=main_program_url_save' \
+  --data-urlencode 'download_url=http://localhost/PhoneHub.zip')
+TEST_RESPONSE="$invalidMain" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+restoredMain=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=main_program_url_save' \
+  --data-urlencode 'download_url=https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')
+TEST_RESPONSE="$restoredMain" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+rm -f "$mainFirstHeaders" "$mainNextHeaders" "$mainResponse"
 # Keep the package summary and history in separate non-overlapping layout sections.
 grep -q 'class="table-scroll package-summary-table"' "$adminHtml"
 grep -q 'class="card-head package-subsection-head package-history-head"' "$adminHtml"
@@ -207,6 +248,8 @@ for page in releases cloud_features admins audit update groups; do
   test "$status" = 200 || { echo "global GET denied $page ($status)" >&2; exit 1; }
 done
 # Global administrators can edit the public URL; ordinary administrators cannot.
+globalMain=$(curl -sS -b "$globalCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$globalCsrf" --data-urlencode 'action=main_program_url_save' --data-urlencode 'download_url=https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')
+TEST_RESPONSE="$globalMain" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
 globalScrcpy=$(curl -sS -b "$globalCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$globalCsrf" --data-urlencode 'action=scrcpy_url_save' --data-urlencode 'download_url=https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')
 TEST_RESPONSE="$globalScrcpy" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
 # Sensitive owner functions must remain inaccessible even to global admins.
@@ -222,7 +265,7 @@ for page in dashboard groups group_bulk packages releases cloud_features update 
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 403 || { echo "ordinary GET allowed $page ($status)" >&2; exit 1; }
 done
-for action in group_create group_bulk_preview release_publish package_publish scrcpy_url_save admin_create backup_key_generate update_apply cloud_features_save; do
+for action in group_create group_bulk_preview release_publish package_publish scrcpy_url_save main_program_url_save admin_create backup_key_generate update_apply cloud_features_save; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=$action")
   test "$status" = 403 || { echo "ordinary POST allowed $action ($status)" >&2; exit 1; }
 done

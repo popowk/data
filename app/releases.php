@@ -3,29 +3,41 @@ declare(strict_types=1);
 // Client core release publishing, kept separate from admin panel software self-updates.
 const CLIENT_RELEASE_LIMIT=52428800; // 50 MiB compressed
 const SCRCPY_DEFAULT_DOWNLOAD_URL='https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip';
-const SCRCPY_DOWNLOAD_CACHE_SECONDS=300;
+// Temporary placeholder only: replace with the official program download when available.
+const MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL='https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip';
+const DOWNLOAD_URL_CACHE_SECONDS=300;
 
-/** Validate a public client download target; the server never fetches it. */
-function scrcpy_validate_download_url(string $url): string {
+/** Validate a public download target; the server never fetches or redirects to it. */
+function phonehub_validate_download_url(string $url,string $resource): string {
+    if (!in_array($resource,['scrcpy','main_program'],true))
+        throw new RuntimeException('未知下载资源');
+    $label=$resource==='scrcpy'?'scrcpy':'官网主程序';
     $url=trim($url);
     if ($url==='' || strlen($url)>512 || preg_match('/[\\x00-\\x20\\x7f]/',$url))
-        throw new RuntimeException('scrcpy 下载地址不能为空、包含空格或超过 512 字节');
+        throw new RuntimeException($label.'下载地址不能为空、包含空格或超过 512 字节');
     if (filter_var($url,FILTER_VALIDATE_URL)===false)
-        throw new RuntimeException('scrcpy 下载地址必须是完整 URL');
+        throw new RuntimeException($label.'下载地址必须是完整 URL');
     $parts=parse_url($url);
     if (!is_array($parts) || strtolower((string)($parts['scheme']??''))!=='https'
         || !is_string($parts['host']??null)
         || isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment'])
         || (isset($parts['port']) && $parts['port']!==443))
-        throw new RuntimeException('scrcpy 下载地址仅允许无凭据的 HTTPS 链接（标准 443 端口）');
+        throw new RuntimeException($label.'下载地址仅允许无凭据的 HTTPS 链接（标准 443 端口）');
     $host=$parts['host'];
     if (filter_var($host,FILTER_VALIDATE_IP)!==false ||
         filter_var($host,FILTER_VALIDATE_DOMAIN,FILTER_FLAG_HOSTNAME)===false ||
         !str_contains($host,'.'))
-        throw new RuntimeException('scrcpy 下载地址需要有效的公开域名，不接受 IP 或本地域名');
-    if (!preg_match('~^/.+\\.zip$~iD',(string)($parts['path']??'')))
-        throw new RuntimeException('scrcpy 下载地址必须以 .zip 文件结尾');
+        throw new RuntimeException($label.'下载地址需要有效的公开域名，不接受 IP 或本地域名');
+    $pattern=$resource==='scrcpy'?'~^/.+\\.zip$~iD':'~^/.+\\.(?:zip|exe|msi)$~iD';
+    if (!preg_match($pattern,(string)($parts['path']??'')))
+        throw new RuntimeException($label.'下载地址必须指向 '.($resource==='scrcpy'?'ZIP':'ZIP、EXE 或 MSI').' 文件');
     return $url;
+}
+function scrcpy_validate_download_url(string $url): string {
+    return phonehub_validate_download_url($url,'scrcpy');
+}
+function main_program_validate_download_url(string $url): string {
+    return phonehub_validate_download_url($url,'main_program');
 }
 function release_store(): string {
     $root=realpath(APP_STORE);

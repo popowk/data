@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.5.24",
+  "version": "0.5.25",
   "channel": "stable",
   "released_at": "2026-11-19",
-  "notes": "新增公开 GET /api/phonehub.php?action=scrcpy_download，返回 scrcpy ZIP 下载地址并提供 ETag、304、5 分钟浏览器缓存；默认 https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip。全局管理员在「版本发布与操作包」修改目标地址，安全校验 HTTPS、公开域名与 ZIP 后缀；数据库迁移 12 独立存储 URL，不影响原有 feature settings 或已签名 V3 更新。"
+  "notes": "在现有 scrcpy 下载地址旁新增官网主程序下载地址配置，独立保存与公开 GET ?action=main_program_download 查询。默认暂用 https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip 占位；支持 ZIP/EXE/MSI、ETag/304 与 300 秒客户端缓存，只有全局管理员可修改。MySQL 5.7 迁移 13 安全插入 main_program 行，保留已有 scrcpy 地址；扩展权限和 HTTP 回归测试。"
 }

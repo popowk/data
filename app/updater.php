@@ -260,7 +260,7 @@ function update_diagnostics(): array {
         'detail'=>$canBackup?'具备写入备份的条件':'备份目录不可写'];
     try {
         $migrations=(int)db()->query('SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations')->fetchColumn();
-        $checks[]=['name'=>'MySQL 数据库','status'=>$migrations>=12?'ok':'warning',
+        $checks[]=['name'=>'MySQL 数据库','status'=>$migrations>=13?'ok':'warning',
             'detail'=>'连接正常；数据结构版本 '.$migrations];
     } catch(Throwable $e) {
         error_log('PhoneHub runtime diagnostics database failure: '.get_class($e));
