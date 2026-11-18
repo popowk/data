@@ -195,7 +195,7 @@ curl -fsS -b "$viewerCookies" 'http://127.0.0.1:18765/index.php?view=packages' -
 grep -q '操作包管理中心' "$viewerHtml"
 status=$(curl -sS -b "$viewerCookies" -o "$viewerHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$viewerCsrf" --data-urlencode 'action=plan_save')
 test "$status" = 403 || { echo "Legacy viewer can write plan" >&2;exit 1; }
-viewerId=$(php -r 'require "app/core.php"; echo db()->query("SELECT id FROM phonehub_admins WHERE username=\x27ci_legacy_viewer\x27")->fetchColumn();')
+viewerId=$(php -r 'require "app/core.php"; $s=db()->prepare("SELECT id FROM phonehub_admins WHERE username=?");$s->execute(["ci_legacy_viewer"]);echo $s->fetchColumn();')
 changed=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$CSRF" --data-urlencode 'action=admin_role_change' --data-urlencode "id=$viewerId" --data-urlencode 'role=admin')
 TEST_RESPONSE="$changed" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
 curl -fsS -b "$viewerCookies" 'http://127.0.0.1:18765/index.php?view=plans' -o "$viewerHtml"
