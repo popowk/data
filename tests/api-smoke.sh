@@ -25,11 +25,17 @@ adminLogin=$(curl -fsS -b "$adminCookies" -c "$adminCookies" -X POST 'http://127
 TEST_RESPONSE="$adminLogin" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
 grep -q '系统更新' "$adminHtml"
+runtimeJson=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode "action=update_diagnostics")
+TEST_RESPONSE="$runtimeJson" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and isinstance(j.get("checks"),list) and isinstance(j.get("summary"),dict),j'
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
+grep -q '运行环境自检' "$adminHtml"
+if grep -q '复制故障报告' "$adminHtml"; then echo 'legacy diagnostic link is still present' >&2; exit 1; fi
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=diagnostics' -o "$adminHtml"
-grep -q '复制完整报告' "$adminHtml"
-reportJson=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+if grep -q '<h1>故障诊断</h1>' "$adminHtml"; then echo 'diagnostic page is still available' >&2; exit 1; fi
+removedReport=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=diagnostic_report")
-TEST_RESPONSE="$reportJson" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); r=j.get("report",""); assert j["ok"] and "PhoneHub 故障诊断报告" in r and "MySQL 版本" in r and len(r)<8000 and isinstance(j.get("checks"),list),j'
+TEST_RESPONSE="$removedReport" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"],j'
 planCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=account_save" \
   --data-urlencode "username=ci_open_plan_user" --data-urlencode "opening_plan=personal" \
