@@ -134,3 +134,18 @@ input[readonly]{background:#f7f8fb;color:#9099a6}
 /* Viewer/operator role selection (v0.5.8). */
 .admin-create-form{max-width:900px;flex-wrap:wrap}
 .admin-create-form select{min-height:42px;border:1px solid #dce3ef;border-radius:8px;padding:10px;color:#263c55;background:#fff;flex:1;min-width:220px}
+
+/* One card contains a package summary AND a version history.
+   The shared .table-scroll negative bottom bleed is only suitable for terminal tables. */
+#legacy-operation-packages .package-summary-table,
+#legacy-operation-packages .package-history-table{margin-bottom:0}
+#legacy-operation-packages .package-subsection-head{margin:24px 0 14px;gap:12px}
+#legacy-operation-packages .package-history-head{padding-top:20px;border-top:1px solid var(--border)}
+#legacy-operation-packages .package-summary-table table{min-width:800px}
+#legacy-operation-packages .package-history-table table{min-width:680px}
+#legacy-operation-packages .package-bottom-note{margin:16px 0 0}
+#legacy-operation-packages code{white-space:normal;overflow-wrap:anywhere}
+@media(max-width:640px){
+  #legacy-operation-packages .package-subsection-head{align-items:flex-start}
+  #legacy-operation-packages .package-subsection-head h2{line-height:1.5}
+}

@@ -175,14 +175,15 @@ function release_package_overview(): void {
       </form>
       <p class="footnote">仅接受加密工具生成的 JSON：<code>{"envelope":{"manifest":"Base64","signature":"Base64","nonce":"Base64","ciphertext":"Base64"},"content_key":"Base64"}</code>。服务端进行字段、Base64 和大小检查，但不能替代客户端签名验真与解密联调。版本不可覆盖；新版本发布后会成为该包默认下载版本。</p>
       <?php endif ?>
-      <div class="table-scroll"><table><thead><tr><th>包 ID</th><th>最新版本</th><th>当前可下载版本</th><th>版本数（本页）</th><th>累计下载</th><th>近 30 天</th><th>最后下载</th></tr></thead><tbody>
+      <div class="card-head package-subsection-head"><h2>操作包概览</h2><span class="count">按包 ID 汇总</span></div>
+      <div class="table-scroll package-summary-table"><table><thead><tr><th>包 ID</th><th>最新版本</th><th>当前可下载版本</th><th>版本数（本页）</th><th>累计下载</th><th>近 30 天</th><th>最后下载</th></tr></thead><tbody>
         <?php foreach ($groups as $id=>$g): $c=$stats[$id]??[]; ?>
         <tr><td><b><?=h($id)?></b></td><td>v<?=(int)$g['latest_version']?></td><td><?= $g['latest_enabled']===null?'<span class="pill off">全部停用</span>':'v'.(int)$g['latest_enabled']?></td><td><?=(int)$g['versions']?></td><td><?=(int)($c['total']??0)?></td><td><?=(int)($c['last30']??0)?></td><td><?=h($c['latest']??'—')?></td></tr>
         <?php endforeach ?>
         <?php if (!$groups): ?><tr><td colspan="7" class="empty-result">尚无操作包，可以上传第一份加密封装 JSON</td></tr><?php endif ?>
       </tbody></table></div>
-      <div class="card-head"><h2>历史版本与上下架</h2><span class="count">最近 200 条</span></div>
-      <div class="table-scroll"><table><thead><tr><th>操作包</th><th>版本</th><th>状态</th><th>发布时间（UTC）</th><th>操作</th></tr></thead><tbody>
+      <div class="card-head package-subsection-head package-history-head"><h2>历史版本与上下架</h2><span class="count">最近 200 条</span></div>
+      <div class="table-scroll package-history-table"><table><thead><tr><th>操作包</th><th>版本</th><th>状态</th><th>发布时间（UTC）</th><th>操作</th></tr></thead><tbody>
         <?php foreach ($rows as $p): ?>
         <tr><td><?=h($p['package_id'])?></td><td>v<?=(int)$p['version']?></td><td><span class="pill <?=(int)$p['enabled']?'ok':'off'?>"><?=(int)$p['enabled']?'已启用':'已停用'?></span></td><td><?=h($p['created_at'])?></td><td>
           <?php if ($canEdit): ?><button class="small-link" data-action="package-toggle" data-id="<?=(int)$p['id']?>"><?=(int)$p['enabled']?'停用':'恢复'?></button>
@@ -191,7 +192,7 @@ function release_package_overview(): void {
         <?php endforeach ?>
         <?php if (!$rows): ?><tr><td colspan="5" class="empty-result">暂无已发布的操作包版本</td></tr><?php endif ?>
       </tbody></table></div>
-      <p class="footnote">停用某版本后，客户端只会获取同一包中最高的其他启用版本；如果所有版本停用则不可下载。变更保留管理员审计记录，不删除历史数据。</p>
+      <p class="footnote package-bottom-note">停用某版本后，客户端只会获取同一包中最高的其他启用版本；如果所有版本停用则不可下载。变更保留管理员审计记录，不删除历史数据。</p>
     </section>
     <?php
 }

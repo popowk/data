@@ -57,6 +57,11 @@ grep -q '服务端 AI 中转' "$adminHtml"
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases' -o "$adminHtml"
 grep -q '操作包管理中心' "$adminHtml"
 grep -q 'data-ajax="package_publish"' "$adminHtml"
+# Keep the package summary and history in separate non-overlapping layout sections.
+grep -q 'class="table-scroll package-summary-table"' "$adminHtml"
+grep -q 'class="card-head package-subsection-head package-history-head"' "$adminHtml"
+grep -q 'class="table-scroll package-history-table"' "$adminHtml"
+grep -q 'package-summary-table' assets/app.css
 # Owner uploads encrypted JSON (not a ZIP) without exposing the 32-byte key.
 operationFixture=$(mktemp)
 invalidFixture=$(mktemp)
