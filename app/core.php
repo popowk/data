@@ -420,7 +420,7 @@ function phonehub_role_can_action(string $role,string $action): bool {
         'backup_key_generate','update_check','update_apply',
         'update_diagnostics','release_publish','release_toggle','logs_purge',
         'ai_settings_save','admin_create','admin_toggle','admin_reset',
-        'admin_delete','owner_password','device_reveal','device_blacklist_add',
+        'admin_delete','owner_password','device_blacklist_add',
         'mobile_blacklist','mobile_unblacklist','cloud_features_save',
         'gateway_install'
     ]);

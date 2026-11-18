@@ -25,6 +25,21 @@ adminLogin=$(curl -fsS -b "$adminCookies" -c "$adminCookies" -X POST 'http://127
 TEST_RESPONSE="$adminLogin" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
 grep -q '系统更新' "$adminHtml"
+# Consolidated pages: old owner links redirect, and the combined views render.
+aiRedirect=$(curl -sS -b "$adminCookies" -o /dev/null -w '%{http_code} %{redirect_url}' 'http://127.0.0.1:18765/index.php?view=ai')
+[[ "$aiRedirect" == 302*cloud_features* ]] || { echo 'AI view did not redirect to capability management' >&2; exit 1; }
+packageRedirect=$(curl -sS -b "$adminCookies" -o /dev/null -w '%{http_code} %{redirect_url}' 'http://127.0.0.1:18765/index.php?view=packages')
+[[ "$packageRedirect" == 302*releases* ]] || { echo 'Legacy package owner view did not redirect' >&2; exit 1; }
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=cloud_features' -o "$adminHtml"
+grep -q '客户端能力与 AI' "$adminHtml"
+grep -q '服务端 AI 中转' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases' -o "$adminHtml"
+grep -q '历史操作包（只读）' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=devices' -o "$adminHtml"
+if grep -q '<th>IMEI</th>\|<th>手机号</th>\|name="phone_number"\|name="imei"\|data-action="device-reveal"' "$adminHtml"; then
+  echo 'Sensitive device controls were not removed' >&2; exit 1
+fi
+
 runtimeJson=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=update_diagnostics")
 TEST_RESPONSE="$runtimeJson" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and isinstance(j.get("checks"),list) and isinstance(j.get("summary"),dict),j'

@@ -229,6 +229,9 @@ $view=(string)($_GET['view'] ?? 'dashboard');
 if (in_array($view,['mobiles','sessions'],true)) {header('Location: index.php?view=devices',true,302);exit;}
 if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
 $adminRole=admin_role();
+// Keep old saved links working while removing duplicate sidebar entries.
+if ($view==='ai') { header('Location: index.php?view=cloud_features#ai-management',true,302);exit; }
+if ($view==='packages' && $adminRole==='owner') { header('Location: index.php?view=releases#legacy-operation-packages',true,302);exit; }
 if (!phonehub_role_can_view($adminRole,$view)) { http_response_code(403); exit('当前管理员无权访问此页面'); }
 $groups=in_array($view,['dashboard','accounts','groups','group_bulk'],true) ? sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll() : [];
 $accounts=[];
@@ -268,12 +271,10 @@ $nav=[
 'groups'=>['客户分组','◫'],
 'group_bulk'=>['分组批量配置','≡'],
 'devices'=>['设备管理','▣'],
-'packages'=>['操作包','⬡'],
 'plans'=>['套餐管理','▤'],
 'client_logs'=>['客户端日志','☷'],
-'releases'=>['核心更新发布','⇧'],
-'ai'=>['AI 接口管理','✧'],
-'cloud_features'=>['客户端能力控制','⚙'],
+'releases'=>['版本发布与操作包','⇧'],
+'cloud_features'=>['客户端能力与 AI','⚙'],
 'update'=>['系统更新','⟳'],
 'backup_keys'=>['备份密钥','◈'],
 'gateway'=>['客户端接口接管','↪'],
@@ -360,9 +361,9 @@ $accountPageLink=static function(int $page) use($accountFilters): string {
 <div class="page-title"><div><h1>客户分组</h1><p>将代理商、企业或购买渠道分组管理</p></div><?php if(phonehub_role_can_view($adminRole,'group_bulk')): ?><a class="btn primary" href="?view=group_bulk">统一修改分组授权</a><?php endif ?></div><?php if(phonehub_role_can_action($adminRole,'group_create')): ?><div class="card"><div class="card-head"><h2>新建分组</h2></div><form class="inline-form" data-ajax="group_create"><input type="hidden" name="action" value="group_create"><input name="name" placeholder="例如：代理商A / 企业客户" maxlength="100" required><button class="btn primary">创建分组</button></form></div><?php endif ?>
 <div class="card"><div class="card-head"><h2>已创建分组</h2></div><div class="table-scroll"><table><thead><tr><th>分组名称</th><th>客户数</th><th>操作</th></tr></thead><tbody><?php foreach($groups as $g): ?><tr><td><b><?=h($g['name'])?></b></td><td><?=(int)$g['users']?></td><td><?php if(phonehub_role_can_action($adminRole,'group_delete')): ?><button class="small-link" data-action="delete-group" data-id="<?=(int)$g['id']?>">删除</button><?php else: ?>只读<?php endif ?></td></tr><?php endforeach ?></tbody></table></div></div>
 <?php elseif($view==='plans'): require_once __DIR__.'/app/features.php'; plan_admin_view(); ?>
-<?php elseif($view==='packages'): $packages=sql('SELECT package_id,MAX(version) AS version,COUNT(*) AS versions FROM phonehub_packages GROUP BY package_id ORDER BY package_id')->fetchAll(); ?>
-<div class="page-title"><div><h1>平台操作包</h1><p>兼容现有 PhoneHub 加密包协议；本版本仅展示，不处理签名私钥</p></div></div>
-<div class="card"><div class="table-scroll"><table><thead><tr><th>平台包</th><th>最高版本</th><th>历史版本数量</th></tr></thead><tbody><?php foreach($packages as $p): ?><tr><td><?=h($p['package_id'])?></td><td><?=h($p['version'])?></td><td><?=h($p['versions'])?></td></tr><?php endforeach ?></tbody></table></div></div>
+<?php elseif($view==='packages'): require_once __DIR__.'/app/release_admin.php'; ?>
+<div class="page-title"><div><h1>历史操作包</h1><p>只读兼容入口；主管理员请使用「版本发布与操作包」页面</p></div></div>
+<?php release_package_overview(); ?>
 <?php elseif($view==='backup_keys'): require_once __DIR__.'/app/features.php'; backup_admin_view(); ?>
 <?php elseif($view==='update'): ?>
 <div class="page-title"><div><h1>系统更新</h1><p>从国内镜像获取 GitHub 仓库最新代码，完成备份后在线安装</p></div></div>
@@ -404,12 +405,6 @@ if ($signingModuleReady) {
 <?php elseif($view==='audit'): $before=max(0,(int)($_GET['before']??0)); $auditSql="SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id ORDER BY a.id DESC LIMIT 51"; $audits=$before>0?sql("SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id WHERE a.id < ? ORDER BY a.id DESC LIMIT 51",[$before])->fetchAll():sql($auditSql)->fetchAll(); $hasOlder=count($audits)>50; if($hasOlder)array_pop($audits); $nextBefore=$audits?(int)$audits[count($audits)-1]['id']:0; ?>
 <div class="page-title"><div><h1>管理员操作记录</h1><p>按时间倒序展示，每页 50 条；可继续加载更早记录</p></div><?php if($before>0): ?><a class="btn" href="?view=audit">返回最新记录</a><?php endif ?></div><div class="card"><div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div><?php if($hasOlder && $nextBefore>0): ?><div class="editor-actions"><a class="btn" href="?view=audit&amp;before=<?=$nextBefore?>">更早记录</a></div><?php endif ?></div>
 <?php elseif ($view==='releases'): require __DIR__.'/app/release_admin.php'; release_admin_view(); ?>
-<?php elseif ($view==='ai'): require __DIR__.'/app/ai.php'; try { ai_admin_view(); } catch (Throwable $e) {
-    $errorRef=bin2hex(random_bytes(4));
-    error_log('PhoneHub AI admin page ['.$errorRef.']: '.get_class($e).' '.$e->getMessage());
-    http_response_code(500);
-    ?><div class="card"><h2>AI 管理页面暂时无法加载</h2><p class="muted">服务器已记录错误，请检查 PHP 错误日志。错误编号：<code><?=h($errorRef)?></code></p><a class="btn" href="?view=ai">重新加载</a></div><?php
-} ?>
 <?php elseif (in_array($view,['admins','group_bulk','devices','gateway','client_logs','cloud_features'],true)): require __DIR__.'/app/features.php'; feature_view($view); ?>
 <?php endif ?>
 </main></div></div><div class="toast" id="toast" role="status" aria-live="polite"></div><script src="assets/app.js?v=<?=rawurlencode(app_version())?>" defer></script></body></html>

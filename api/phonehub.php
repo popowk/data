@@ -44,7 +44,7 @@ function api_out(array $data,int $status=200): never {
 }
 function api_error(string $message,int $code=400): never {api_out(['ok'=>false,'error'=>$message],$code);}
 try {
-    if (($_GET['action']??'health')==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true,'imei_binding'=>'optional_hmac']);
+    if (($_GET['action']??'health')==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true]);
     $action=(string)($_GET['action']??'health');
     $sampleRate=max(0,min(100,(int)(getenv('PHONEHUB_PERF_SAMPLE_PERCENT')?:0)));
     if ($action==='client_heartbeat' && $sampleRate>0 && random_int(1,100)<=$sampleRate)
@@ -157,59 +157,38 @@ try {
     if ($action==='mobile_bind') {
         $phone=strtolower((string)($input['phone_id']??''));
         $name=trim((string)($input['display_name']??''));
-        if (!preg_match('/^[a-f0-9]{64}$/D',$phone) || strlen($name)>120 || preg_match('/[\\x00-\\x1F]/',$name))
-            api_error('手机设备指纹必须为 64 位 SHA-256，名称不能包含控制字符');
-        // Enrichment happens only when the client explicitly sends values.
-        // Clients may safely call mobile_bind again for an existing phone_id.
-        $identity=api_mobile_identity_input($input);
-        $imeiHash=$identity['imei_hash'];
-        $phoneHash=$identity['phone_number_hash'];
-        $encryptedImei=$identity['imei_encrypted'];
-        $encryptedPhone=$identity['phone_number_encrypted'];
-        $model=$identity['phone_model'];
+        $model=trim((string)($input['phone_model']??''));
+        if (!preg_match('/^[a-f0-9]{64}$/D',$phone) || strlen($name)>120 ||
+            preg_match('/[\x00-\x1F]/',$name) || strlen($model)>120 ||
+            preg_match('/[\x00-\x1F]/',$model))
+            api_error('手机指纹、备注或型号格式不正确');
+        // Legacy clients may still send IMEI/SIM-number keys; ignore them
+        // without storing, validating, hashing or echoing any raw values.
         $pdo->beginTransaction();
         $meta=client_sql('SELECT u.id,COALESCE(m.mobile_limit,0) AS mobile_limit FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.id=? FOR UPDATE',[$userId])->fetch();
         $limit=(int)($meta['mobile_limit']??0);
         if ($limit<1) { $pdo->rollBack();api_error('当前授权未启用安卓手机名额',403); }
-        if (mobile_blacklist_match($pdo,$phone,$imeiHash,$phoneHash)) {
-            $pdo->rollBack();api_problem('DEVICE_BLACKLISTED','该手机指纹或 IMEI 已被管理员拉黑',403);
-        }
         $existing=client_sql('SELECT enabled,imei_hash,phone_number_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=? FOR UPDATE',[$userId,$phone])->fetch();
-        $knownImeiHash=$imeiHash??(($existing && !empty($existing['imei_hash']))?(string)$existing['imei_hash']:null);
-        if (mobile_blacklist_match($pdo,$phone,$knownImeiHash,$phoneHash??($existing['phone_number_hash']??null))) {
-            $pdo->rollBack();api_problem('DEVICE_BLACKLISTED','该手机指纹或 IMEI 已被管理员拉黑',403);
-        }
-        if ($existing && $phoneHash!==null && !empty($existing['phone_number_hash']) && !hash_equals((string)$existing['phone_number_hash'],$phoneHash)) {
-            $pdo->rollBack();api_problem('PHONE_IDENTITY_MISMATCH','该手机指纹已登记不同手机号，请联系管理员核验',403);
-        }
-        if ($existing && $imeiHash!==null && !empty($existing['imei_hash']) && !hash_equals((string)$existing['imei_hash'],$imeiHash)) {
-            $pdo->rollBack();api_problem('DEVICE_IDENTITY_MISMATCH','该手机指纹已绑定不同 IMEI，请联系管理员核验',403);
-        }
-        if ($imeiHash!==null) {
-            $other=client_sql('SELECT id FROM phonehub_mobile_devices WHERE imei_hash=? AND enabled=1 AND NOT(user_id=? AND phone_id=?) LIMIT 1 FOR UPDATE',[$imeiHash,$userId,$phone])->fetch();
-            if ($other) {$pdo->rollBack();api_problem('IMEI_ALREADY_BOUND','该 IMEI 已绑定其他设备记录',403);}
+        // Historical bans remain in force for already registered fingerprints,
+        // without accepting any new sensitive identifier information.
+        if (mobile_blacklist_match($pdo,$phone,$existing['imei_hash']??null,$existing['phone_number_hash']??null)) {
+            $pdo->rollBack();api_problem('DEVICE_BLACKLISTED','该手机已被管理员拉黑',403);
         }
         $count=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
         if ((!$existing || !(int)$existing['enabled']) && $count >= $limit) {
             $pdo->rollBack();api_error('安卓手机绑定数量已达上限，请联系管理员解绑',403);
         }
-        client_sql('INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,imei_hash,imei_encrypted,phone_model,phone_number_hash,phone_number_encrypted,enabled,last_seen) VALUES(?,?,?,?,?,?,?,?,1,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),imei_hash=COALESCE(VALUES(imei_hash),imei_hash),imei_encrypted=COALESCE(VALUES(imei_encrypted),imei_encrypted),phone_model=COALESCE(NULLIF(VALUES(phone_model),\'\'),phone_model),phone_number_hash=COALESCE(VALUES(phone_number_hash),phone_number_hash),phone_number_encrypted=COALESCE(VALUES(phone_number_encrypted),phone_number_encrypted),enabled=1,last_seen=UTC_TIMESTAMP()',[$userId,$phone,$name,$imeiHash,$encryptedImei,$model,$phoneHash,$encryptedPhone]);
+        client_sql("INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,phone_model,enabled,last_seen)
+            VALUES(?,?,?,?,1,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE
+            display_name=VALUES(display_name),
+            phone_model=COALESCE(NULLIF(VALUES(phone_model),''),phone_model),
+            enabled=1,last_seen=UTC_TIMESTAMP()",[$userId,$phone,$name,$model]);
         $pdo->commit();
         $active=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
-        $stored=client_sql('SELECT imei_hash,imei_encrypted,phone_number_encrypted,phone_model FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
-        api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>true,
-            'imei_bound'=>!empty($stored['imei_hash']),
-            'imei_stored'=>!empty($stored['imei_encrypted']),
-            'phone_number_bound'=>!empty($stored['phone_number_encrypted']),
-            'phone_model_received'=>!empty($stored['phone_model']),
-            'mobile_limit'=>$limit,'active_count'=>$active]);
+        api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>true,'mobile_limit'=>$limit,'active_count'=>$active]);
     }
     if ($action==='mobile_list') {
-        $devices=client_sql("SELECT d.phone_id,d.display_name,d.created_at,d.last_seen,
-              CASE WHEN d.imei_hash IS NULL THEN 0 ELSE 1 END AS imei_bound,
-              CASE WHEN d.imei_encrypted IS NULL THEN 0 ELSE 1 END AS imei_stored,
-              CASE WHEN d.phone_number_encrypted IS NULL THEN 0 ELSE 1 END AS phone_number_bound,
-              CASE WHEN d.phone_model IS NULL OR d.phone_model='' THEN 0 ELSE 1 END AS phone_model_received
+        $devices=client_sql("SELECT d.phone_id,d.display_name,d.created_at,d.last_seen
             FROM phonehub_mobile_devices d WHERE d.user_id=? AND d.enabled=1
             AND NOT EXISTS (SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND
               ((b.identifier_type='phone_id' AND b.identifier_hash=d.phone_id) OR

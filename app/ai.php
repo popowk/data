@@ -290,14 +290,15 @@ function api_ai_chat(array $input,array $session,int $userId): never {
     ai_finish_request($requestId,'success',$status,(int)($usage['prompt_tokens']??0),(int)($usage['completion_tokens']??0),$elapsed);
     api_out($decoded);
 }
-function ai_admin_view(): void {
+function ai_admin_view(bool $embedded=false): void {
     require_owner();
     $s=ai_settings();
     $usage=sql("SELECT u.username,g.mode,g.model,g.status,g.http_status,g.prompt_tokens,g.completion_tokens,g.elapsed_ms,g.created_at
         FROM phonehub_ai_usage g JOIN phonehub_users u ON u.id=g.user_id ORDER BY g.id DESC LIMIT 100")->fetchAll();
     $today=(int)sql("SELECT COUNT(*) FROM phonehub_ai_usage WHERE created_at>=UTC_DATE()")->fetchColumn();
     ?>
-    <div class="page-title"><div><h1>AI 接口管理</h1><p>默认由服务器代理 DeepSeek；服务端密钥不会下发给客户端</p></div></div>
+    <?php if(!$embedded): ?><div class="page-title"><div><h1>AI 接口管理</h1><p>默认由服务器代理 DeepSeek；服务端密钥不会下发给客户端</p></div></div><?php endif ?>
+    <?php if($embedded): ?><div id="ai-management" class="page-title"><div><h2>AI 接口设置</h2><p>服务端 DeepSeek 中转、客户配额和最近调用记录；与上方 MCP / Skill 开关独立保存</p></div></div><?php endif ?>
     <div class="card"><div class="card-head"><h2>服务端 AI 中转</h2><span class="pill <?=$s['enabled']?'ok':'off'?>"><?=$s['enabled']?'已开放':'已关闭'?></span></div>
       <form data-ajax="ai_settings_save">
         <input type="hidden" name="action" value="ai_settings_save">

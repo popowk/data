@@ -4,6 +4,7 @@ require dirname(__DIR__).'/app/core.php';
 require dirname(__DIR__).'/app/ai.php';
 require dirname(__DIR__).'/app/mobile.php';
 require dirname(__DIR__).'/app/releases.php';
+require_once dirname(__DIR__).'/app/release_admin.php';
 require dirname(__DIR__).'/app/accounts.php';
 require_once dirname(__DIR__).'/app/features.php';
 require dirname(__DIR__).'/app/updater.php';
@@ -257,6 +258,14 @@ if (strpos($cloudHtml,'cloud-feature-card')===false || strpos($cloudHtml,'cloud-
 if (strpos($cloudHtml,'name="mcp_codex_enabled"')===false ||
     strpos($cloudHtml,'name="mcp_harness_enabled"')===false)
     throw new RuntimeException('MCP subplatform switches missing');
+if (strpos($cloudHtml,'AI 接口设置')===false ||
+    strpos($cloudHtml,'data-ajax="ai_settings_save"')===false ||
+    strpos($cloudHtml,'服务端 AI 中转')===false)
+    throw new RuntimeException('AI settings were not embedded in client capability view');
+ob_start();release_package_overview();$packageHtml=ob_get_clean();
+if (strpos($packageHtml,'历史操作包（只读）')===false ||
+    strpos($packageHtml,'legacy-operation-packages')===false)
+    throw new RuntimeException('legacy package overview missing from merged release module');
 
 $diagnostics=update_diagnostics();
 if (($diagnostics['summary']['errors']??-1)!==0)
@@ -273,8 +282,12 @@ if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-mem
 ob_start();feature_view('mobiles');$mobileHtml=ob_get_clean();
 if (strpos($mobileHtml,'设备管理')===false || strpos($mobileHtml,'电脑设备')===false ||
     strpos($mobileHtml,'安卓手机')===false || strpos($mobileHtml,'禁止访问')===false ||
-    strpos($mobileHtml,'IMEI')===false || strpos($mobileHtml,'手机号')===false)
+    strpos($mobileHtml,'<th>状态</th>')===false)
     throw new RuntimeException('unified device management page render failed');
+if (strpos($mobileHtml,'<th>IMEI</th>')!==false || strpos($mobileHtml,'<th>手机号</th>')!==false ||
+    strpos($mobileHtml,'name="imei"')!==false || strpos($mobileHtml,'name="phone_number"')!==false ||
+    strpos($mobileHtml,'device-reveal')!==false || strpos($mobileHtml,'value="imei_hash"')!==false)
+    throw new RuntimeException('removed sensitive device management controls still rendered');
 
 // Regression: resetting a customer password must commit the new hash, revoke sessions,
 // audit the operation, and return the one-time secret even if the later UI refresh fails.

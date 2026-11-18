@@ -21,11 +21,25 @@ function release_admin_action(string $action): never {
     }
     throw new RuntimeException('未知发布管理操作');
 }
+/** Existing encrypted operation packages are a separate legacy format.
+ * Only display version/coverage here; do not mix content keys with signed ZIPs.
+ */
+function release_package_overview(): void {
+    $packages=sql('SELECT package_id,MAX(version) AS version,COUNT(*) AS versions
+        FROM phonehub_packages GROUP BY package_id ORDER BY package_id')->fetchAll();
+    ?><div class="card" id="legacy-operation-packages">
+      <div class="card-head"><h2>历史操作包（只读）</h2><span class="count"><?=count($packages)?> 类</span></div>
+      <p class="muted">旧版加密操作包与上方 Ed25519 签名更新 ZIP 是两种独立格式。这里仅查看已有版本，不展示内容密钥，也不影响现有客户端下载 API。</p>
+      <div class="table-scroll"><table><thead><tr><th>操作包</th><th>最新版本</th><th>历史版本数量</th></tr></thead><tbody>
+      <?php foreach($packages as $p): ?><tr><td><?=h($p['package_id'])?></td><td><?=h($p['version'])?></td><td><?=(int)$p['versions']?></td></tr><?php endforeach ?>
+      <?php if (!$packages): ?><tr><td colspan="3" class="empty-result">暂无历史操作包</td></tr><?php endif ?>
+      </tbody></table></div></div><?php
+}
 function release_admin_view(): void {
     require_owner();
     $list=sql('SELECT id,platform,channel,version,min_client,size_bytes,sha256,signature,enabled,created_at FROM phonehub_releases ORDER BY id DESC LIMIT 200')->fetchAll();
     ?>
-    <div class="page-title"><div><h1>客户端核心更新</h1><p>向客户软件发布签名 ZIP 包；与管理后台 GitHub 自更新独立</p></div></div>
+    <div class="page-title"><div><h1>版本发布与操作包</h1><p>统一查看客户端核心、扩展签名更新及历史加密操作包；与后台 GitHub 自更新独立</p></div></div>
     <div class="card"><div class="card-head"><h2>上传新版本（50 MB 以内）</h2></div>
       <form data-ajax="release_publish" enctype="multipart/form-data">
        <input type="hidden" name="action" value="release_publish">
@@ -53,6 +67,7 @@ function release_admin_view(): void {
         <?php foreach($list as $x): ?><tr><td><?=h($x['platform'])?></td><td><?=h($x['channel'])?></td><td><b><?=h($x['version'])?></b></td><td><?=h($x['min_client'])?></td><td><?=number_format((int)$x['size_bytes']/1024/1024,2)?> MB</td><td><span class="pill <?=(int)$x['enabled']?'ok':'off'?>"><?=(int)$x['enabled']?'已发布':'已停用'?></span></td><td><button class="small-link" data-action="release-toggle" data-id="<?=(int)$x['id']?>"><?=(int)$x['enabled']?'暂停下载':'恢复下载'?></button></td></tr><?php endforeach ?>
       </tbody></table></div>
     </div>
+    <?php release_package_overview(); ?>
     <?php
     if (is_file(__DIR__.'/automation.php')) {
         require_once __DIR__.'/automation.php';

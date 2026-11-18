@@ -1,5 +1,7 @@
 # PhoneHub 客户端 API 接入说明 v0.5.2
 
+> **现行版本 v0.5.17：已移除 IMEI 和手机号的采集、补报、后台查看和新建黑名单功能。** 本文下方涉及 v0.5.2/v0.5.16 原号上报的段落属于历史协议记录，不再作为当前接入要求。旧版客户端发送这些额外字段时服务器会忽略，不保存、不参与新身份识别，也不向客户端返回相关保存状态。现行身份只使用手机指纹 phone_id（64 位小写 SHA-256）。历史已保存的摘要/密文和安全禁令不会自动删除或解除。
+
 服务端基础协议版本：0.5.2；当前维护版本 v0.5.16，api=1 向后兼容。协议字段 `api=1` 保持兼容。适配对象：PhoneHub 桌面 APP（此前为 0.7.1）。本版增加手机 IMEI 辅助绑定、设备黑名单，以及 MCP/Skill 云端默认关闭的授权控制。
 
 ## 一、地址与认证
@@ -56,10 +58,10 @@ Authorization: Bearer <登录令牌>
 | client_heartbeat | 无 | 同 license_status |
 | device_list | 无 | 当前账号占用名额的电脑会话及到期时间 |
 | device_revoke | target_device_id | 踢掉指定电脑，返回 revoked |
-| mobile_bind | phone_id, 可选 display_name、imei、phone_model、phone_number | 绑定安卓手机；IMEI 可选，返回 imei_bound 与手机额度 |
+| mobile_bind | phone_id，可选 display_name、phone_model | 绑定安卓手机指纹；返回 bound、mobile_limit、active_count |
 | mobile_list | 无 | 当前用户的手机列表、mobile_limit、active_count、每台设备的 imei_bound |
-| mobile_check | phone_id, 可选 imei | 检查绑定状态与黑名单，返回 bound/imei_bound |
-| mobile_heartbeat | phone_id, 可选 imei | 绑定检查并刷新 last_seen；黑名单设备拒绝心跳 |
+| mobile_check | phone_id | 检查绑定与黑名单，返回 bound（兼容旧客户端上报的额外字段但不使用） |
+| mobile_heartbeat | phone_id，可选 phone_model | 绑定检查、刷新 last_seen 和可选型号；不采集 IMEI/手机号 |
 | mobile_unbind | phone_id | 解绑安卓手机，释放名额 |
 | package_list | 无 | 客户可用操作包列表与 download_allowed |
 | package_check | package_id | 包版本与下载资格 |
@@ -433,3 +435,12 @@ Web 服务器必须禁止 HTTP 访问 /license/storage/，否则更新私钥、�
 成功响应在原字段外追加 imei_stored、phone_number_bound、phone_model_received，mobile_list/mobile_check 也能读取相同的布尔状态；imei_bound 仍仅代表 HMAC 摘要存在。所有返回均不含敏感原文。
 
 client_heartbeat.batch.phones[].imei 依旧只是身份核验，不执行原号持久化。老版 Windows/Android 客户端必须更新其请求构造逻辑才能真正补报。Android 10+ 普通第三方 APP 不一定有权限读取 IMEI，SIM 号码也可能为空；无法合法获得时不要传伪造值，继续用 phone_id。
+
+
+## v0.5.17 当前接口与页面精简
+
+- 移除独立 IMEI、手机号的接收验证、HMAC 生成、可逆加密、读取原号及后台编辑；`mobile_bind`、`mobile_heartbeat`、`mobile_check`、`client_heartbeat.batch` 只依据 `phone_id` 执行新设备的授权逻辑。
+- 兼容处理：老客户端 JSON 中如果还携带 `imei`、`phone_number`，服务端忽略这些字段，不会触发新保存和黑名单匹配，也不会在返回结果包含 `imei_bound`、`imei_stored`、`phone_number_bound` 等状态。客户端应删除上传逻辑。
+- 为避免隐式撤销以前已经生效的黑名单，服务端内部可以继续使用历史绑定记录中 **已经存储的摘要** 校验历史禁令。不会创建新摘要或开放新建这两类黑名单的入口；后台列表只保留电脑 ID / 手机指纹两种可维护类型。
+- 历史迁移列和加密数据 **不在此次升级时自动删除**；无用户明确数据清除指令时，升级不能不可逆地删除授权历史。需要清除历史 PII 时，应另行进行受控备份、保留策略审查和数据库清理。
+- 后台菜单将「操作包」放入「版本发布与操作包」管理页，历史加密操作包与 Ed25519 客户端更新包的数据和下载接口完全独立。「AI 接口管理」合入「客户端能力与 AI」，保留原模型/密钥/用量配置及 MCP/Skill 开关。
