@@ -78,6 +78,8 @@ foreach (['viewer','not_a_role'] as $role)
       'cloud_features_save','mobile_revoke'] as $action)
         if (phonehub_role_can_action($role,$action))
             throw new RuntimeException('read-only/invalid role may mutate data: '.$action);
+if (phonehub_role_can_action('owner','device_reveal'))
+    throw new RuntimeException('raw device identifier admin API still permitted');
 if (!phonehub_role_can_action('viewer','logout') ||
     !phonehub_role_can_action('admin','account_save') ||
     phonehub_role_can_action('admin','plan_save') ||
@@ -185,37 +187,26 @@ if($identityMeta!==1) throw new RuntimeException('mobile identity key metadata t
 $featureFlags=$pdo->query("SELECT setting_key,setting_value FROM phonehub_feature_settings")->fetchAll(PDO::FETCH_KEY_PAIR);
 foreach (['mcp_enabled','skill_enabled','mcp_codex_enabled','mcp_harness_enabled'] as $key)
     if (($featureFlags[$key]??'1')!=='0') throw new RuntimeException('new cloud feature must default disabled: '.$key);
-$imei='490154203237519';
-$imeiHash=mobile_imei_hash($imei);
-if(!preg_match('/^[a-f0-9]{64}$/D',(string)$imeiHash) || hash_equals(hash('sha256',$imei),(string)$imeiHash))
-    throw new RuntimeException('IMEI must be stored as keyed HMAC, not raw or plain SHA-256');
-$keyPath=APP_STORE.'/mobile-identity.key';
-$keyBackup=file_get_contents($keyPath);
-if (!is_string($keyBackup) || strlen($keyBackup)!==32 || !unlink($keyPath))
-    throw new RuntimeException('could not prepare IMEI key-loss test');
-$keyLossRejected=false;
-try {mobile_imei_hash($imei);} catch(RuntimeException $e) {$keyLossRejected=str_contains($e->getMessage(),'密钥丢失');}
-file_put_contents($keyPath,$keyBackup,LOCK_EX);
-if (PHP_OS_FAMILY!=='Windows') chmod($keyPath,0600);
-if (!$keyLossRejected) throw new RuntimeException('missing IMEI HMAC key must fail closed, not rotate');
-$phoneId=str_repeat('c',64);
-$pdo->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES('imei_hash',?,?,1,0)")
-    ->execute([$imeiHash,'CI blacklist test']);
-if(!mobile_blacklist_match($pdo,$phoneId,$imeiHash)) throw new RuntimeException('IMEI blacklist lookup failed');
+// Historical DB columns are left intact for rollback compatibility, but
+// no new IMEI/SIM-number data is accepted or hashed anywhere in the API.
 require_once dirname(__DIR__).'/app/devices.php';
-$encryptedImei=device_encrypt('490154203237518');
-$encryptedPhone=device_encrypt('+8613812345678');
-if($encryptedImei==='490154203237518' || device_decrypt($encryptedImei)!=='490154203237518')
-    throw new RuntimeException('IMEI encrypted roundtrip failed');
-if(device_decrypt($encryptedPhone)!=='+8613812345678')
-    throw new RuntimeException('phone number encrypted roundtrip failed');
-$phoneHash=device_phone_hash(device_phone_normalize('13812345678'));
-if(!is_string($phoneHash) || strlen($phoneHash)!==64 || hash_equals($phoneHash,hash('sha256','13812345678')))
-    throw new RuntimeException('phone number HMAC validation failed');
-$pdo->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES('phone_hash',?,?,1,0)")
-    ->execute([$phoneHash,'phone blacklist test']);
-if(!mobile_blacklist_match($pdo,str_repeat('b',64),null,$phoneHash))
-    throw new RuntimeException('phone number blacklist lookup failed');
+$phoneId=str_repeat('c',64);
+$legacyHash=hash('sha256','preexisting-hmac-fixture');
+$pdo->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES('imei_hash',?,?,1,0)")
+    ->execute([$legacyHash,'historical device ban']);
+if (!mobile_blacklist_match($pdo,$phoneId,$legacyHash))
+    throw new RuntimeException('historical recorded bans must still protect existing devices');
+$legacyNewRejected=false;
+try {device_insert_blacklist($pdo,'imei_hash',$legacyHash,'forbidden new sensitive ban',0);}
+catch(RuntimeException $e) {$legacyNewRejected=true;}
+if (!$legacyNewRejected) throw new RuntimeException('new sensitive blacklist entry was accepted');
+$phoneIdBan=str_repeat('e',64);
+device_insert_blacklist($pdo,'phone_id',$phoneIdBan,'CI phone fingerprint block',0);
+if(!mobile_blacklist_match($pdo,$phoneIdBan,null))
+    throw new RuntimeException('phone fingerprint blacklist lookup failed');
+if (function_exists('mobile_imei_hash') || function_exists('device_decrypt') ||
+    function_exists('device_phone_hash'))
+    throw new RuntimeException('retired sensitive identifier helpers remain callable');
 $computerId=str_repeat('d',64);
 if(device_blacklisted_computer($pdo,$computerId)) throw new RuntimeException('unknown computer incorrectly blacklisted');
 device_insert_blacklist($pdo,'computer_id',$computerId,'CI computer blacklist',0);
