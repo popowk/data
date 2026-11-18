@@ -55,7 +55,57 @@ curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=cloud_featur
 grep -q '客户端能力与 AI' "$adminHtml"
 grep -q '服务端 AI 中转' "$adminHtml"
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases' -o "$adminHtml"
-grep -q '历史操作包（只读）' "$adminHtml"
+grep -q '操作包管理中心' "$adminHtml"
+grep -q 'data-ajax="package_publish"' "$adminHtml"
+# Owner uploads encrypted JSON (not a ZIP) without exposing the 32-byte key.
+operationFixture=$(mktemp)
+invalidFixture=$(mktemp)
+python3 - "$operationFixture" <<'PY'
+import base64,json,os,sys
+b=lambda data:base64.b64encode(data).decode('ascii')
+payload={
+  'package_id':'douyin','version':2,
+  'envelope':{
+    'manifest':b(b'{"format":1,"platform":"douyin","version":2}'),
+    'signature':b(os.urandom(64)),'nonce':b(os.urandom(24)),
+    'ciphertext':b(os.urandom(96))
+  },
+  'content_key':b(os.urandom(32))
+}
+open(sys.argv[1],'w').write(json.dumps(payload))
+PY
+printf '{"envelope":"not-an-object","content_key":"unsafe"}' > "$invalidFixture"
+operationCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --form "csrf=$CSRF" --form 'action=package_publish' \
+  --form 'package_id=douyin' --form 'version=2' \
+  --form "file=@$operationFixture;filename=ci-encrypted.json;type=application/json")
+export TEST_RESPONSE="$operationCreated"
+operationId=$(python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["package_id"]=="douyin" and j["version"]==2 and j["id"]>0 and "content_key" not in str(j) and "envelope" not in j,j;print(j["id"])')
+operationDuplicate=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --form "csrf=$CSRF" --form 'action=package_publish' \
+  --form 'package_id=douyin' --form 'version=2' \
+  --form "file=@$operationFixture;filename=ci-encrypted.json;type=application/json")
+TEST_RESPONSE="$operationDuplicate" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and "已存在" in j["error"],j'
+operationBad=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --form "csrf=$CSRF" --form 'action=package_publish' \
+  --form 'package_id=douyin' --form 'version=3' \
+  --form "file=@$invalidFixture;filename=broken.json;type=application/json")
+TEST_RESPONSE="$operationBad" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+rm -f "$operationFixture" "$invalidFixture"
+operationDisabled=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=package_toggle' \
+  --data-urlencode "id=$operationId")
+TEST_RESPONSE="$operationDisabled" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["enabled"]==0,j'
+operationEnabled=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=package_toggle' \
+  --data-urlencode "id=$operationId")
+TEST_RESPONSE="$operationEnabled" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["enabled"]==1,j'
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases' -o "$adminHtml"
+grep -q 'v2' "$adminHtml"
+grep -q '停用' "$adminHtml"
+if grep -q 'name="content_key"\|name="envelope"' "$adminHtml"; then
+  echo 'Encrypted secrets must not be editable or visible in admin HTML' >&2; exit 1
+fi
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=devices' -o "$adminHtml"
 if grep -q '<th>IMEI</th>\|<th>手机号</th>\|name="phone_number"\|name="imei"\|data-action="device-reveal"' "$adminHtml"; then
   echo 'Sensitive device controls were not removed' >&2; exit 1
@@ -99,6 +149,17 @@ viewerLogin=$(curl -sS -b "$viewerCookies" -c "$viewerCookies" -X POST 'http://1
   --data-urlencode "csrf=$viewerCsrf" --data-urlencode "action=login" \
   --data-urlencode "username=ci_readonly_operator" --data-urlencode "password=$viewerPassword")
 TEST_RESPONSE="$viewerLogin" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
+curl -fsS -b "$viewerCookies" 'http://127.0.0.1:18765/index.php?view=packages' -o "$viewerHtml"
+grep -q '操作包管理中心' "$viewerHtml"
+if grep -q 'data-ajax="package_publish"\|data-action="package-toggle"' "$viewerHtml"; then
+  echo 'Read-only account can see package write controls' >&2; exit 1
+fi
+for action in package_toggle package_publish; do
+  denied=$(curl -sS -b "$viewerCookies" -o "$viewerHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' \
+    --data-urlencode "csrf=$viewerCsrf" --data-urlencode "action=$action" \
+    --data-urlencode "id=$operationId")
+  test "$denied" = 403 || { echo "Unauthorized package operation $action allowed: $denied" >&2;exit 1; }
+done
 curl -fsS -b "$viewerCookies" 'http://127.0.0.1:18765/index.php?view=accounts' -o "$viewerHtml"
 grep -q '只读查看，不允许修改授权' "$viewerHtml"
 if grep -q 'data-action="new-account"' "$viewerHtml"; then echo "viewer can see account editor" >&2; exit 9; fi
@@ -385,6 +446,14 @@ if (!$r || array_filter(array_values($r),static fn($v)=>$v!==null)) exit(4);
 
 after=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$after" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and "envelope" in j,j'
+TEST_RESPONSE="$after" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and len(j["envelope"]["nonce"])>12 and len(j["content_key"])>=43,j'
+# The download audit is keyed by package ID; older records do not identify version.
+php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$count=$p->query("SELECT COUNT(*) FROM phonehub_package_downloads WHERE package_id=CHAR(100,111,117,121,105,110)")->fetchColumn();
+if ((int)$count<1) exit(4);
+'
 
 # Old heartbeat keeps its legacy field names, new batch validates each phone.
 legacyHeartbeat=$(api client_heartbeat "{\"device_id\":\"$DEVICE\"}")

@@ -418,7 +418,7 @@ function phonehub_role_can_action(string $role,string $action): bool {
         'automation_token_create','automation_token_revoke','automation_token_rotate',
         'automation_release_approve','automation_release_reject',
         'backup_key_generate','update_check','update_apply',
-        'update_diagnostics','release_publish','release_toggle','logs_purge',
+        'update_diagnostics','release_publish','release_toggle','package_publish','package_toggle','logs_purge',
         'ai_settings_save','admin_create','admin_toggle','admin_reset',
         'admin_delete','owner_password','device_blacklist_add',
         'mobile_blacklist','mobile_unblacklist','cloud_features_save',

@@ -257,10 +257,59 @@ if (strpos($cloudHtml,'AI 接口设置')===false ||
     strpos($cloudHtml,'data-ajax="ai_settings_save"')===false ||
     strpos($cloudHtml,'服务端 AI 中转')===false)
     throw new RuntimeException('AI settings were not embedded in client capability view');
+// Encrypted package input is structurally checked; no content key may ever
+// appear in management pages, audit or POST success responses.
+$operationEnvelope=[
+    'manifest'=>base64_encode('{"format":1,"platform":"ci-ops"}'),
+    'signature'=>base64_encode(random_bytes(64)),
+    'nonce'=>base64_encode(random_bytes(24)),
+    'ciphertext'=>base64_encode(random_bytes(64))
+];
+$operationSecret=base64_encode(random_bytes(32));
+$operationJson=json_encode(['package_id'=>'ci-ops','version'=>1,
+    'envelope'=>$operationEnvelope,'content_key'=>$operationSecret],JSON_THROW_ON_ERROR);
+$decodedOperation=operation_package_decode($operationJson,'ci-ops',1);
+if (json_decode($decodedOperation['envelope'],true)!==$operationEnvelope ||
+    $decodedOperation['content_key']!==$operationSecret)
+    throw new RuntimeException('encrypted operation envelope did not round trip');
+foreach ([
+    ['envelope'=>['manifest'=>'bad!','signature'=>'a','nonce'=>'b','ciphertext'=>'c'],'content_key'=>$operationSecret],
+    ['envelope'=>$operationEnvelope,'content_key'=>'invalid-key'],
+    ['envelope'=>$operationEnvelope],
+    ['envelope'=>$operationEnvelope,'content_key'=>$operationSecret,'unknown'=>'leak'],
+] as $bad) {
+    try {operation_package_decode(json_encode($bad,JSON_THROW_ON_ERROR),'ci-ops',1);
+         throw new RuntimeException('invalid package unexpectedly accepted');}
+    catch(RuntimeException $e) {
+        if ($e->getMessage()==='invalid package unexpectedly accepted') throw $e;
+    }
+}
+try {operation_package_decode($operationJson,'different-package',1);throw new RuntimeException('mismatched package ID accepted');}
+catch(RuntimeException $e) {if ($e->getMessage()==='mismatched package ID accepted')throw $e;}
+try {operation_package_decode($operationJson,'ci-ops',2);throw new RuntimeException('mismatched package version accepted');}
+catch(RuntimeException $e) {if ($e->getMessage()==='mismatched package version accepted')throw $e;}
+$publishedOperation=operation_package_publish_record('ci-ops',1,$operationJson);
+if ($publishedOperation['version']!==1 || isset($publishedOperation['content_key']) ||
+    isset($publishedOperation['envelope']))
+    throw new RuntimeException('published operation response exposed secret');
+try {operation_package_publish_record('ci-ops',1,$operationJson);throw new RuntimeException('duplicate package accepted');}
+catch(RuntimeException $e) {if ($e->getMessage()==='duplicate package accepted')throw $e;}
+$disabledOperation=operation_package_toggle($publishedOperation['id']);
+if ($disabledOperation['enabled']!==0)throw new RuntimeException('package toggle did not disable');
+$enabledOperation=operation_package_toggle($publishedOperation['id']);
+if ($enabledOperation['enabled']!==1)throw new RuntimeException('package toggle did not restore');
+$storedOperation=$pdo->query("SELECT envelope,content_key FROM phonehub_packages WHERE package_id='ci-ops' AND version=1")->fetch(PDO::FETCH_ASSOC);
+if ($storedOperation['content_key']!==$operationSecret ||
+    json_decode($storedOperation['envelope'],true)!==$operationEnvelope)
+    throw new RuntimeException('encrypted operation package storage failed');
 ob_start();release_package_overview();$packageHtml=ob_get_clean();
-if (strpos($packageHtml,'历史操作包（只读）')===false ||
-    strpos($packageHtml,'legacy-operation-packages')===false)
-    throw new RuntimeException('legacy package overview missing from merged release module');
+if (strpos($packageHtml,'操作包管理中心')===false ||
+    strpos($packageHtml,'legacy-operation-packages')===false ||
+    strpos($packageHtml,'data-ajax="package_publish"')===false)
+    throw new RuntimeException('encrypted operation package manager missing from merged release module');
+if (str_contains($packageHtml,$operationSecret) ||
+    str_contains($packageHtml,$operationEnvelope['ciphertext']))
+    throw new RuntimeException('operation package management leaked encrypted payload or key');
 
 $diagnostics=update_diagnostics();
 if (($diagnostics['summary']['errors']??-1)!==0)

@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.5.20",
+  "version": "0.5.21",
   "channel": "stable",
   "released_at": "2026-11-18",
-  "notes": "完成 V3-only 服务器自更新迁移：移除 V2 签名清单、固定清单辅助函数和网关 app/gateway.php 空占位；继续使用既有 Ed25519 公钥，V3 签名 remove=[app/gateway.php] 让 v0.5.19 自动备份并安全删除旧文件。更早版本不再支持直接在线升级，其他业务 API 不变。"
+  "notes": "新增加密操作包管理中心：主管理员上传封装 JSON 并发布不可覆盖的整数版本；提供历史版本启停/恢复、按包汇总成功下载次数/近30天/最后下载时间及操作审计，不在后台回显 content_key。保留客户端签名 ZIP 更新和原 package API、授权及设备绑定校验；继续使用唯一 V3 Ed25519 服务器自更新签名。"
 }

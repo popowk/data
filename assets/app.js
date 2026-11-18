@@ -299,6 +299,7 @@
       'mobile-blacklist':['mobile_blacklist',{id,reason:'管理员手动拉黑'},true],
       'mobile-unblacklist':['mobile_unblacklist',{id},true],
       'release-toggle':['release_toggle',{id},true],
+      'package-toggle':['package_toggle',{id},true],
       'automation-token-revoke':['automation_token_revoke',{id},true],
       'automation-token-rotate':['automation_token_rotate',{id},true],
       'automation-release-approve':['automation_release_approve',{id},true],

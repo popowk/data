@@ -2,6 +2,113 @@
 declare(strict_types=1);
 require_once __DIR__.'/releases.php';
 
+/**
+ * Legacy encrypted operation packages are opaque, client-generated JSON.
+ * Server verifies transport structure and sizes, NOT the embedded ciphertext
+ * or vendor signature (there is no trusted client envelope signing key here).
+ * Never log or return the 32-byte content key.
+ */
+const OPERATION_PACKAGE_MAX_BYTES = 12582912; // 12 MiB; DB MEDIUMTEXT < 16 MiB
+function operation_package_decode(string $json,?string $expectedId=null,?int $expectedVersion=null): array {
+    if ($json==='' || strlen($json)>OPERATION_PACKAGE_MAX_BYTES)
+        throw new RuntimeException('操作包 JSON 大小须在 1 字节至 12 MiB 之间');
+    try {$data=json_decode($json,true,32,JSON_THROW_ON_ERROR);}
+    catch(JsonException $e) {throw new RuntimeException('操作包不是有效 JSON 文件');}
+    if (!is_array($data) || array_is_list($data) ||
+        !isset($data['envelope'],$data['content_key']) ||
+        !is_array($data['envelope']) || array_is_list($data['envelope']) ||
+        !is_string($data['content_key']))
+        throw new RuntimeException('操作包须包含 envelope 对象及 content_key 字符串');
+    if (array_diff(array_keys($data),['envelope','content_key','package_id','version']))
+        throw new RuntimeException('操作包包含不支持的顶层字段');
+    if ($expectedId!==null && array_key_exists('package_id',$data) &&
+        $data['package_id']!==$expectedId)
+        throw new RuntimeException('文件中的 package_id 与发布目标不一致');
+    if ($expectedVersion!==null && array_key_exists('version',$data) &&
+        $data['version']!==$expectedVersion)
+        throw new RuntimeException('文件中的 version 与发布版本不一致');
+    $env=$data['envelope'];
+    foreach (['manifest','signature','nonce','ciphertext'] as $key) {
+        if (!isset($env[$key]) || !is_string($env[$key]) || $env[$key]==='')
+            throw new RuntimeException('加密操作包缺少 '.$key.' 字符串');
+        if (base64_decode($env[$key],true)===false)
+            throw new RuntimeException('加密操作包的 '.$key.' 不是有效 Base64');
+    }
+    $sig=base64_decode($env['signature'],true);
+    $nonce=base64_decode($env['nonce'],true);
+    $cipher=base64_decode($env['ciphertext'],true);
+    $manifest=base64_decode($env['manifest'],true);
+    $key=base64_decode($data['content_key'],true);
+    if (!is_string($sig) || strlen($sig)!==64)
+        throw new RuntimeException('操作包签名字节长度应为 64');
+    if (!is_string($nonce) || !in_array(strlen($nonce),[12,24],true))
+        throw new RuntimeException('操作包 nonce 长度必须是 12 或 24 字节');
+    if (!is_string($manifest) || $manifest==='' || !is_string($cipher) || $cipher==='')
+        throw new RuntimeException('操作包清单或密文不能为空');
+    if (!is_string($key) || strlen($key)!==32 || strlen($data['content_key'])>64)
+        throw new RuntimeException('操作包 content_key 必须是 32 字节的 Base64');
+    $encoded=json_encode($env,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+    if (strlen($encoded)>16777215)
+        throw new RuntimeException('操作包密文超过数据库字段上限');
+    return ['envelope'=>$encoded,'content_key'=>$data['content_key']];
+}
+function operation_package_publish_record(string $packageId,int $version,string $payload): array {
+    require_owner();
+    if (!preg_match('/^[a-z0-9-]{1,32}$/D',$packageId))
+        throw new RuntimeException('操作包 ID 应为 1–32 位小写字母、数字或连字符');
+    if ($version<1 || $version>2147483647)
+        throw new RuntimeException('操作包版本须为 1–2147483647 的整数');
+    $record=operation_package_decode($payload,$packageId,$version);
+    if (sql('SELECT id FROM phonehub_packages WHERE package_id=? AND version=? LIMIT 1',
+        [$packageId,$version])->fetch())
+        throw new RuntimeException('此操作包版本已存在，不允许覆盖；请使用更高的版本号');
+    try {
+        sql('INSERT INTO phonehub_packages(package_id,version,envelope,content_key,enabled) VALUES(?,?,?,?,1)',
+            [$packageId,$version,$record['envelope'],$record['content_key']]);
+    } catch(PDOException $e) {
+        if ($e->getCode()==='23000') throw new RuntimeException('此操作包版本已存在，不允许重复发布',0,$e);
+        throw $e;
+    }
+    $id=(int)db()->lastInsertId();
+    audit('package_publish',$packageId.' v'.$version.' #'.$id);
+    return ['id'=>$id,'package_id'=>$packageId,'version'=>$version,
+        'message'=>'已发布加密操作包 '.$packageId.' v'.$version];
+}
+function operation_package_publish_upload(array $file,array $post): array {
+    require_owner();
+    if (!isset($file['error']) || (int)$file['error']!==UPLOAD_ERR_OK ||
+        !is_uploaded_file((string)($file['tmp_name']??'')))
+        throw new RuntimeException('上传失败；请检查 JSON 文件及 PHP 上传大小限制');
+    $size=(int)($file['size']??0);
+    $path=(string)($file['tmp_name']??'');
+    if ($size<1 || $size>OPERATION_PACKAGE_MAX_BYTES || !is_file($path) ||
+        filesize($path)!==$size)
+        throw new RuntimeException('加密操作包 JSON 不可为空或超过 12 MiB');
+    $name=(string)($file['name']??'');
+    if (!preg_match('/^[a-zA-Z0-9_.-]{1,160}\.json$/iD',$name))
+        throw new RuntimeException('请上传名称安全、扩展名为 .json 的加密操作包');
+    $id=(string)($post['package_id']??'');
+    $versionString=(string)($post['version']??'');
+    if (!preg_match('/^[1-9][0-9]{0,9}$/D',$versionString) ||
+        (int)$versionString>2147483647)
+        throw new RuntimeException('操作包版本须为 1–2147483647 的整数');
+    $bytes=file_get_contents($path);
+    if (!is_string($bytes) || strlen($bytes)!==$size)
+        throw new RuntimeException('加密操作包文件读取失败');
+    return operation_package_publish_record($id,(int)$versionString,$bytes);
+}
+function operation_package_toggle(int $id): array {
+    require_owner();
+    if ($id<1) throw new RuntimeException('操作包版本 ID 不正确');
+    $row=sql('SELECT id,package_id,version,enabled FROM phonehub_packages WHERE id=?',[$id])->fetch();
+    if (!$row) throw new RuntimeException('此操作包历史版本不存在');
+    $next=(int)$row['enabled']?0:1;
+    sql('UPDATE phonehub_packages SET enabled=? WHERE id=?',[$next,$id]);
+    audit('package_toggle',$row['package_id'].' v'.$row['version'].' enabled='.$next);
+    return ['message'=>$next?'操作包版本已恢复':'操作包版本已停用',
+        'enabled'=>$next,'id'=>$id];
+}
+
 function release_admin_action(string $action): never {
     require_owner();
     if ($action==='release_publish') {
@@ -12,6 +119,12 @@ function release_admin_action(string $action): never {
         $result=release_toggle((int)($_POST['id']??0));
         json_response(['ok'=>true]+$result);
     }
+    if ($action==='package_publish') {
+        json_response(['ok'=>true]+operation_package_publish_upload($_FILES['file']??[],$_POST));
+    }
+    if ($action==='package_toggle') {
+        json_response(['ok'=>true]+operation_package_toggle((int)($_POST['id']??0)));
+    }
     if ($action==='logs_purge') {
         $days=(int)($_POST['days']??30);
         if ($days<7 || $days>365) throw new RuntimeException('日志保留天数应为 7–365');
@@ -21,25 +134,72 @@ function release_admin_action(string $action): never {
     }
     throw new RuntimeException('未知发布管理操作');
 }
-/** Existing encrypted operation packages are a separate legacy format.
- * Only display version/coverage here; do not mix content keys with signed ZIPs.
+/**
+ * Display latest usable version per type, all-time and 30-day download counts
+ * PER PACKAGE ID (historical download records did not store package version).
+ * Read-only roles can view metadata without receiving any envelope/key bytes.
  */
 function release_package_overview(): void {
-    $packages=sql('SELECT package_id,MAX(version) AS version,COUNT(*) AS versions
-        FROM phonehub_packages GROUP BY package_id ORDER BY package_id')->fetchAll();
-    ?><div class="card" id="legacy-operation-packages">
-      <div class="card-head"><h2>历史操作包（只读）</h2><span class="count"><?=count($packages)?> 类</span></div>
-      <p class="muted">旧版加密操作包与上方 Ed25519 签名更新 ZIP 是两种独立格式。这里仅查看已有版本，不展示内容密钥，也不影响现有客户端下载 API。</p>
-      <div class="table-scroll"><table><thead><tr><th>操作包</th><th>最新版本</th><th>历史版本数量</th></tr></thead><tbody>
-      <?php foreach($packages as $p): ?><tr><td><?=h($p['package_id'])?></td><td><?=h($p['version'])?></td><td><?=(int)$p['versions']?></td></tr><?php endforeach ?>
-      <?php if (!$packages): ?><tr><td colspan="3" class="empty-result">暂无历史操作包</td></tr><?php endif ?>
-      </tbody></table></div></div><?php
+    $rows=sql('SELECT id,package_id,version,enabled,created_at FROM phonehub_packages
+        ORDER BY package_id ASC,version DESC,id DESC LIMIT 200')->fetchAll();
+    $counts=sql('SELECT package_id,COUNT(*) AS total,
+        SUM(downloaded_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 30 DAY)) AS last30,
+        MAX(downloaded_at) AS latest
+        FROM phonehub_package_downloads GROUP BY package_id')->fetchAll();
+    $stats=[];foreach ($counts as $c) $stats[$c['package_id']]=$c;
+    $groups=[];
+    foreach ($rows as $p) {
+        $id=(string)$p['package_id'];
+        if (!isset($groups[$id]))
+            $groups[$id]=['versions'=>0,'latest_enabled'=>null,'latest_version'=>null];
+        $groups[$id]['versions']++;
+        $groups[$id]['latest_version']??=(int)$p['version'];
+        if ((int)$p['enabled'] && $groups[$id]['latest_enabled']===null)
+            $groups[$id]['latest_enabled']=(int)$p['version'];
+    }
+    $canEdit=phonehub_role_can_action(admin_role(),'package_publish');
+    ?>
+    <section class="card" id="legacy-operation-packages">
+      <div class="card-head"><h2>操作包管理中心</h2><span class="count"><?=count($groups)?> 类 · 最近 200 个版本</span></div>
+      <p class="muted">这里管理客户端旧协议的<strong>加密操作包</strong>（envelope + content_key），与上方上传的 Ed25519 签名 ZIP 更新包互相独立。下载次数按包 ID 汇总，历史日志不含单个版本号；后台永不显示解密密钥。</p>
+      <?php if($canEdit): ?>
+      <form data-ajax="package_publish" enctype="multipart/form-data" class="package-publish-form">
+        <input type="hidden" name="action" value="package_publish">
+        <div class="form-grid">
+          <div class="field"><label>操作包 ID</label><input name="package_id" list="operation-package-targets" pattern="[a-z0-9-]{1,32}" maxlength="32" placeholder="douyin" required>
+            <datalist id="operation-package-targets"><option value="douyin"><option value="xiaohongshu"><option value="mcp"><option value="skill"><option value="mcp-codex"><option value="mcp-harness"></datalist></div>
+          <div class="field"><label>新版本号（整数）</label><input name="version" type="number" min="1" max="2147483647" step="1" required placeholder="2"></div>
+          <div class="field span2"><label>加密封装 JSON（最多 12 MiB）</label><input name="file" type="file" accept=".json,application/json" required></div>
+        </div>
+        <div class="editor-actions"><button class="btn primary" data-confirm-submit="确认上传并立即启用此加密操作包版本？现有客户可能开始下载新版本。">上传并发布加密操作包</button></div>
+      </form>
+      <p class="footnote">仅接受加密工具生成的 JSON：<code>{"envelope":{"manifest":"Base64","signature":"Base64","nonce":"Base64","ciphertext":"Base64"},"content_key":"Base64"}</code>。服务端进行字段、Base64 和大小检查，但不能替代客户端签名验真与解密联调。版本不可覆盖；新版本发布后会成为该包默认下载版本。</p>
+      <?php endif ?>
+      <div class="table-scroll"><table><thead><tr><th>包 ID</th><th>最新版本</th><th>当前可下载版本</th><th>版本数（本页）</th><th>累计下载</th><th>近 30 天</th><th>最后下载</th></tr></thead><tbody>
+        <?php foreach ($groups as $id=>$g): $c=$stats[$id]??[]; ?>
+        <tr><td><b><?=h($id)?></b></td><td>v<?=(int)$g['latest_version']?></td><td><?= $g['latest_enabled']===null?'<span class="pill off">全部停用</span>':'v'.(int)$g['latest_enabled']?></td><td><?=(int)$g['versions']?></td><td><?=(int)($c['total']??0)?></td><td><?=(int)($c['last30']??0)?></td><td><?=h($c['latest']??'—')?></td></tr>
+        <?php endforeach ?>
+        <?php if (!$groups): ?><tr><td colspan="7" class="empty-result">尚无操作包，可以上传第一份加密封装 JSON</td></tr><?php endif ?>
+      </tbody></table></div>
+      <div class="card-head"><h2>历史版本与上下架</h2><span class="count">最近 200 条</span></div>
+      <div class="table-scroll"><table><thead><tr><th>操作包</th><th>版本</th><th>状态</th><th>发布时间（UTC）</th><th>操作</th></tr></thead><tbody>
+        <?php foreach ($rows as $p): ?>
+        <tr><td><?=h($p['package_id'])?></td><td>v<?=(int)$p['version']?></td><td><span class="pill <?=(int)$p['enabled']?'ok':'off'?>"><?=(int)$p['enabled']?'已启用':'已停用'?></span></td><td><?=h($p['created_at'])?></td><td>
+          <?php if ($canEdit): ?><button class="small-link" data-action="package-toggle" data-id="<?=(int)$p['id']?>"><?=(int)$p['enabled']?'停用':'恢复'?></button>
+          <?php else: ?><span class="muted">只读</span><?php endif ?>
+        </td></tr>
+        <?php endforeach ?>
+        <?php if (!$rows): ?><tr><td colspan="5" class="empty-result">暂无已发布的操作包版本</td></tr><?php endif ?>
+      </tbody></table></div>
+      <p class="footnote">停用某版本后，客户端只会获取同一包中最高的其他启用版本；如果所有版本停用则不可下载。变更保留管理员审计记录，不删除历史数据。</p>
+    </section>
+    <?php
 }
 function release_admin_view(): void {
     require_owner();
     $list=sql('SELECT id,platform,channel,version,min_client,size_bytes,sha256,signature,enabled,created_at FROM phonehub_releases ORDER BY id DESC LIMIT 200')->fetchAll();
     ?>
-    <div class="page-title"><div><h1>版本发布与操作包</h1><p>统一查看客户端核心、扩展签名更新及历史加密操作包；与后台 GitHub 自更新独立</p></div></div>
+    <div class="page-title"><div><h1>版本发布与操作包</h1><p>分别管理客户端签名 ZIP 更新和加密操作包，支持加密操作包发布、上下架及下载统计</p></div></div>
     <div class="card"><div class="card-head"><h2>上传新版本（50 MB 以内）</h2></div>
       <form data-ajax="release_publish" enctype="multipart/form-data">
        <input type="hidden" name="action" value="release_publish">
