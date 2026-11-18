@@ -53,32 +53,45 @@ function feature_action(string $action): never {
         require_owner();
         $name=trim((string)($_POST['username'] ?? ''));validate_user($name);
         $role=(string)($_POST['role']??'admin');
-        if (!in_array($role,['admin','viewer'],true)) throw new RuntimeException('管理员角色无效');
+        if (!in_array($role,['global','admin'],true)) throw new RuntimeException('管理员角色无效');
         $password=random_password();
         sql('INSERT INTO phonehub_admins(username,password_hash,role,enabled) VALUES(?,?,?,1)',
             [$name,password_hash_safe($password),$role]);
         audit('admin_create',$name);
         json_response(['ok'=>true,'message'=>'管理员已创建','password'=>$password,'username'=>$name]);
     }
+    if ($action==='admin_role_change') {
+        require_owner();
+        $role=(string)($_POST['role']??'');
+        if (!in_array($role,['global','admin'],true)) throw new RuntimeException('目标管理员角色无效');
+        $target=sql('SELECT id,username,role FROM phonehub_admins WHERE id=?',[$id])->fetch();
+        if (!$target || $target['role']==='owner' || $id===admin_id())
+            throw new PhoneHubPermissionException('受保护的主账号不允许更改角色');
+        if (!in_array($target['role'],['global','admin','viewer'],true))
+            throw new RuntimeException('此管理员角色不支持转换');
+        sql("UPDATE phonehub_admins SET role=?,auth_version=auth_version+1 WHERE id=? AND role IN ('global','admin','viewer')",[$role,$id]);
+        audit('admin_role_change',(string)$target['username'].' '.$target['role'].' -> '.$role);
+        json_response(['ok'=>true,'message'=>'管理员角色已更新，相关登录会话将失效']);
+    }
     if (in_array($action,['admin_toggle','admin_reset','admin_delete'],true)) {
         require_owner();
         $target=sql('SELECT id,username,role,enabled FROM phonehub_admins WHERE id=?',[$id])->fetch();
-        if (!$target || !in_array($target['role'],['admin','viewer'],true) || (int)$target['id']===admin_id())
+        if (!$target || !in_array($target['role'],['global','admin','viewer'],true) || (int)$target['id']===admin_id())
             throw new RuntimeException('主管理员受到保护，禁止修改、重置或删除');
         if ($action==='admin_toggle') {
             $next=(int)$target['enabled'] ? 0 : 1;
-            sql("UPDATE phonehub_admins SET enabled=?,auth_version=auth_version+1 WHERE id=? AND role IN ('admin','viewer')",[$next,$id]);
+            sql("UPDATE phonehub_admins SET enabled=?,auth_version=auth_version+1 WHERE id=? AND role IN ('global','admin','viewer')",[$next,$id]);
             audit('admin_toggle',(string)$target['username']);
             json_response(['ok'=>true,'message'=>$next?'管理员已启用':'管理员已停用']);
         }
         if ($action==='admin_reset') {
             $password=random_password();
-            sql("UPDATE phonehub_admins SET password_hash=?,auth_version=auth_version+1 WHERE id=? AND role IN ('admin','viewer')",
+            sql("UPDATE phonehub_admins SET password_hash=?,auth_version=auth_version+1 WHERE id=? AND role IN ('global','admin','viewer')",
                 [password_hash_safe($password),$id]);
             audit('admin_reset',(string)$target['username']);
             json_response(['ok'=>true,'message'=>'管理员密码已重置','username'=>$target['username'],'password'=>$password]);
         }
-        sql("DELETE FROM phonehub_admins WHERE id=? AND role IN ('admin','viewer')",[$id]);
+        sql("DELETE FROM phonehub_admins WHERE id=? AND role IN ('global','admin','viewer')",[$id]);
         audit('admin_delete',(string)$target['username']);
         json_response(['ok'=>true,'message'=>'管理员已删除']);
     }
@@ -119,7 +132,7 @@ function feature_action(string $action): never {
             } elseif ($f==='entitlements') {
                 $v=(array)($_POST['entitlements']??[]);
                 if (array_diff($v,['douyin','xiaohongshu','mcp','skill','mcp-codex','mcp-harness'])) throw new RuntimeException('未知平台或扩展授权');
-                if (array_intersect($v,['mcp','skill','mcp-codex','mcp-harness'])) require_owner();
+                if (array_intersect($v,['mcp','skill','mcp-codex','mcp-harness'])) require_global_admin();
                 if (array_intersect($v,['mcp-codex','mcp-harness']) && !in_array('mcp',$v,true))
                     throw new RuntimeException('Codex 与 DeepSeek Harness MCP 必须同时授权上级 MCP 权限');
                 $set[]='u.entitlements=?';$params[]=json_encode(array_values(array_unique($v)),JSON_UNESCAPED_UNICODE);
@@ -203,7 +216,6 @@ function feature_action(string $action): never {
         json_response(['ok'=>true,'message'=>'安卓手机已绑定']);
     }
     if ($action==='mobile_blacklist') {
-        require_owner();
         if ($id<1) throw new RuntimeException('手机记录无效');
         $reason=trim((string)($_POST['reason']??'管理员手动拉黑'));
         if (utf8_length($reason)>255) throw new RuntimeException('拉黑原因不能超过 255 字');
@@ -222,7 +234,6 @@ function feature_action(string $action): never {
         json_response(['ok'=>true,'message'=>'手机指纹已拉黑，匹配绑定已停用']);
     }
     if ($action==='mobile_unblacklist') {
-        require_owner();
         if ($id<1) throw new RuntimeException('黑名单记录无效');
         $record=sql("SELECT id,identifier_type,identifier_hash FROM phonehub_mobile_blacklist WHERE id=? AND enabled=1 AND identifier_type IN ('computer_id','phone_id')",[$id])->fetch();
         if (!$record) throw new RuntimeException('黑名单记录不存在或已解除');
@@ -231,7 +242,7 @@ function feature_action(string $action): never {
         json_response(['ok'=>true,'message'=>'已解除该条黑名单；设备绑定不会自动恢复']);
     }
     if ($action==='cloud_features_save') {
-        require_owner();
+        require_global_admin();
         $values=[
             'mcp_enabled'=>isset($_POST['mcp_enabled'])?'1':'0',
             'mcp_codex_enabled'=>isset($_POST['mcp_codex_enabled'])?'1':'0',
@@ -259,20 +270,30 @@ function feature_action(string $action): never {
 function feature_view(string $view,bool $embedded=false): void {
     phonehub_require_view($view==='mobiles'?'devices':$view);
     if ($view==='admins') {
-        require_owner();
+        require_global_admin();
+        $canManageAdmins=admin_role()==='owner';
         $admins=sql('SELECT id,username,role,enabled,created_at FROM phonehub_admins ORDER BY CASE WHEN role=\'owner\' THEN 0 ELSE 1 END,id')->fetchAll();
-        ?><div class="page-title"><div><h1>管理员管理</h1><p>仅主管理员可以创建、停用、重置或删除其他管理员</p></div></div>
+        ?><div class="page-title"><div><h1>管理员管理</h1><p>可创建全局管理员和普通管理员；主账号权限受到保护</p></div></div>
+        <?php if($canManageAdmins): ?>
         <div class="card"><div class="card-head"><h2>创建管理员</h2></div>
-        <form data-ajax="admin_create" class="inline-form admin-create-form"><input name="action" type="hidden" value="admin_create"><input name="username" placeholder="管理员登录名（3–64 位英文字符）" required minlength="3"><select name="role" aria-label="管理员角色" required><option value="admin">普通管理员（可维护授权）</option><option value="viewer">只读管理员（只能查看）</option></select><button class="btn primary">创建并生成密码</button></form><p class="footnote">只读管理员仅可浏览概览、客户授权、分组及操作包；后台 POST 由服务器拒绝。原普通管理员权限不变。</p></div>
+        <form data-ajax="admin_create" class="inline-form admin-create-form"><input name="action" type="hidden" value="admin_create"><input name="username" placeholder="管理员登录名（3–64 位英文字符）" required minlength="3"><select name="role" aria-label="管理员角色" required><option value="admin">普通管理员</option><option value="global">全局管理员</option></select><button class="btn primary">创建并生成密码</button></form>
+        <p class="footnote">普通管理员：客户授权、设备管理、套餐管理、客户端日志。全局管理员：其他业务、日志与审计；程序安装、信任签名、备份密钥、自动化发布令牌与管理员权限变更仅主账号可以操作。历史只读管理员不会自动升级。</p></div>
+        <?php endif ?>
         <div class="card"><div class="card-head"><h2>管理员列表</h2></div><div class="table-scroll"><table><thead><tr><th>管理员</th><th>权限</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
         <?php foreach($admins as $a): ?><tr><td><b><?=h($a['username'])?></b></td><td><?=h(phonehub_role_label((string)$a['role']))?><?= $a['role']==='owner'?'（受保护）':'' ?></td><td><span class="pill <?=(int)$a['enabled']?'ok':'off'?>"><?=(int)$a['enabled']?'正常':'已停用'?></span></td><td><?=h(utc_to_cn($a['created_at']))?></td><td>
-        <?php if($a['role']==='owner'): ?><span class="muted">不可操作</span><?php else: ?>
+        <?php if($a['role']==='owner'): ?><span class="muted">受保护的主账号</span><?php elseif($canManageAdmins): ?>
+        <form data-ajax="admin_role_change" class="inline-form" style="display:inline-flex;vertical-align:middle;gap:6px;margin-right:12px">
+          <input type="hidden" name="action" value="admin_role_change"><input type="hidden" name="id" value="<?=(int)$a['id']?>">
+          <select name="role" aria-label="调整 <?=h($a['username'])?> 的角色"><option value="admin" <?=$a['role']==='admin'?'selected':''?>>普通管理员</option><option value="global" <?=$a['role']==='global'?'selected':''?>>全局管理员</option></select><button type="submit" class="small-link" data-confirm-submit="确认更改管理员权限？该管理员需要重新登录。">保存角色</button>
+        </form>
         <button class="small-link" data-action="admin-reset" data-id="<?=(int)$a['id']?>">重置密码</button>
         <button class="small-link" data-action="admin-toggle" data-id="<?=(int)$a['id']?>"><?=(int)$a['enabled']?'停用':'启用'?></button>
         <button class="small-link" data-action="admin-delete" data-id="<?=(int)$a['id']?>">删除</button>
+        <?php else: ?><span class="muted">仅主账号可管理</span>
         <?php endif ?></td></tr><?php endforeach ?></tbody></table></div></div>
-        <div class="card"><div class="card-head"><h2>修改自己的主管理员密码</h2></div>
-        <form data-ajax="owner_password" class="inline-form"><input name="action" type="hidden" value="owner_password"><input type="password" name="old_password" required placeholder="当前密码"><input type="password" name="new_password" required minlength="12" placeholder="新密码（至少12字节）"><button class="btn primary">修改密码</button></form></div><?php
+        <?php if($canManageAdmins): ?><div class="card"><div class="card-head"><h2>修改自己的主管理员密码</h2></div>
+        <form data-ajax="owner_password" class="inline-form"><input name="action" type="hidden" value="owner_password"><input type="password" name="old_password" required placeholder="当前密码"><input type="password" name="new_password" required minlength="12" placeholder="新密码（至少12字节）"><button class="btn primary">修改密码</button></form></div><?php endif; ?>
+        <?php
     } elseif ($view==='group_bulk') {
         $groups=sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta WHERE group_id=g.id) AS cnt FROM phonehub_groups g ORDER BY name')->fetchAll();
         ?>
@@ -333,7 +354,7 @@ function feature_view(string $view,bool $embedded=false): void {
             device_admin_view();
         }
     } elseif ($view==='cloud_features') {
-        require_owner();
+        require_global_admin();
         $rows=sql("SELECT setting_key,setting_value FROM phonehub_feature_settings WHERE setting_key IN ('mcp_enabled','skill_enabled','mcp_codex_enabled','mcp_harness_enabled')")->fetchAll();
         $flags=[];foreach($rows as $row)$flags[$row['setting_key']]=$row['setting_value']==='1';
         $mcp=!empty($flags['mcp_enabled']);$skill=!empty($flags['skill_enabled']);
@@ -448,9 +469,9 @@ function feature_view(string $view,bool $embedded=false): void {
 }
 
 // Embedded in this established signed module for updates from v0.5.4.
-// Owner-only opening quota templates. No pricing, orders, billing or privileges.
+// Opening quota templates for ordinary and global administrators. No billing or privileges.
 function plan_admin_action(string $action): never {
-    require_owner();
+    phonehub_require_action($action);
     if ($action==='plan_save') {
         $id=(int)($_POST['id']??0);
         $name=trim((string)($_POST['name']??''));
@@ -497,7 +518,7 @@ function plan_admin_action(string $action): never {
     throw new RuntimeException('无效套餐操作');
 }
 function plan_admin_view(): void {
-    require_owner();
+    phonehub_require_view('plans');
     $plans=sql('SELECT p.*,COALESCE(a.users,0) AS users,
         COALESCE(a.actual_computers,0) AS actual_computers,
         COALESCE(a.actual_mobiles,0) AS actual_mobiles
