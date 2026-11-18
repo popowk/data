@@ -1,16 +1,16 @@
 # PhoneHub 客户端 API 接入说明 v0.5.2
 
-> **现行版本 v0.5.17：已移除 IMEI 和手机号的采集、补报、后台查看和新建黑名单功能。** 本文下方涉及 v0.5.2/v0.5.16 原号上报的段落属于历史协议记录，不再作为当前接入要求。旧版客户端发送这些额外字段时服务器会忽略，不保存、不参与新身份识别，也不向客户端返回相关保存状态。现行身份只使用手机指纹 phone_id（64 位小写 SHA-256）。历史已保存的摘要/密文和安全禁令不会自动删除或解除。
+> **现行版本 v0.5.18：已移除 IMEI 和手机号的采集、补报、后台查看和新建黑名单功能。** 本文下方涉及 v0.5.2/v0.5.16 原号上报的段落属于历史协议记录，不再作为当前接入要求。旧版客户端发送这些额外字段时服务器会忽略，不保存、不参与新身份识别，也不向客户端返回相关保存状态。现行身份只使用手机指纹 phone_id（64 位小写 SHA-256）。历史已保存的摘要/密文和安全禁令不会自动删除或解除。
 
-服务端基础协议版本：0.5.2；当前维护版本 v0.5.16，api=1 向后兼容。协议字段 `api=1` 保持兼容。适配对象：PhoneHub 桌面 APP（此前为 0.7.1）。本版增加手机 IMEI 辅助绑定、设备黑名单，以及 MCP/Skill 云端默认关闭的授权控制。
+服务端运行版本：v0.5.18；接口仍使用 `api=1` 协议号。测试期只支持当前 PhoneHub 客户端接口，手机以 `phone_id` 进行绑定及授权校验，IMEI 与手机号采集已经下线。
 
 ## 一、地址与认证
 
-生产统一地址：https://data.tmd.pet/phonehub/api.php?action=ACTION
+**唯一受支持的接口地址**：https://data.tmd.pet/license/api/phonehub.php?action=ACTION
 
-开发测试（尚未接管旧接口时）：https://data.tmd.pet/license/api/phonehub.php?action=ACTION
+旧版 `/phonehub/api.php` 已停止支持，不能再由后台“接管”或自动重写。所有测试客户端必须改用以上路径；已部署旧文件或旧 Nginx 路由须在生产站点核实并单独下线。
 
-- health：GET，无认证，返回 ok/service/api/mobile_binding/imei_binding；当前协议号 api=1。
+- health：GET，无认证，返回 ok/service/api/mobile_binding；当前协议号 api=1。
 - login：POST，JSON body，传 username/password/device_id，不传 Bearer。
 - 除 health 和 login 以外：POST，Content-Type: application/json，Authorization: Bearer TOKEN。
 - 所有经过认证的请求都必须传 device_id（与登录时相同的 64 位小写十六进制 SHA-256）。
@@ -34,7 +34,7 @@ POST ?action=login，返回：
 ### 共用的已登录请求范例
 
 ~~~http
-POST /phonehub/api.php?action=mobile_list HTTP/1.1
+POST /license/api/phonehub.php?action=mobile_list HTTP/1.1
 Content-Type: application/json
 Authorization: Bearer <登录令牌>
 ~~~
@@ -331,15 +331,13 @@ BYOK Key 仅随当前 HTTPS 请求转发给 DeepSeek，不写入 PhoneHub 数据
 - AI 配置：ai_settings_save（仅主管理员）。
 - MCP/Codex/Harness/Skill 云端总开关：cloud_features_save（仅主管理员）；新客户默认不授予 mcp/skill。
 - 日志清理：logs_purge（仅主管理员）。
-- 旧 API 接管：gateway_install（仅主管理员）。
 
-**上线顺序（重要）：**
+**测试版部署顺序（v0.5.18）：**
 
-1. 先让已部署的 /license/ 管理后台从 GitHub 国内镜像升级到当前版本，自动执行 MySQL 5.7 数据表迁移。
-2. 暂时保留现有 /phonehub/api.php，不影响旧 APP 和已经在使用的客户。
-3. APP 开发可先调用 /license/api/phonehub.php 测试新 API，绑定手机、日志、核心 ZIP 更新等。
-4. 完成 APP 适配后，以主管理员打开 /license/?view=gateway 进行旧 API 接管。此操作只会在旧接口文件 SHA-256 与上传的 0.7.1 参考版相同、目录可写时执行，原文件备份保存到 storage/backups/gateways。
-5. 接管后，原地址 /phonehub/api.php 对操作包严格实行“至少绑定一台已授权安卓手机”限制。旧 APP 如果没有绑定功能，会遇到下载拒绝；需要先升级 APP 或手工绑定客户手机。
+1. 更新 /license/ 后台，验证 Ed25519 签名、MySQL 5.7、环境自检、手机指纹授权、签名 ZIP 和 AI/MCP/Skill 策略。
+2. 让所有测试客户端将 API 基础 URL 改为 `https://data.tmd.pet/license/api/phonehub.php`，不要继续请求旧的 `/phonehub/api.php`。
+3. 若旧目录的 `/phonehub/api.php` 曾在生产服务器上存在或被接管，先备份并检查其是否仍承载请求，再由服务器管理员手工删除该旧文件、清理对应的 Nginx/ESA 转发规则；此次 GitHub 自更新只安装 /license/ 下签名白名单文件，**不会自动删除仓库之外的文件**。
+4. 新后台不再提供旧接口覆盖、接管或备份命令；操作包下载仍通过当前手机指纹绑定和客户授权验证。
 
 Web 服务器必须禁止 HTTP 访问 /license/storage/，否则更新私钥、数据库配置、日志、备份可能泄露。首次部署和管理后台自身升级不自动修改 Nginx。网址 /license/ 请加末尾斜杠。
 
@@ -390,12 +388,12 @@ Web 服务器必须禁止 HTTP 访问 /license/storage/，否则更新私钥、�
 
 ### 批量心跳客户端接入、降级与验收（2026-11-18）
 
-以下规则根据客户端联调交付包 `PhoneHub-batch-api-v0.5.9.zip` 的接口说明与现有服务器代码交叉核对整理。ZIP 内的 `api/phonehub.php`、`api/extensions.php` 与 GitHub 当前 v0.5.10 **内容一致**，无需再次覆盖；这只证明源码相同，**不证明生产服务器已经部署、网关已接管或 Nginx 已安全配置**。
+本节保留批量心跳的历史功能说明；现行部署以 v0.5.18 后台和 `/license/api/phonehub.php` 为准。CI 代码检查不代表生产 Nginx、ESA、客户端安装和真实流量已经联调完成。
 
 **实际调用路径**
 
 - 直接联调：`POST https://data.tmd.pet/license/api/phonehub.php?action=client_heartbeat`，使用登录后的 `Authorization: Bearer ...` 和登录时相同的 `device_id`。
-- 兼容旧路径 `/phonehub/api.php`：只有确认后台网关已安全接管并转发到新接口时，才能视为同一协议。两者不要仅凭 URL 猜测。
+- 不再提供 `/phonehub/api.php` 兼容路由或自动接管；所有客户端一律使用新路径。
 - `phones` 应来自客户端当前实际检测到的手机；本接口只验证服务器绑定资格，**不证明 USB 实时在线**。客户端必须自行进行在线检测和按手机 ID 关联结果。
 - `package_versions` 应填写真实已缓存包的整数版本（0 到 2147483647，最多 16 个），例如 `{"douyin":1}`。这里没有提供版本的包，服务端返回的 `update_available` 为 `null`；不能将 `null` 当成无更新。
 
@@ -444,3 +442,10 @@ client_heartbeat.batch.phones[].imei 依旧只是身份核验，不执行原号�
 - 为避免隐式撤销以前已经生效的黑名单，服务端内部可以继续使用历史绑定记录中 **已经存储的摘要** 校验历史禁令。不会创建新摘要或开放新建这两类黑名单的入口；后台列表只保留电脑 ID / 手机指纹两种可维护类型。
 - 历史迁移列和加密数据 **不在此次升级时自动删除**；无用户明确数据清除指令时，升级不能不可逆地删除授权历史。需要清除历史 PII 时，应另行进行受控备份、保留策略审查和数据库清理。
 - 后台菜单将「操作包」放入「版本发布与操作包」管理页，历史加密操作包与 Ed25519 客户端更新包的数据和下载接口完全独立。「AI 接口管理」合入「客户端能力与 AI」，保留原模型/密钥/用量配置及 MCP/Skill 开关。
+
+## v0.5.18 后台导航合并及测试期接口收敛
+
+- 「客户分组与批量配置」同页完成分组创建、删除、批量授权预检及提交；保留成员快照校验，原内部书签 `?view=group_bulk` 仅重定向到分组页锚点。
+- 「系统维护」统一展示在线更新、运行环境自检、Ed25519 自更新签名与 Curve25519 备份公钥配置；原内部书签 `?view=backup_keys` 仅重定向到维护页锚点。签名私钥与备份解密私钥仍是两套独立安全域。
+- 后台 `gateway_install` 操作、`?view=gateway` 页面以及旧接口文件覆盖实现已删除；不提供旧客户端 API 兼容支持。**只支持 `/license/api/phonehub.php`**。
+- `app/gateway.php` 在服务端自更新文件包中仅留无功能的最小占位内容，因为历史已安装的自更新器以固定 Ed25519 文件名清单验签；它不会注册、重定向、备份或代理任何旧接口请求。

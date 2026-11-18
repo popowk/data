@@ -58,7 +58,7 @@ if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
 $allowedViews=[
     'owner'=>['dashboard','accounts','groups','group_bulk','devices','packages',
       'plans','backup_keys','client_logs','releases','ai','update',
-      'gateway','admins','audit','cloud_features'],
+      'admins','audit','cloud_features'],
     'admin'=>['dashboard','accounts','groups','group_bulk','devices','packages','client_logs','audit'],
     'viewer'=>['dashboard','accounts','groups','packages']
 ];
@@ -80,6 +80,10 @@ foreach (['viewer','not_a_role'] as $role)
             throw new RuntimeException('read-only/invalid role may mutate data: '.$action);
 if (phonehub_role_can_action('owner','device_reveal'))
     throw new RuntimeException('raw device identifier admin API still permitted');
+if (phonehub_role_can_view('owner','gateway') || phonehub_role_can_action('owner','gateway_install'))
+    throw new RuntimeException('retired client API takeover route/action remains enabled');
+if (function_exists('gateway_status') || function_exists('gateway_install'))
+    throw new RuntimeException('retired client API gateway functions remain available');
 if (!phonehub_role_can_action('viewer','logout') ||
     !phonehub_role_can_action('admin','account_save') ||
     phonehub_role_can_action('admin','plan_save') ||
@@ -266,6 +270,16 @@ if (!array_filter($diagnostics['checks'],static fn($check)=>($check['name']??'')
 if (phonehub_role_can_view('owner','diagnostics') || phonehub_role_can_action('owner','diagnostic_report'))
     throw new RuntimeException('removed diagnostic page/action is still accessible');
 
+ob_start();feature_view('group_bulk',true);$mergedBulkHtml=ob_get_clean();
+if (!str_contains($mergedBulkHtml,'id="group-bulk"') ||
+    !str_contains($mergedBulkHtml,'id="group-bulk-form"') ||
+    str_contains($mergedBulkHtml,'<h1>分组批量配置</h1>'))
+    throw new RuntimeException('embedded group batch management panel missing or duplicates page title');
+ob_start();backup_admin_view(true);$embeddedBackupHtml=ob_get_clean();
+if (!str_contains($embeddedBackupHtml,'id="maintenance-backup"') ||
+    !str_contains($embeddedBackupHtml,'Curve25519') ||
+    str_contains($embeddedBackupHtml,'<h1>备份密钥管理</h1>'))
+    throw new RuntimeException('embedded backup key panel missing or duplicates page title');
 ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false ||
     strpos($bulkHtml,'先由服务器预检')===false)

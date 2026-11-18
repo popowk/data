@@ -397,7 +397,7 @@ function phonehub_role_can_view(string $role,string $view): bool {
     $admin=array_merge($viewer,['group_bulk','devices','client_logs','audit']);
     $owner=array_merge($admin,[
         'plans','backup_keys','releases','ai','cloud_features','update',
-        'gateway','admins'
+        'admins'
     ]);
     return match($role) {
         'owner'=>in_array($view,$owner,true),
@@ -422,7 +422,7 @@ function phonehub_role_can_action(string $role,string $action): bool {
         'ai_settings_save','admin_create','admin_toggle','admin_reset',
         'admin_delete','owner_password','device_blacklist_add',
         'mobile_blacklist','mobile_unblacklist','cloud_features_save',
-        'gateway_install'
+        // No legacy client API takeover action in the test release.
     ]);
     return match($role) {
         'owner'=>in_array($action,$owner,true),

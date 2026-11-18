@@ -253,15 +253,10 @@ function feature_action(string $action): never {
         db()->commit();
         json_response(['ok'=>true,'message'=>'该手机绑定已撤销']);
     }
-    if ($action==='gateway_install') {
-        require_owner();
-        require __DIR__.'/gateway.php';
-        json_response(['ok'=>true]+gateway_install());
-    }
     throw new RuntimeException('未知管理操作');
 }
 
-function feature_view(string $view): void {
+function feature_view(string $view,bool $embedded=false): void {
     phonehub_require_view($view==='mobiles'?'devices':$view);
     if ($view==='admins') {
         require_owner();
@@ -281,7 +276,11 @@ function feature_view(string $view): void {
     } elseif ($view==='group_bulk') {
         $groups=sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta WHERE group_id=g.id) AS cnt FROM phonehub_groups g ORDER BY name')->fetchAll();
         ?>
+        <?php if (!$embedded): ?>
         <div class="page-title"><div><h1>分组批量配置</h1><p>先选择客户分组，再勾选需要覆盖的配置；未勾选的字段不会改变。</p></div><a class="btn" href="?view=groups">返回客户分组</a></div>
+        <?php else: ?>
+        <div class="page-title" id="group-bulk"><div><h2>分组批量配置</h2><p>选择目标分组与字段，先预览影响范围，再确认应用。</p></div><a class="btn" href="#group-list">返回分组列表</a></div>
+        <?php endif ?>
         <div class="bulk-intro"><div class="bulk-intro-icon">≡</div><div><strong>安全批量修改</strong><p>仅影响所选分组中的客户。涉及电脑会话权限的变更会自动撤销旧会话，确保新配置立即生效。</p></div></div>
         <form id="group-bulk-form" data-ajax="group_bulk">
         <input name="action" type="hidden" value="group_bulk">
@@ -380,15 +379,6 @@ function feature_view(string $view): void {
             ?><div class="card"><p>AI 接口模块缺失，请到「系统更新」补齐文件后再管理 AI。</p></div><?php
         }
 
-    } elseif($view==='gateway') {
-        require_owner();
-        require_once __DIR__.'/gateway.php';
-        $status=gateway_status();
-        ?><div class="page-title"><div><h1>客户端接口接管</h1><p>确保旧的 /phonehub/api.php 也执行安卓手机绑定校验，杜绝直接绕过管理后台</p></div></div>
-        <div class="card"><h2>当前状态</h2><p><?=h($status['message'])?></p><p class="muted">目标：<code><?=h($status['path'])?></code></p>
-        <p class="muted">自动接管只支持安装目录为 /license/、旧接口为同站点 /phonehub/api.php 的典型目录结构，且旧文件与提供的 PhoneHub 0.7.1 参考源码一致。旧接口不同则拒绝覆盖，需要人工审核。</p>
-        <?php if($status['can_install']): ?><button class="btn primary" data-action="gateway-install">备份并启用安卓手机绑定校验</button><?php endif ?>
-        <p class="footnote">一旦接管，所有操作包下载必须先成功绑定手机。旧版客户端尚不支持 mobile_bind，接管前请为客户规划客户端升级或手工绑定设备。接管时保留旧接口文件备份，不修改签名密钥。</p></div><?php
     } elseif($view==='client_logs') {
         $filters=phonehub_client_log_filters($_GET);
         $from=' FROM phonehub_client_logs l JOIN phonehub_users u ON u.id=l.user_id';
@@ -635,14 +625,18 @@ function backup_admin_download_once(): never {
     } finally {sodium_memzero($secret);}
     exit;
 }
-function backup_admin_view(): void {
+function backup_admin_view(bool $embedded=false): void {
     require_owner();
     $status=backup_recipient_status();
     ?>
+    <?php if (!$embedded): ?>
     <div class="page-title"><div><h1>备份密钥管理</h1>
         <p>初始化加密备份接收公钥；解密私钥只下载一次，不修改现有 Ed25519 更新签名</p></div>
         <a class="btn" href="?view=update">运行环境自检</a>
     </div>
+    <?php else: ?>
+    <div class="page-title" id="maintenance-backup"><div><h2>备份密钥管理</h2><p>Curve25519 加密备份接收公钥，与 Ed25519 更新验签相互独立；解密私钥只下载一次。</p></div><a class="btn" href="#maintenance-update">返回系统更新</a></div>
+    <?php endif ?>
     <div class="card"><div class="card-head"><h2>Curve25519 备份密钥</h2>
         <span class="pill <?=$status['configured']?'ok':'off'?>"><?=$status['configured']?'已配置公钥':'尚未配置'?></span></div>
         <?php if ($status['configured']): ?>

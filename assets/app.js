@@ -304,7 +304,7 @@
       'automation-release-approve':['automation_release_approve',{id},true],
       'automation-release-reject':['automation_release_reject',{id},true],
       'logs-purge':['logs_purge',{days:30},true],
-      'gateway-install':['gateway_install',{},true]
+
     };
     if(!map[action])return;
     const [operation,fields,confirmNeeded]=map[action];

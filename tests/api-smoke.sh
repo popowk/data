@@ -24,7 +24,28 @@ adminLogin=$(curl -fsS -b "$adminCookies" -c "$adminCookies" -X POST 'http://127
   --data-urlencode "username=ci_ai_owner" --data-urlencode "password=ci-owner-test-123456")
 TEST_RESPONSE="$adminLogin" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
-grep -q '系统更新' "$adminHtml"
+grep -q '系统维护' "$adminHtml"
+grep -q '运行环境自检' "$adminHtml"
+grep -q 'Curve25519 备份密钥' "$adminHtml"
+if grep -q 'href="?view=gateway"\|href="?view=backup_keys"\|href="?view=group_bulk"' "$adminHtml"; then
+  echo 'obsolete duplicate or gateway menu still visible' >&2; exit 1
+fi
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=groups' -o "$adminHtml"
+grep -q '客户分组与批量配置' "$adminHtml"
+grep -q 'id="group-bulk-form"' "$adminHtml"
+grep -q 'id="group-list"' "$adminHtml"
+for retired_alias in 'group_bulk|groups#group-bulk' 'backup_keys|update#maintenance-backup'; do
+  alias_page="${retired_alias%%|*}"
+  target="${retired_alias#*|}"
+  redirect=$(curl -sS -b "$adminCookies" -o /dev/null -w '%{http_code} %{redirect_url}' "http://127.0.0.1:18765/index.php?view=$alias_page")
+  [[ "$redirect" == 302*"$target"* ]] || { echo "Merged admin route $alias_page not redirected: $redirect" >&2;exit 1; }
+done
+retired_page_status=$(curl -sS -b "$adminCookies" -o "$adminHtml" -w '%{http_code}' 'http://127.0.0.1:18765/index.php?view=gateway')
+test "$retired_page_status" = 404 || { echo 'Retired gateway route still reachable' >&2;exit 1; }
+retired_action_status=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+    --data-urlencode "csrf=$CSRF" --data-urlencode 'action=gateway_install' -o "$adminHtml" -w '%{http_code}')
+test "$retired_action_status" = 403 || { echo 'Retired gateway action still callable' >&2;exit 1; }
+python3 -c 'import json,sys; j=json.load(open(sys.argv[1]));assert not j["ok"],j' "$adminHtml"
 # Consolidated pages: old owner links redirect, and the combined views render.
 aiRedirect=$(curl -sS -b "$adminCookies" -o /dev/null -w '%{http_code} %{redirect_url}' 'http://127.0.0.1:18765/index.php?view=ai')
 [[ "$aiRedirect" == 302*cloud_features* ]] || { echo 'AI view did not redirect to capability management' >&2; exit 1; }
@@ -300,7 +321,7 @@ $v=$s->fetchAll(PDO::FETCH_COLUMN);
 if(count($v)!==2 || array_filter($v,static fn($x)=>(int)$x!==6)) exit(4);
 '
 # A backup decryption key can be downloaded only once by the owner.
-curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=backup_keys' -o "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
 grep -q 'Curve25519' "$adminHtml"
 downloadedKey=$(mktemp)
 downloadHeaders=$(mktemp)

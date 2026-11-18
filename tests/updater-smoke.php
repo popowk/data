@@ -28,6 +28,13 @@ foreach (['index.php','install.php','app/core.php','app/accounts.php','app/updat
 if (in_array('docs/客户端接入API-v0.3.md',UPDATE_FILES,true) ||
     in_array('docs/客户端接入API-v0.4.md',UPDATE_FILES,true))
     throw new RuntimeException('Deprecated legacy documentation must not be installed by modern updater');
+// Historical pinned updater catalogs still carry an inert gateway.php PATH.
+// No bridge implementation can be installed by either signed manifest.
+$gatewayStub=(string)file_get_contents(APP_ROOT.'/app/gateway.php');
+if (preg_match('/function\s+gateway_[a-z_]+\s*\(/i',$gatewayStub) ||
+    str_contains($gatewayStub,'require dirname(__DIR__)'))
+    throw new RuntimeException('obsolete client gateway implementation must remain absent');
+
 foreach (UPDATE_LEGACY_FILES as $required) {
     if (!is_file(APP_ROOT.'/'.$required))
         throw new RuntimeException('The pinned v0.5.10 bridge archive lacks: '.$required);
