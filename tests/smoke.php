@@ -5,7 +5,7 @@ require dirname(__DIR__).'/app/ai.php';
 require dirname(__DIR__).'/app/mobile.php';
 require dirname(__DIR__).'/app/releases.php';
 require dirname(__DIR__).'/app/accounts.php';
-require dirname(__DIR__).'/app/features.php';
+require_once dirname(__DIR__).'/app/features.php';
 require dirname(__DIR__).'/app/updater.php';
 
 $pdo=new PDO('mysql:host=127.0.0.1;port=3306;dbname=phonehub_ci;charset=utf8mb4','root','ci_password',[
@@ -201,7 +201,7 @@ $phoneId=str_repeat('c',64);
 $pdo->prepare("INSERT INTO phonehub_mobile_blacklist(identifier_type,identifier_hash,reason,enabled,created_by) VALUES('imei_hash',?,?,1,0)")
     ->execute([$imeiHash,'CI blacklist test']);
 if(!mobile_blacklist_match($pdo,$phoneId,$imeiHash)) throw new RuntimeException('IMEI blacklist lookup failed');
-require dirname(__DIR__).'/app/devices.php';
+require_once dirname(__DIR__).'/app/devices.php';
 $encryptedImei=device_encrypt('490154203237518');
 $encryptedPhone=device_encrypt('+8613812345678');
 if($encryptedImei==='490154203237518' || device_decrypt($encryptedImei)!=='490154203237518')
@@ -245,7 +245,7 @@ if (!$settings['enabled'] || $settings['model']!=='deepseek-flash' || $settings[
 ob_start();ai_admin_view();$aiHtml=ob_get_clean();
 if (strpos($aiHtml,'AI 接口管理')===false || strpos($aiHtml,'remove_api_key')===false)
     throw new RuntimeException('AI admin settings page render failed');
-require dirname(__DIR__).'/app/features.php';
+require_once dirname(__DIR__).'/app/features.php';
 if (phonehub_group_member_snapshot(['1','2'])!==phonehub_group_member_snapshot([1,2]) ||
     phonehub_group_member_snapshot([1,2])===phonehub_group_member_snapshot([1,3]))
     throw new RuntimeException('group bulk preview membership fingerprint invalid');
