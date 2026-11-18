@@ -134,17 +134,21 @@ function signing_activate_trust(): array {
                 }
             }
             if ($prefix===null) throw new RuntimeException('镜像缺少版本文件');
-            // The second archive must match the first untrusted preflight.
-            $files=[];foreach(UPDATE_FILES as $path){
+            // Verify the exact V3 manifest, using the pending public key.
+            // Never activate trust based on a V1/V2 legacy digest.
+            $versionBytes=$zip->getFromName($prefix.'version.json');
+            $number=is_string($versionBytes)?json_decode($versionBytes,true,512,JSON_THROW_ON_ERROR)['version']??null:null;
+            if (!is_string($number)) throw new RuntimeException('镜像版本号无效');
+            $v3=update_v3_verify_catalog($number,
+                $zip->getFromName($prefix.'deploy/self-update-manifest-v3.json')?:null,
+                $zip->getFromName($prefix.'deploy/self-update-manifest-v3.sig')?:null,$pub);
+            $files=[];
+            foreach (array_keys($v3['files']) as $path) {
                 $bytes=$zip->getFromName($prefix.$path);
                 if (!is_string($bytes)) throw new RuntimeException('镜像缺少程序文件：'.$path);
                 $files[$path]=$bytes;
             }
-            $number=(string)(json_decode($files['version.json'],true)['version']??'');
-            update_validate_files($files);
-            update_verify_signed_archive($files,$number,
-                $zip->getFromName($prefix.'deploy/self-update-manifest.json')?:null,
-                $zip->getFromName($prefix.'deploy/self-update-manifest.sig')?:null,$pub);
+            update_v3_verify_files($files,$v3);
         } finally {$zip->close();}
     } finally {@unlink($temp);}
     if (is_file(APP_STORE.'/self-update-trust.pub'))

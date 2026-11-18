@@ -12,25 +12,29 @@ const UPDATE_FILES = [
 ];
 
 /**
- * Transitional signed bridge for old v0.5.10 clients. Their pinned updater
- * compares the exact manifest file list; keep this list byte-for-byte.
- * New installations never install these deprecated docs.
+ * Signed catalog migration (v0.5.19): the V2 release still lists the inert
+ * gateway file so an installed v0.5.18 updater can install this release.
+ * V3 authorizes a later REMOVAL of that one retired file, only when signed by
+ * the currently pinned Ed25519 public key. No arbitrary deletion allowed.
+ *
+ * Gate: first upgrade every supported server to the V3-capable updater,
+ * THEN ship a higher-version V3-only release removing app/gateway.php.
  */
-const UPDATE_LEGACY_FILES = [
-    'index.php','install.php','version.json','.htaccess',
-    'app/core.php','app/accounts.php','app/updater.php','app/features.php','app/gateway.php',
-    'app/devices.php','app/device_admin.php','app/signing_admin.php',
-    'app/releases.php','app/release_admin.php','app/ai.php','app/mobile.php',
-    'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','docs/客户端接入API-v0.5.md','docs/运维备份与升级.md','docs/设备管理与签名-v0.5.2.md','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','tools/bootstrap-self-update.php','assets/app.css','assets/app.js'
-];
+const UPDATE_V3_REMOVABLE_FILES = ['app/gateway.php'];
 
 /**
  * Fail before touching live files. The update catalog is an exact runtime
  * manifest: optional files must be removed from UPDATE_FILES intentionally.
  * TOKEN_PARSE checks PHP syntax without executing downloaded code.
  */
-function update_validate_files(array $files): void {
-    foreach (UPDATE_FILES as $path) {
+function update_validate_files(array $files,?array $requiredPaths=null): void {
+    $requiredPaths=$requiredPaths??UPDATE_FILES;
+    if (count($files)!==count($requiredPaths) ||
+        array_keys($files)!==array_values(array_unique(array_keys($files))) ||
+        array_diff(array_keys($files),$requiredPaths) ||
+        array_diff($requiredPaths,array_keys($files)))
+        throw new RuntimeException('更新包文件集与已验证清单不一致');
+    foreach ($requiredPaths as $path) {
         if (!array_key_exists($path,$files) || !is_string($files[$path]) || $files[$path]==='')
             throw new RuntimeException('更新包缺少必要文件：'.$path);
         if (strlen($files[$path])>2097152)
@@ -97,6 +101,66 @@ function update_verify_signed_archive_for_list(array $files,string $version,?str
 function update_verify_signed_archive(array $files,string $version,?string $manifest,?string $signature,string $publicKey): void {
     update_verify_signed_archive_for_list($files,$version,$manifest,$signature,$publicKey,UPDATE_FILES);
 }
+/**
+ * V3 signed manifest format 2:
+ * {"format":2,"version":"x.y.z","files":{"path":"sha256",...},"remove":[]}
+ * Path set and permitted removals are constrained by installed policy.
+ * The signature is verified BEFORE trusting even the filename list.
+ */
+function update_v3_catalog_paths(array $remove): array {
+    if (array_filter($remove,static fn($p)=>!is_string($p)) ||
+        $remove!==array_values(array_unique($remove)) ||
+        array_diff($remove,UPDATE_V3_REMOVABLE_FILES))
+        throw new RuntimeException('签名更新清单包含未经批准的删除目标');
+    $list=array_values(array_diff(UPDATE_FILES,$remove));
+    if (!in_array('app/updater.php',$list,true) ||
+        !in_array('version.json',$list,true) || !in_array('index.php',$list,true))
+        throw new RuntimeException('更新清单缺少不可删除的核心模块');
+    return $list;
+}
+function update_v3_manifest(array $files,string $version,array $remove=[]): string {
+    $paths=update_v3_catalog_paths($remove);
+    if (array_diff(array_keys($files),$paths) || array_diff($paths,array_keys($files)))
+        throw new RuntimeException('V3 清单文件集与安全策略不一致');
+    update_validate_files($files,$paths);
+    $hashes=[];
+    foreach($paths as $path) $hashes[$path]=hash('sha256',$files[$path]);
+    ksort($hashes,SORT_STRING);
+    return json_encode(['format'=>2,'version'=>$version,'files'=>$hashes,'remove'=>$remove],
+        JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+}
+function update_v3_verify_catalog(string $version,?string $manifest,?string $signature,string $publicKey): array {
+    if (!extension_loaded('sodium')) throw new RuntimeException('Ed25519 验签必须启用 sodium');
+    $sig=is_string($signature)?base64_decode(trim($signature),true):false;
+    if (!is_string($manifest) || !is_string($sig) ||
+        strlen($sig)!==SODIUM_CRYPTO_SIGN_BYTES ||
+        !sodium_crypto_sign_verify_detached($sig,$manifest,$publicKey))
+        throw new RuntimeException('V3 更新签名缺失或不可信，拒绝安装');
+    $data=json_decode($manifest,true);
+    if (!is_array($data) || array_keys($data)!==['format','version','files','remove'] ||
+        $data['format']!==2 || $data['version']!==$version ||
+        !is_array($data['files']) || !is_array($data['remove']))
+        throw new RuntimeException('V3 签名清单格式或版本错误');
+    $paths=update_v3_catalog_paths($data['remove']);
+    $actual=array_keys($data['files']);
+    if (array_diff($paths,$actual) || array_diff($actual,$paths) ||
+        count($actual)!==count($paths))
+        throw new RuntimeException('V3 清单包含未知文件或缺少必要文件');
+    foreach ($data['files'] as $path=>$hash) {
+        if (!is_string($hash) || !preg_match('/^[a-f0-9]{64}$/D',$hash))
+            throw new RuntimeException('V3 更新文件摘要格式错误');
+    }
+    return $data;
+}
+function update_v3_verify_files(array $files,array $catalog): void {
+    $paths=update_v3_catalog_paths($catalog['remove']);
+    update_validate_files($files,$paths);
+    foreach ($paths as $path) {
+        if (!hash_equals($catalog['files'][$path],hash('sha256',$files[$path])))
+            throw new RuntimeException('V3 更新文件签名摘要不一致：'.$path);
+    }
+}
+
 function update_download(string $destination): void {
     if (!extension_loaded('curl') || !extension_loaded('zip')) throw new RuntimeException('请在 PHP 中启用 curl 与 zip 扩展');
     $url=UPDATE_ARCHIVE;
@@ -149,37 +213,44 @@ function update_archive(): array {
                 if (is_string($name) && preg_match('~^[A-Za-z0-9_.-]+/version\.json$~D',$name)) { $prefix=substr($name,0,-strlen('version.json')); break; }
             }
             if ($prefix===null) throw new RuntimeException('更新包缺少 version.json');
+            // Read a small, untrusted version string only to match it against
+            // the V3 signature. File paths and removals are trusted only after
+            // independent Ed25519 verification with the pinned public key.
+            $versionBytes=$zip->getFromName($prefix.'version.json');
+            if (!is_string($versionBytes) || strlen($versionBytes)>4096)
+                throw new RuntimeException('更新版本文件不可读取或过大');
+            $version=json_decode($versionBytes,true);
+            $number=is_array($version)?($version['version']??null):null;
+            if (!is_string($number) ||
+                !preg_match('/^\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?$/D',$number))
+                throw new RuntimeException('远端版本号格式不正确');
+            $trusted=update_trust_public_key(APP_STORE);
+            if ($trusted===null)
+                throw new RuntimeException('V3 更新要求固定 Ed25519 公钥；请先安全配置 storage/self-update-trust.pub');
+            $manifest=$zip->getFromName($prefix.'deploy/self-update-manifest-v3.json');
+            $signature=$zip->getFromName($prefix.'deploy/self-update-manifest-v3.sig');
+            $catalog=update_v3_verify_catalog($number,
+                is_string($manifest)?$manifest:null,
+                is_string($signature)?$signature:null,$trusted);
+            $paths=array_keys($catalog['files']);
             $files=[];
-            foreach (UPDATE_FILES as $path) {
+            foreach ($paths as $path) {
                 $index=$zip->locateName($prefix.$path);
-                if ($index===false) throw new RuntimeException('更新包缺少清单文件：'.$path);
+                if ($index===false) throw new RuntimeException('V3 清单文件缺失：'.$path);
                 $stat=$zip->statIndex($index);
                 if (($stat['size']??0)>2097152) throw new RuntimeException('更新文件大小异常');
                 if ($zip->getExternalAttributesIndex($index,$opsys,$attrs) && $opsys===ZipArchive::OPSYS_UNIX) {
                     $type=(($attrs >> 16) & 0170000);
-                    if ($type!==0 && $type!==0100000) throw new RuntimeException('更新包含非常规文件，已拒绝');
+                    if ($type!==0 && $type!==0100000)
+                        throw new RuntimeException('更新包含非常规文件，已拒绝');
                 }
                 $bytes=$zip->getFromIndex($index);
-                if ($bytes===false) throw new RuntimeException('ZIP 文件读取失败');
+                if (!is_string($bytes)) throw new RuntimeException('ZIP 文件读取失败');
                 $files[$path]=$bytes;
             }
-            update_validate_files($files);
-            $version=json_decode($files['version.json'],true);
-            $number=(string)($version['version']??'');
-            if (!preg_match('/^\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?$/D',$number)) throw new RuntimeException('远端版本号格式不正确');
-            $trusted=update_trust_public_key(APP_STORE);
-            $verified=false;
-            if ($trusted!==null) {
-                // v1 stays signed exclusively for pinned legacy v0.5.10 clients.
-                // v2 authenticates every current runtime file, including modules
-                // that the old updater cannot install on its first pass.
-                $manifest=$zip->getFromName($prefix.'deploy/self-update-manifest-v2.json');
-                $signature=$zip->getFromName($prefix.'deploy/self-update-manifest-v2.sig');
-                update_verify_signed_archive($files,$number,
-                    is_string($manifest)?$manifest:null,is_string($signature)?$signature:null,$trusted);
-                $verified=true;
-            }
-            return ['version'=>$number,'files'=>$files,'signed'=>$verified,'signature_required'=>$trusted!==null];
+            update_v3_verify_files($files,$catalog);
+            return ['version'=>$number,'files'=>$files,'remove'=>$catalog['remove'],
+                'signed'=>true,'signature_required'=>true,'signature_format'=>3];
         } finally {$zip->close();}
     } finally {@unlink($file);}
 }
@@ -201,6 +272,7 @@ function check_update(): array {
         'missing_modules'=>$missing,
         'signature_verified'=>$archive['signed'],
         'signature_required'=>$archive['signature_required'],
+        'signature_format'=>$archive['signature_format']??null,
         'source'=>UPDATE_ARCHIVE
     ];
 }
@@ -243,6 +315,8 @@ function update_diagnostics(): array {
         $checks[]=['name'=>'服务端更新签名','status'=>$signatureReady?'ok':'warning',
             'detail'=>$signatureReady?'已配置固定 Ed25519 公钥，更新必须验签':'尚未配置独立信任公钥，仍为兼容模式的 HTTPS 镜像更新'];
     }
+    $checks[]=['name'=>'更新清单迁移准备','status'=>'ok',
+        'detail'=>'支持 V3 固定公钥签名文件集及受控删除；当前仅允许未来删除旧网关占位 app/gateway.php'];
     $checks[]=['name'=>'Nginx 存储目录访问限制','status'=>'warning',
         'detail'=>'需在宝塔确认 /license/storage/ 被拒绝访问；本地文件检查无法证明公网访问控制'];
     $recipient=APP_STORE.'/backup-recipient.pub';
@@ -313,8 +387,9 @@ function update_target_parent(string $root,string $path,bool $create,array &$cre
     }
     if (!is_writable($dir)) throw new RuntimeException('更新目标目录不可写：'.$path);
 }
-function update_install_files(array $files,string $root,string $store,?callable $beforeReplace=null): array {
-    update_validate_files($files);
+function update_install_files(array $files,string $root,string $store,?callable $beforeReplace=null,array $remove=[]): array {
+    $allowed=update_v3_catalog_paths($remove);
+    update_validate_files($files,$allowed);
     $root=rtrim($root,'/');
     $store=rtrim($store,'/');
     $nonce=bin2hex(random_bytes(6));
@@ -341,9 +416,18 @@ function update_install_files(array $files,string $root,string $store,?callable 
                 throw new RuntimeException('更新文件暂存校验失败：'.$path);
         }
 
+        // Check signed, allowlisted removals BEFORE touching any live file.
+        // A symlinked target must never be followed or removed as an update.
+        foreach ($remove as $path) {
+            $dest=$root.'/'.$path;
+            if (is_link($dest)) throw new RuntimeException('删除路径包含符号链接：'.$path);
+            if (file_exists($dest) && !is_file($dest))
+                throw new RuntimeException('删除目标不是普通文件：'.$path);
+            update_target_parent($root,$path,false,$createdDirs);
+        }
         if (!mkdir($backup,0700,true))
             throw new RuntimeException('无法创建更新备份目录');
-        foreach ($files as $path=>$bytes) {
+        foreach (array_values(array_unique(array_merge(array_keys($files),$remove))) as $path) {
             $dest=$root.'/'.$path;
             if (!is_file($dest)) { $changed[$path]=false;continue; }
             $backupFile=$backup.'/'.$path;
@@ -361,6 +445,21 @@ function update_install_files(array $files,string $root,string $store,?callable 
         $version=$ordered['version.json'];unset($ordered['version.json']);
         $ordered['version.json']=$version;
         foreach ($ordered as $path=>$bytes) {
+            if ($path==='version.json') {
+                // Delete retired files only AFTER current modules have been
+                // staged and backed up, but BEFORE publishing version.json.
+                foreach ($remove as $retired) {
+                    if ($beforeReplace!==null) $beforeReplace($retired,count($installed));
+                    $retiredPath=$root.'/'.$retired;
+                    if (is_link($retiredPath) ||
+                        (file_exists($retiredPath) && !is_file($retiredPath)))
+                        throw new RuntimeException('更新删除目标异常：'.$retired);
+                    if (is_file($retiredPath)) {
+                        if (!unlink($retiredPath)) throw new RuntimeException('旧文件删除失败：'.$retired);
+                        $installed[]=$retired;
+                    }
+                }
+            }
             if ($beforeReplace!==null) $beforeReplace($path,count($installed));
             $dest=$root.'/'.$path;
             update_target_parent($root,$path,true,$createdDirs);
@@ -377,6 +476,10 @@ function update_install_files(array $files,string $root,string $store,?callable 
             } finally {
                 if (is_file($tmp)) @unlink($tmp);
             }
+        }
+        foreach ($remove as $retired) {
+            if (file_exists($root.'/'.$retired) || is_link($root.'/'.$retired))
+                throw new RuntimeException('旧文件删除后仍存在：'.$retired);
         }
         foreach ($ordered as $path=>$bytes) {
             if (!is_file($root.'/'.$path) ||
@@ -437,7 +540,7 @@ function apply_update(): array {
             return ['message'=>'当前已经是最新版本','version'=>$current];
         if (version_compare($latest,$current,'<'))
             throw new RuntimeException('远端更新版本低于当前版本，已拒绝降级');
-        $result=update_install_files($archive['files'],APP_ROOT,APP_STORE);
+        $result=update_install_files($archive['files'],APP_ROOT,APP_STORE,null,$archive['remove']??[]);
         $cacheReset=update_reset_opcache();
         $message=$cacheReset===false
             ? '更新文件安装成功，但 PHP OPcache 未确认刷新；请重启 PHP-FPM 或 Web 服务'

@@ -27,40 +27,35 @@ update_validate_files($files);
 $version=json_decode($files['version.json'],true,512,JSON_THROW_ON_ERROR)['version']??null;
 if (!is_string($version) || !preg_match('/^\d+\.\d+\.\d+$/D',$version))
     throw new RuntimeException('发布版本号无效');
-// v1 must use precisely the v0.5.10 updater's old file set. The current
-// updater uses v2; both variants are signed with the SAME pinned trust key.
-// Never sign or install an unsigned "compatibility" archive.
-$legacyFiles=[];
-foreach (UPDATE_LEGACY_FILES as $path) {
-    $source=APP_ROOT.'/'.$path;
-    if (!is_file($source) || is_link($source))
-        throw new RuntimeException('旧版兼容清单文件缺失：'.$path);
-    $bytes=file_get_contents($source);
-    if (!is_string($bytes) || $bytes==='')
-        throw new RuntimeException('旧版兼容清单文件不可读取：'.$path);
-    $legacyFiles[$path]=$bytes;
-}
+// V1 signing is retired. V2 is emitted for the installed v0.5.18
+// updater's last supported transition; V3 is mandatory for new updaters.
+// Both are signed with the EXISTING pinned Ed25519 key, never re-keyed.
 $pub=sodium_crypto_sign_publickey_from_secretkey($key);
-$modernManifest=update_signed_manifest($files,$version);
-$modernSig=base64_encode(sodium_crypto_sign_detached($modernManifest,$key));
-update_verify_signed_archive($files,$version,$modernManifest,$modernSig,$pub);
-$legacyManifest=update_signed_manifest_for_list($legacyFiles,$version,UPDATE_LEGACY_FILES);
-$legacySig=base64_encode(sodium_crypto_sign_detached($legacyManifest,$key));
-update_verify_signed_archive_for_list($legacyFiles,$version,$legacyManifest,$legacySig,$pub,UPDATE_LEGACY_FILES);
+$v2Manifest=update_signed_manifest($files,$version);
+$v2Sig=base64_encode(sodium_crypto_sign_detached($v2Manifest,$key));
+update_verify_signed_archive($files,$version,$v2Manifest,$v2Sig,$pub);
+$remove=[];
+foreach(UPDATE_V3_REMOVABLE_FILES as $retired) {
+    if (!in_array($retired,UPDATE_FILES,true)) $remove[]=$retired;
+}
+$v3Manifest=update_v3_manifest($files,$version,$remove);
+$v3Sig=base64_encode(sodium_crypto_sign_detached($v3Manifest,$key));
+$v3Catalog=update_v3_verify_catalog($version,$v3Manifest,$v3Sig,$pub);
+update_v3_verify_files($files,$v3Catalog);
 $dir=APP_ROOT.'/deploy';
 if (!is_dir($dir) && !mkdir($dir,0755,true))
     throw new RuntimeException('无法创建 deploy 目录');
 foreach ([
-    'self-update-manifest.json'=>$legacyManifest,
-    'self-update-manifest.sig'=>$legacySig."\n",
-    'self-update-manifest-v2.json'=>$modernManifest,
-    'self-update-manifest-v2.sig'=>$modernSig."\n"
+    'self-update-manifest-v2.json'=>$v2Manifest,
+    'self-update-manifest-v2.sig'=>$v2Sig."\n",
+    'self-update-manifest-v3.json'=>$v3Manifest,
+    'self-update-manifest-v3.sig'=>$v3Sig."\n"
 ] as $name=>$bytes) {
     $destination=$dir.'/'.$name;
     if (file_put_contents($destination,$bytes,LOCK_EX)!==strlen($bytes))
         throw new RuntimeException('签名清单写入失败：'.$name);
 }
-echo "Server update manifests signed for legacy and current runtimes: v".$version."\n";
+echo "Server update manifests V2 transition + V3 signed for v".$version."\n";
 echo "Public key fingerprint (SHA-256): ".hash('sha256',$pub)."\n";
-echo "Commit all four signed deploy/self-update-manifest* files alongside exact source files.\n";
-echo "Never commit the private key or put it on the website.\n";
+echo "V1 removed; publish only signed V2/V3 in transitional release.\n";
+echo "Do not commit the private key or put it on the website.\n";

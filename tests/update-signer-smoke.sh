@@ -3,7 +3,8 @@ set -euo pipefail
 offline=$(mktemp -d)
 cleanup(){
   rm -rf "$offline"
-  rm -f deploy/self-update-manifest.json deploy/self-update-manifest.sig deploy/self-update-manifest-v2.json deploy/self-update-manifest-v2.sig
+  rm -f deploy/self-update-manifest-v2.json deploy/self-update-manifest-v2.sig
+  rm -f deploy/self-update-manifest-v3.json deploy/self-update-manifest-v3.sig
 }
 trap cleanup EXIT
 export PHONEHUB_OFFLINE_TEST="$offline"
@@ -15,16 +16,20 @@ file_put_contents(getenv("PHONEHUB_OFFLINE_TEST")."/signing.pub",sodium_crypto_s
 php tools/sign-self-update.php "$offline/signing.key"
 php -r '
 require "app/core.php";require "app/updater.php";
-$fs=[];foreach(UPDATE_FILES as $p)$fs[$p]=file_get_contents(APP_ROOT."/".$p);
-$v=json_decode($fs["version.json"],true)["version"];
+$files=[];foreach(UPDATE_FILES as $p)$files[$p]=file_get_contents(APP_ROOT."/".$p);
+$v=json_decode($files["version.json"],true,512,JSON_THROW_ON_ERROR)["version"];
 $pub=file_get_contents(getenv("PHONEHUB_OFFLINE_TEST")."/signing.pub");
-update_verify_signed_archive($fs,$v,
+update_verify_signed_archive($files,$v,
     file_get_contents("deploy/self-update-manifest-v2.json"),
     file_get_contents("deploy/self-update-manifest-v2.sig"),$pub);
-$legacy=[]; foreach(UPDATE_LEGACY_FILES as $p) $legacy[$p]=file_get_contents(APP_ROOT."/".$p);
-update_verify_signed_archive_for_list($legacy,$v,
-    file_get_contents("deploy/self-update-manifest.json"),
-    file_get_contents("deploy/self-update-manifest.sig"),$pub,UPDATE_LEGACY_FILES);
-if (count(UPDATE_LEGACY_FILES)!==29) throw new RuntimeException("Legacy v0.5.10 manifest size changed");
-echo "PASS: offline signer produces valid independent modern and v0.5.10 legacy manifests\n";
+$v3=update_v3_verify_catalog($v,
+    file_get_contents("deploy/self-update-manifest-v3.json"),
+    file_get_contents("deploy/self-update-manifest-v3.sig"),$pub);
+update_v3_verify_files($files,$v3);
+if ($v3["remove"]!==[] || $v3["format"]!==2)
+    throw new RuntimeException("V3 staging release must not delete files");
+if (defined("UPDATE_LEGACY_FILES") || is_file("deploy/self-update-manifest.json") ||
+    is_file("deploy/self-update-manifest.sig"))
+    throw new RuntimeException("Retired V1 manifest was unexpectedly emitted");
+echo "PASS: offline signer V2 transition + pinned Ed25519 V3; no V1 files\n";
 '

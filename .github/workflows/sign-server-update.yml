@@ -12,8 +12,6 @@ on:
       - 'api/**'
       - 'assets/**'
       - 'tools/**'
-      - 'docs/客户端接入API-v0.3.md' # Legacy updater bootstrap stub, signed only for v1.
-      - 'docs/客户端接入API-v0.4.md' # Legacy updater bootstrap stub, signed only for v1.
       - 'docs/客户端接入API-v0.5.md'
       - 'docs/自动化核心更新API-v0.5.12.md'
       - 'docs/设备管理与签名-v0.5.2.md'
@@ -76,16 +74,13 @@ jobs:
             update_verify_signed_archive($files,$ver,
               file_get_contents("deploy/self-update-manifest-v2.json"),
               file_get_contents("deploy/self-update-manifest-v2.sig"),$pub);
-            $legacy=[];
-            foreach (UPDATE_LEGACY_FILES as $path) {
-              $bytes=file_get_contents($path);
-              if (!is_string($bytes) || $bytes==="") throw new RuntimeException("Missing legacy bridge file");
-              $legacy[$path]=$bytes;
-            }
-            update_verify_signed_archive_for_list($legacy,$ver,
-              file_get_contents("deploy/self-update-manifest.json"),
-              file_get_contents("deploy/self-update-manifest.sig"),$pub,UPDATE_LEGACY_FILES);
-            echo "Independent Ed25519 verification passed for modern and legacy release ".$ver."\n";
+            $v3=update_v3_verify_catalog($ver,
+              file_get_contents("deploy/self-update-manifest-v3.json"),
+              file_get_contents("deploy/self-update-manifest-v3.sig"),$pub);
+            update_v3_verify_files($files,$v3);
+            if ($v3["remove"]!==[])
+              throw new RuntimeException("V3 preparation release must not remove production files");
+            echo "Independent Ed25519 verification passed for V2 transition + V3 preparation ".$ver."\n";
           ' "$secret_file"
       - name: Commit signed manifest only
         if: steps.signing.outputs.enabled == 'true'
@@ -93,7 +88,7 @@ jobs:
           set -euo pipefail
           git config user.name "phonehub-update-signer[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- deploy/self-update-manifest.json deploy/self-update-manifest.sig deploy/self-update-manifest-v2.json deploy/self-update-manifest-v2.sig
+          git add -- deploy/self-update-manifest-v2.json deploy/self-update-manifest-v2.sig deploy/self-update-manifest-v3.json deploy/self-update-manifest-v3.sig
           if git diff --cached --quiet; then
             echo "Signed manifest is unchanged"
           else

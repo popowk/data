@@ -28,21 +28,34 @@ foreach (['index.php','install.php','app/core.php','app/accounts.php','app/updat
 if (in_array('docs/客户端接入API-v0.3.md',UPDATE_FILES,true) ||
     in_array('docs/客户端接入API-v0.4.md',UPDATE_FILES,true))
     throw new RuntimeException('Deprecated legacy documentation must not be installed by modern updater');
-// Historical pinned updater catalogs still carry an inert gateway.php PATH.
-// No bridge implementation can be installed by either signed manifest.
+// v0.5.19 transitional release: V2 still names the inert gateway while
+// V3 stages a signed deletion migration for the next higher version.
+if (defined('UPDATE_LEGACY_FILES'))
+    throw new RuntimeException('obsolete V1 catalog is still defined');
+if (count(UPDATE_FILES)!==31 || !in_array('app/gateway.php',UPDATE_FILES,true))
+    throw new RuntimeException('V2 bridge file inventory unexpectedly changed');
 $gatewayStub=(string)file_get_contents(APP_ROOT.'/app/gateway.php');
 if (preg_match('/function\s+gateway_[a-z_]+\s*\(/i',$gatewayStub) ||
     str_contains($gatewayStub,'require dirname(__DIR__)'))
-    throw new RuntimeException('obsolete client gateway implementation must remain absent');
+    throw new RuntimeException('retired gateway implementation must remain absent');
+$v3=update_v3_manifest($files,$manifest['version']);
+$decoded=json_decode($v3,true,512,JSON_THROW_ON_ERROR);
+if ($decoded['format']!==2 || $decoded['remove']!==[] ||
+    count($decoded['files'])!==count(UPDATE_FILES))
+    throw new RuntimeException('V3 transitional signed catalog is invalid');
+$future=$files;
+unset($future['app/gateway.php']);
+$deletePlan=json_decode(update_v3_manifest($future,$manifest['version'],
+    ['app/gateway.php']),true,512,JSON_THROW_ON_ERROR);
+if ($deletePlan['remove']!==['app/gateway.php'] ||
+    isset($deletePlan['files']['app/gateway.php']) ||
+    !isset($deletePlan['files']['app/updater.php']))
+    throw new RuntimeException('future signed gateway cleanup is not possible');
 
-foreach (UPDATE_LEGACY_FILES as $required) {
-    if (!is_file(APP_ROOT.'/'.$required))
-        throw new RuntimeException('The pinned v0.5.10 bridge archive lacks: '.$required);
-}
 if (strpos($files['index.php'],"require_once __DIR__.'/app/accounts.php';")===false)
     throw new RuntimeException('The admin entry point is missing its account module dependency');
 if (strpos($files['index.php'],'assets/app.js?v=')===false ||
     strpos($files['index.php'],'assets/app.css?v=')===false)
     throw new RuntimeException('Admin versioned asset URLs are missing');
-echo 'Modern runtime update catalog and legacy bootstrap assets validated: v'.$manifest['version'].
-    ' ('.count(UPDATE_FILES).' modern files, '.count(UPDATE_LEGACY_FILES)." pinned bridge files)\n";
+echo 'V2 bridge and V3 signed removal migration catalog validated: v'.$manifest['version'].
+    ' ('.count(UPDATE_FILES)." signed bridge files)\n";

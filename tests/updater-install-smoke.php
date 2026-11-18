@@ -120,7 +120,65 @@ try {
         'storage/config.php was overwritten');
     verify(is_file($store.'/backups/'.$result['backup'].'/app/accounts.php'),
         'rollback backup missing app/accounts.php');
-    echo "PASS: staged updater, nested directory creation, parent symlink/blocker rejection, rollback cleanup, hashes, and README/storage preservation\n";
+    // Simulate NEXT release (post-migration): the signed V3 manifest
+    // excludes the obsolete gateway and authorizes deleting ONLY that path.
+    $future=$changed;
+    unset($future['app/gateway.php']);
+    $removals=['app/gateway.php'];
+    update_validate_files($future,update_v3_catalog_paths($removals));
+    try {
+        update_install_files($future,$root,$store,null,['storage/config.php']);
+        throw new RuntimeException('unsigned storage deletion unexpectedly accepted');
+    } catch (RuntimeException $e) {
+        verify(str_contains($e->getMessage(),'未经批准'),'storage deletion policy was not enforced');
+    }
+    $gateway=$root.'/app/gateway.php';
+    $gatewayBytes=file_get_contents($gateway);
+    verify(is_string($gatewayBytes),'gateway fixture missing');
+    $outsideProtected=$store.'/protected-gateway-test';
+    file_put_contents($outsideProtected,"leave this protected\n");
+    verify(rename($gateway,$gateway.'.backup-test'),'cannot prepare gateway symlink test');
+    verify(symlink($outsideProtected,$gateway),'cannot create gateway symlink');
+    try {
+        update_install_files($future,$root,$store,null,$removals);
+        throw new RuntimeException('symlinked signed deletion unexpectedly accepted');
+    } catch (RuntimeException $e) {
+        verify(str_contains($e->getMessage(),'符号链接'),'gateway deletion symlink rejection missing');
+    }
+    verify(unlink($gateway),'cannot remove test gateway symlink');
+    verify(rename($gateway.'.backup-test',$gateway),'cannot restore gateway test fixture');
+    verify(file_get_contents($outsideProtected)==="leave this protected\n",
+        'signed deletion modified a symlink target');
+
+    try {
+        update_install_files($future,$root,$store,
+            static function(string $path,int $installed): void {
+                if ($path==='version.json')
+                    throw new RuntimeException('CI failure after signed gateway removal');
+            },$removals);
+        throw new RuntimeException('signed deletion rollback unexpectedly succeeded');
+    } catch (RuntimeException $e) {
+        verify(str_contains($e->getMessage(),'CI failure after signed gateway removal'),
+            'signed deletion failure injection missing');
+    }
+    verify(is_file($gateway) && file_get_contents($gateway)===$gatewayBytes,
+        'rollback failed to restore deleted gateway');
+    verify(file_get_contents($store.'/config.php')==="secret fixture - never replace\n",
+        'signed migration touched protected storage');
+
+    $migration=update_install_files($future,$root,$store,null,$removals);
+    verify(!file_exists($gateway) && !is_link($gateway),
+        'signed migration left retired gateway in place');
+    verify($migration['installed_count']===count($future)+1,
+        'signed migration installed+removed count mismatch');
+    verify(is_file($store.'/backups/'.$migration['backup'].'/app/gateway.php'),
+        'removed file was not saved in rollback backup');
+    verify(file_get_contents($root.'/README.md')==="This README is user-owned. Do not overwrite.\n",
+        'migration touched README');
+    $repeat=update_install_files($future,$root,$store,null,$removals);
+    verify($repeat['installed_count']===count($future) && !file_exists($gateway),
+        'repeat signed migration was not idempotent');
+    echo "PASS: staged updater, nested directory creation, parent symlink/blocker rejection, rollback cleanup, hashes, signed gateway removal/rollback and README/storage preservation\n";
 } finally {
     delete_fixture($root);
 }

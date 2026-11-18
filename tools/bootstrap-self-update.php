@@ -96,17 +96,19 @@ function bootstrap_verify_mirror(string $publicKey): string {
                 }
             }
             if($prefix===null) throw new RuntimeException('国内镜像更新包缺少版本文件');
+            $versionBytes=$zip->getFromName($prefix.'version.json');
+            $number=is_string($versionBytes)?json_decode($versionBytes,true,512,JSON_THROW_ON_ERROR)['version']??null:null;
+            if (!is_string($number)) throw new RuntimeException('镜像版本格式错误');
+            $v3=update_v3_verify_catalog($number,
+                $zip->getFromName($prefix.'deploy/self-update-manifest-v3.json')?:null,
+                $zip->getFromName($prefix.'deploy/self-update-manifest-v3.sig')?:null,$publicKey);
             $files=[];
-            foreach (UPDATE_FILES as $path) {
+            foreach (array_keys($v3['files']) as $path) {
                 $data=$zip->getFromName($prefix.$path);
-                if (!is_string($data)) throw new RuntimeException('镜像发布包缺少必需文件');
+                if (!is_string($data)) throw new RuntimeException('镜像发布包缺少必需文件：'.$path);
                 $files[$path]=$data;
             }
-            update_validate_files($files);
-            $number=json_decode($files['version.json'],true,512,JSON_THROW_ON_ERROR)['version'];
-            update_verify_signed_archive($files,$number,
-                $zip->getFromName($prefix.'deploy/self-update-manifest.json')?:null,
-                $zip->getFromName($prefix.'deploy/self-update-manifest.sig')?:null,$publicKey);
+            update_v3_verify_files($files,$v3);
             return $number;
         } finally {$zip->close();}
     } finally {@unlink($temp);}
