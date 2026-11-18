@@ -2,7 +2,8 @@
 declare(strict_types=1);
 const APP_ROOT = __DIR__ . '/..';
 const APP_STORE = APP_ROOT . '/storage';
-// PhoneHub API 1 compatible gateway. This replaces the old /phonehub/api.php only after opt-in.
+// Current PhoneHub client API endpoint: /license/api/phonehub.php (api=1).
+// Test build: no legacy /phonehub/api.php gateway, overwrite or redirect support.
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
