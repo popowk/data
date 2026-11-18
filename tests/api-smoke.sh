@@ -493,6 +493,80 @@ echo 'CI HTTP smoke: client log filters and 50-record pagination'
 source tests/client-log-smoke.sh
 rm -f "$adminCookies" "$adminHtml"
 BASE='http://127.0.0.1:18765/api/phonehub.php?action='
+# Automatic computer replacement: oldest distinct computer is evicted by default,
+# explicit replacement takes priority, and failed login never evicts sessions.
+php -r '
+require "app/core.php";
+sql("INSERT INTO phonehub_users(username,password_hash,enabled,device_limit,license_until,entitlements) VALUES(?,?,1,2,NULL,?)",
+  ["ci_autoreplace_user",password_hash_safe("ci-automatic-replace-123456"),"[]"]);
+'
+quotaUser='ci_autoreplace_user'
+quotaPassword='ci-automatic-replace-123456'
+PC_A=$(printf '1%.0s' {1..64})
+PC_B=$(printf '2%.0s' {1..64})
+PC_C=$(printf '3%.0s' {1..64})
+PC_D=$(printf '4%.0s' {1..64})
+PC_E=$(printf '5%.0s' {1..64})
+PC_F=$(printf '6%.0s' {1..64})
+quota_login() {
+  local computer="$1" extra="${2:-}"
+  local body
+  body=$(printf '{"username":"%s","password":"%s","device_id":"%s"%s}' "$quotaUser" "$quotaPassword" "$computer" "$extra")
+  curl -sS -X POST "${BASE}login" -H 'Content-Type: application/json' --data "$body"
+}
+quota_session() {
+  local computer="$1" token="$2"
+  curl -sS -X POST "${BASE}session" -H 'Content-Type: application/json' -H "Authorization: Bearer $token" \
+    --data "{\"device_id\":\"$computer\"}"
+}
+quotaA=$(quota_login "$PC_A")
+TOKEN_A=$(TEST_RESPONSE="$quotaA" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["replaced_devices"]==0,j;print(j["token"])')
+quotaB=$(quota_login "$PC_B")
+TOKEN_B=$(TEST_RESPONSE="$quotaB" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["replaced_devices"]==0,j;print(j["token"])')
+wrongLogin=$(curl -sS -X POST "${BASE}login" -H 'Content-Type: application/json' \
+  --data "{\"username\":\"$quotaUser\",\"password\":\"wrong-password\",\"device_id\":\"$PC_C\"}")
+TEST_RESPONSE="$wrongLogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+TEST_RESPONSE="$(quota_session "$PC_A" "$TOKEN_A")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+quotaC=$(quota_login "$PC_C")
+TOKEN_C=$(TEST_RESPONSE="$quotaC" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["replaced_devices"]==1,j;print(j["token"])')
+TEST_RESPONSE="$(quota_session "$PC_A" "$TOKEN_A")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+TEST_RESPONSE="$(quota_session "$PC_B" "$TOKEN_B")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+# Same computer refreshes its token but must not kick out another computer.
+quotaCRelogin=$(quota_login "$PC_C")
+TOKEN_C_NEW=$(TEST_RESPONSE="$quotaCRelogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["replaced_devices"]==0,j;print(j["token"])')
+TEST_RESPONSE="$(quota_session "$PC_C" "$TOKEN_C")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+TEST_RESPONSE="$(quota_session "$PC_B" "$TOKEN_B")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+# Explicit target is still honored, even when it is not the oldest login.
+quotaD=$(quota_login "$PC_D" ",\"replace_device_id\":\"$PC_C\"")
+TOKEN_D=$(TEST_RESPONSE="$quotaD" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["replaced_devices"]==1,j;print(j["token"])')
+TEST_RESPONSE="$(quota_session "$PC_C" "$TOKEN_C_NEW")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+TEST_RESPONSE="$(quota_session "$PC_B" "$TOKEN_B")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+# If admin reduces quota below the number of active computers, enough oldest
+# sessions must be removed to meet the new quota in a single login.
+php -r 'require "app/core.php";sql("UPDATE phonehub_users SET device_limit=1 WHERE username=?",["ci_autoreplace_user"]);'
+quotaE=$(quota_login "$PC_E")
+TOKEN_E=$(TEST_RESPONSE="$quotaE" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["replaced_devices"]==2,j;print(j["token"])')
+TEST_RESPONSE="$(quota_session "$PC_B" "$TOKEN_B")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+TEST_RESPONSE="$(quota_session "$PC_D" "$TOKEN_D")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+php -r '
+require "app/core.php";
+$u=sql("SELECT id,device_limit FROM phonehub_users WHERE username=?",["ci_autoreplace_user"])->fetch();
+$rows=sql("SELECT DISTINCT device_id FROM phonehub_sessions WHERE user_id=? AND expires_at>UTC_TIMESTAMP()",[(int)$u["id"]])->fetchAll(PDO::FETCH_COLUMN);
+if((int)$u["device_limit"]!==1 || count($rows)!==1 || $rows[0]!==str_repeat("5",64)) exit(17);
+'
+# Forbidden computers, invalid authorization and zero quotas cannot evict.
+php -r '
+require "app/core.php";require "app/devices.php";
+device_insert_blacklist(db(),"computer_id",str_repeat("6",64),"CI blocked login",0);
+'
+blockedQuota=$(quota_login "$PC_F")
+TEST_RESPONSE="$blockedQuota" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and "禁止" in j["error"],j'
+TEST_RESPONSE="$(quota_session "$PC_E" "$TOKEN_E")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+php -r 'require "app/core.php";sql("UPDATE phonehub_users SET device_limit=0 WHERE username=?",["ci_autoreplace_user"]);'
+zeroQuota=$(quota_login "$PC_A")
+TEST_RESPONSE="$zeroQuota" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and "名额" in j["error"],j'
+TEST_RESPONSE="$(quota_session "$PC_E" "$TOKEN_E")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+echo 'CI HTTP smoke: automatic computer session replacement passed'
 DEVICE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 PHONE='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 login=$(curl -fsS -X POST "$BASE""login" -H 'Content-Type: application/json' \

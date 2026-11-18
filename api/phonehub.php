@@ -141,17 +141,60 @@ try {
         if (device_blacklisted_computer($pdo,$device))
             api_error('此电脑已被管理员禁止访问',403);
         $pdo->beginTransaction();
-        client_sql('SELECT id FROM phonehub_users WHERE id=? FOR UPDATE',[$account['id']]);
-        client_sql('DELETE FROM phonehub_sessions WHERE expires_at<UTC_TIMESTAMP()');
-        $used=(int)client_sql('SELECT COUNT(DISTINCT device_id) FROM phonehub_sessions WHERE user_id=? AND device_id<>?',[$account['id'],$device])->fetchColumn();
-        if ($used>=(int)$account['device_limit']) {
-            // Optional explicit replacement of an existing computer using valid account credentials.
-            $replace=(string)($input['replace_device_id']??'');
-            if (preg_match('/^[a-f0-9]{64}$/D',$replace) && $replace!==$device) {
-                client_sql('DELETE FROM phonehub_sessions WHERE user_id=? AND device_id=?',[$account['id'],$replace]);
-                $used=(int)client_sql('SELECT COUNT(DISTINCT device_id) FROM phonehub_sessions WHERE user_id=? AND device_id<>?',[$account['id'],$device])->fetchColumn();
+        // Lock the account before counting devices. All login requests for
+        // this customer serialize here, so concurrent replacements cannot
+        // create more authorized computers than the current quota.
+        $locked=client_sql('SELECT password_hash,enabled,license_until,device_limit FROM phonehub_users WHERE id=? FOR UPDATE',
+            [$account['id']])->fetch();
+        if (!$locked || !(int)$locked['enabled'] ||
+            !hash_equals((string)$locked['password_hash'],(string)$account['password_hash'])) {
+            $pdo->rollBack();
+            api_error('账号状态或密码已改变，请重新登录',401);
+        }
+        if ($locked['license_until'] && strtotime((string)$locked['license_until'].' UTC')<=time()) {
+            $pdo->rollBack();
+            api_error('账号授权已到期',403);
+        }
+        $limit=(int)$locked['device_limit'];
+        if ($limit<1) {
+            $pdo->rollBack();
+            api_error('当前授权没有可用的电脑名额',403);
+        }
+        // Clean only this account's expired sessions (not other customers').
+        client_sql('DELETE FROM phonehub_sessions WHERE user_id=? AND expires_at<=UTC_TIMESTAMP()',[$account['id']]);
+        // id is monotonically assigned at session login time. MIN(id) gives
+        // a deterministic oldest-login-first order per distinct computer.
+        $occupied=client_sql('SELECT device_id,MIN(id) AS first_session_id FROM phonehub_sessions
+            WHERE user_id=? GROUP BY device_id ORDER BY first_session_id ASC,device_id ASC',
+            [$account['id']])->fetchAll();
+        $alreadyLoggedIn=false;
+        $candidates=[];
+        foreach ($occupied as $entry) {
+            if (hash_equals((string)$entry['device_id'],$device)) $alreadyLoggedIn=true;
+            else $candidates[]=(string)$entry['device_id'];
+        }
+        // Re-login of the same computer consumes its existing slot. If quota
+        // was reduced meanwhile, evict other computers until it fits again.
+        $toEvict=max(0,count($occupied)+($alreadyLoggedIn?0:1)-$limit);
+        $explicit=(string)($input['replace_device_id']??'');
+        if ($toEvict>0 && preg_match('/^[a-f0-9]{64}$/D',$explicit) && $explicit!==$device) {
+            $position=array_search($explicit,$candidates,true);
+            if ($position!==false) {
+                unset($candidates[$position]);
+                array_unshift($candidates,$explicit);
             }
-            if ($used>=(int)$account['device_limit']) { $pdo->rollBack();api_error('已超过授权电脑数量，请先在其他电脑退出或指定 replace_device_id',403); }
+        }
+        $replacedDevices=0;
+        foreach ($candidates as $oldDevice) {
+            if ($replacedDevices >= $toEvict) break;
+            // Revoke all tokens for that computer, not merely one session.
+            client_sql('DELETE FROM phonehub_sessions WHERE user_id=? AND device_id=?',
+                [$account['id'],$oldDevice]);
+            $replacedDevices++;
+        }
+        if ($replacedDevices<$toEvict) {
+            $pdo->rollBack();
+            api_error('无法释放足够的授权电脑名额',409);
         }
         client_sql('DELETE FROM phonehub_sessions WHERE user_id=? AND device_id=?',[$account['id'],$device]);
         $token=bin2hex(random_bytes(32));$expires=time()+28800;
@@ -160,7 +203,8 @@ try {
         $pdo->commit();
         client_sql('DELETE FROM phonehub_login_attempts WHERE bucket=?',[$bucket]);
         api_out(['ok'=>true,'token'=>$token,'expires_at'=>$expires,'username'=>$account['username'],
-            'license_until'=>$account['license_until'],'entitlements'=>json_decode($account['entitlements'],true)]);
+            'license_until'=>$locked['license_until'],'entitlements'=>json_decode($account['entitlements'],true),
+            'replaced_devices'=>$replacedDevices]);
     }
     $authStarted=hrtime(true);
     $header=$_SERVER['HTTP_AUTHORIZATION']??'';
