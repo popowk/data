@@ -87,7 +87,7 @@ function automation_admin_action(string $action): never {
             throw new RuntimeException('已撤销或已到期令牌不能直接轮换，请创建新令牌');
         // Rotation preserves the remaining scope and expiry; never extends privileges.
         $issued=automation_issue_token([
-            'label'=>(string)$row['label'].' (轮换)',
+            'label'=>(string)$row['label'],
             'platforms'=>automation_csv_list((string)$row['platforms']),
             'channels'=>automation_csv_list((string)$row['channels']),
             'permissions'=>automation_csv_list((string)$row['permissions']),
@@ -154,6 +154,10 @@ function automation_auth(string $permission): array {
        WHERE token_id=? AND window_start=DATE_FORMAT(UTC_TIMESTAMP(),"%Y-%m-%d %H:%i:00")',[(int)$row['id']])->fetchColumn();
     if ($rate>AUTOMATION_RATE_PER_MINUTE)
         automation_fail('RATE_LIMIT','自动化调用超过每分钟限制',429);
+    // Bounded retention of atomic minute buckets, sampled to avoid a cleanup
+    // query on every request. Historical audit remains in its own table.
+    if (random_int(1,128)===1)
+        sql('DELETE FROM phonehub_automation_rate WHERE window_start<DATE_SUB(UTC_TIMESTAMP(),INTERVAL 2 DAY)');
     sql('UPDATE phonehub_automation_tokens SET last_used_at=UTC_TIMESTAMP() WHERE id=?',[$row['id']]);
     $row['platform_list']=automation_csv_list((string)$row['platforms']);
     $row['channel_list']=automation_csv_list((string)$row['channels']);
@@ -202,6 +206,17 @@ function automation_public_stage(array $row): array {
         'client_install_verified'=>false // No attested client install report is implemented.
     ];
 }
+function automation_check_version_floor(string $platform,string $channel,string $version): void {
+    // Disabled releases remain part of the version floor. A machine must not
+    // republish an older version under a fresh task after a newer version
+    // was already published, even if that newer release is now disabled.
+    $rows=sql('SELECT version FROM phonehub_releases WHERE platform=? AND channel=?',[$platform,$channel])->fetchAll();
+    foreach($rows as $row) {
+        if (version_compare($version,(string)$row['version'],'<'))
+            throw new AutomationHttpException('VERSION_ROLLBACK',
+                '版本号低于已发布的历史版本，拒绝回退',409);
+    }
+}
 function automation_prepare(array $token): never {
     $platform=trim((string)($_POST['platform']??''));
     $channel=trim((string)($_POST['channel']??''));
@@ -231,10 +246,17 @@ function automation_prepare(array $token): never {
         [(int)$token['id'],$key])->fetch();
     if ($existing) {
         if ($existing['platform']!==$platform || $existing['channel']!==$channel ||
-            $existing['version']!==$version || !hash_equals($existing['sha256'],$expected))
+            $existing['version']!==$version || !hash_equals($existing['sha256'],$expected) ||
+            $existing['min_client']!==$min ||
+            ($notes!=='' && $existing['notes']!==$notes) ||
+            ($commit!=='' && $existing['commit_sha']!==$commit) ||
+            ($run!=='' && $existing['build_run_id']!==$run))
             automation_fail('IDEMPOTENCY_CONFLICT','幂等键对应另一份发布内容',409);
         automation_ok(['release'=>automation_public_stage($existing),'replayed'=>true]);
     }
+    // Check both in prepare and again at publish: an old prepared upload may
+    // become stale when a higher version is published in the meantime.
+    automation_check_version_floor($platform,$channel,$version);
     $file=$_FILES['file']??null;
     if (!is_array($file) || (int)($file['error']??-1)!==UPLOAD_ERR_OK ||
         !is_uploaded_file((string)($file['tmp_name']??'')))
@@ -310,6 +332,7 @@ function automation_publish(int $id,array $token): never {
     if (sql('SELECT id FROM phonehub_releases WHERE platform=? AND channel=? AND version=?',
         [$row['platform'],$row['channel'],$row['version']])->fetch())
         automation_fail_in_transaction('VERSION_CONFLICT','版本号已由其他发布入口使用',409);
+    automation_check_version_floor($row['platform'],$row['channel'],$row['version']);
     $path=automation_verify_stage_file($row);
     [$secret,$pub]=release_keypair();
     $raw=json_encode([
@@ -320,13 +343,19 @@ function automation_publish(int $id,array $token): never {
         'released_at'=>gmdate('Y-m-d\TH:i:s\Z')
     ],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
     $signature=base64_encode(sodium_crypto_sign_detached($raw,$secret));
-    sql('INSERT INTO phonehub_releases
-      (platform,channel,version,min_client,notes,filename,storage_name,size_bytes,sha256,manifest,signature)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)',[
-        $row['platform'],$row['channel'],$row['version'],$row['min_client'],
-        $row['notes'],$row['filename'],$row['storage_name'],(int)$row['size_bytes'],
-        $row['sha256'],$raw,$signature
-    ]);
+    try {
+        sql('INSERT INTO phonehub_releases
+          (platform,channel,version,min_client,notes,filename,storage_name,size_bytes,sha256,manifest,signature)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?)',[
+            $row['platform'],$row['channel'],$row['version'],$row['min_client'],
+            $row['notes'],$row['filename'],$row['storage_name'],(int)$row['size_bytes'],
+            $row['sha256'],$raw,$signature
+        ]);
+    } catch(PDOException $e) {
+        if ($e->getCode()==='23000')
+            automation_fail_in_transaction('VERSION_CONFLICT','版本已由其他发布入口占用',409);
+        throw $e;
+    }
     $publicId=(int)db()->lastInsertId();
     sql("UPDATE phonehub_automation_releases SET status='published',published_release_id=?,published_at=UTC_TIMESTAMP() WHERE id=?",[$publicId,$id]);
     automation_event((int)$token['id'],'publish',$id,$row['platform'].'/'.$row['channel'].' v'.$row['version']);

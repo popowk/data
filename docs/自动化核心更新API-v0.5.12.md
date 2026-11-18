@@ -81,7 +81,7 @@ POST /license/automation/v1/releases/{id}/disable 要求 release:disable。已�
 
 ## 7. 状态码、审计与安全
 
-错误均为 JSON，包括 ok=false、error_code、error。主要错误：401 UNAUTHORIZED；403 HTTPS_REQUIRED / PERMISSION_DENIED / SCOPE_DENIED / APPROVAL_REQUIRED；409 VERSION_CONFLICT / IDEMPOTENCY_CONFLICT / INVALID_STATE；413 UPLOAD_LIMIT；422 SHA256_MISMATCH；429 RATE_LIMIT；503 SERVER_UNAVAILABLE。
+错误均为 JSON，包括 ok=false、error_code、error。主要错误：401 UNAUTHORIZED；403 HTTPS_REQUIRED / PERMISSION_DENIED / SCOPE_DENIED / APPROVAL_REQUIRED；409 VERSION_CONFLICT / VERSION_ROLLBACK / IDEMPOTENCY_CONFLICT / INVALID_STATE；413 UPLOAD_LIMIT；422 SHA256_MISMATCH；429 RATE_LIMIT；503 SERVER_UNAVAILABLE。
 
 数据库记录任务发起令牌、版本和渠道、Commit SHA、CI 构建 ID、文件摘要、创建/批准/发布/停用时间，以及事件审计与来源 IP。不会返回管理员密码、原始机器令牌或签名私钥。生产必须在宝塔 Nginx 中拒绝匿名访问整个 /license/storage/ 及其子目录；验证 CDN/ESA、源站 IPv4/IPv6 均被保护。
 
@@ -95,3 +95,10 @@ POST /license/automation/v1/releases/{id}/disable 要求 release:disable。已�
 6. Windows 客户端更新器必须由客户端开发人员完成：下载、可信固定公钥验签、安全解压、独立进程安装、故障回滚和真实测试客户端健康检查。
 7. CI 需独立验证 Git Commit、构建和客户端安装结果；服务器不能仅凭 build_run_id 或 commit_sha 字符串宣称测试通过。正式 stable 须获得主管理员明确审批。
 8. PHP 管理后台自身更新走 GitHub Actions sign-server-update.yml 和后台 update_apply，**不得**使用上述客户端发布 API 更新服务器 PHP 文件。
+
+
+## 9. 版本防回退与幂等细则
+
+机器准备和发布会分别比较相同平台、渠道中的全部历史正式版本（包括已经停用的记录）。不能用更小的版本号新建并发布 ZIP；旧的 prepared 任务在等待审批期间如果变为过期版本，也会在 publish 阶段被拒绝（409 / VERSION_ROLLBACK）。旧版人工发布入口的行为保持原状，不应通过修改历史记录来绕过机器自动发布版本规则。
+
+重放同一幂等键时会复核平台、渠道、版本、SHA-256、最低客户端版本；如果再次明确提交 notes、commit_sha 或 build_run_id，它们也不得和原任务冲突。轮换令牌不延长有效期，不追加后缀名称，避免多次轮换后触及数据库长度上限。

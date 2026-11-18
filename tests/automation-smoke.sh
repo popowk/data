@@ -60,6 +60,14 @@ TEST_RESPONSE="$badSha" python3 -c 'import os,json;j=json.loads(os.environ["TEST
 published=$(curl -sS -X POST "$AUTO"releases/"$stageId"/publish -H "Authorization: Bearer $AUTOTOKEN")
 TEST_RESPONSE="$published" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["release"]["status"]=="published" and j["public_release_id"]>0 and not j["replayed"],j'
 publicId=$(TEST_RESPONSE="$published" python3 -c 'import os,json;print(json.loads(os.environ["TEST_RESPONSE"])["public_release_id"])')
+# Machine publication cannot roll back below the newest historically issued
+# version, even when that history later becomes disabled.
+olderAttempt=$(curl -sS -H "Authorization: Bearer $AUTOTOKEN" \
+  -F "platform=core" -F "channel=beta" -F "version=8.9.9" \
+  -F "sha256=$SHA_AUTO" -F "idempotency_key=ci-beta-version-downgrade" \
+  -F "file=@$TMP_AUTO/phonehub-ci-9.0.0.zip;type=application/zip" \
+  "$AUTO"releases/prepare)
+TEST_RESPONSE="$olderAttempt" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and j["error_code"]=="VERSION_ROLLBACK",j'
 publishedAgain=$(curl -sS -X POST "$AUTO"releases/"$stageId"/publish -H "Authorization: Bearer $AUTOTOKEN")
 TEST_RESPONSE="$publishedAgain" PUBLIC_ID="$publicId" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["replayed"] and j["release"]["release_id"]==int(os.environ["PUBLIC_ID"]),j'
 # Ed25519 detached signature must validate with only the public key.
