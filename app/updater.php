@@ -29,11 +29,6 @@ const UPDATE_V3_REMOVABLE_FILES = ['app/gateway.php'];
  */
 function update_validate_files(array $files,?array $requiredPaths=null): void {
     $requiredPaths=$requiredPaths??UPDATE_FILES;
-    if (count($files)!==count($requiredPaths) ||
-        array_keys($files)!==array_values(array_unique(array_keys($files))) ||
-        array_diff(array_keys($files),$requiredPaths) ||
-        array_diff($requiredPaths,array_keys($files)))
-        throw new RuntimeException('更新包文件集与已验证清单不一致');
     foreach ($requiredPaths as $path) {
         if (!array_key_exists($path,$files) || !is_string($files[$path]) || $files[$path]==='')
             throw new RuntimeException('更新包缺少必要文件：'.$path);
@@ -48,6 +43,9 @@ function update_validate_files(array $files,?array $requiredPaths=null): void {
             }
         }
     }
+    if (count($files)!==count($requiredPaths) ||
+        array_diff(array_keys($files),$requiredPaths))
+        throw new RuntimeException('更新包包含未经授权的额外文件');
     $manifest=json_decode($files['version.json'],true);
     if (!is_array($manifest) || !is_string($manifest['version']??null))
         throw new RuntimeException('更新包 version.json 格式错误');
