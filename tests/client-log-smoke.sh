@@ -22,8 +22,8 @@ log_page() {
     --data-urlencode "q=$keyword" --data-urlencode "page=$page" -o "$LOG_HTML"
 }
 check_log_page() {
-  local expected="$1" current="$2" total="$3"
-  EXPECTED_ROWS="$expected" EXPECTED_PAGE="$current" EXPECTED_TOTAL="$total" LOG_HTML="$LOG_HTML" python3 - <<'PY'
+  local expected="$1" current="$2" pages="$3" total="$4"
+  EXPECTED_ROWS="$expected" EXPECTED_PAGE="$current" EXPECTED_PAGES="$pages" EXPECTED_TOTAL="$total" LOG_HTML="$LOG_HTML" python3 - <<'PY'
 import os,re,html
 s=open(os.environ["LOG_HTML"],encoding="utf-8").read()
 body=re.search(r'<tbody>(.*?)</tbody>',s,re.S)
@@ -31,36 +31,36 @@ assert body is not None,"log results table missing"
 rows=re.findall(r'<tr\b',body.group(1))
 assert len(rows)==int(os.environ["EXPECTED_ROWS"]),(len(rows),os.environ["EXPECTED_ROWS"])
 assert "匹配 "+os.environ["EXPECTED_TOTAL"]+" 条" in html.unescape(s), "bad count"
-assert "第 "+os.environ["EXPECTED_PAGE"]+" / " in html.unescape(s),"bad page indicator"
+assert "第 "+os.environ["EXPECTED_PAGE"]+" / "+os.environ["EXPECTED_PAGES"]+" 页" in html.unescape(s),"bad page indicator"
 PY
 }
 log_page all CI_LOG_PAGE_TEST 1
-check_log_page 50 1 3
+check_log_page 50 1 3 113
 grep -q 'page=2' "$LOG_HTML"
 grep -q 'search_by=all' "$LOG_HTML"
 log_page all CI_LOG_PAGE_TEST 2
-check_log_page 50 2 3
+check_log_page 50 2 3 113
 grep -q 'page=3' "$LOG_HTML"
 log_page all CI_LOG_PAGE_TEST 3
-check_log_page 13 3 3
+check_log_page 13 3 3 113
 log_page all CI_LOG_PAGE_TEST 900
-check_log_page 13 3 3
+check_log_page 13 3 3 113
 log_page error CI_LOG_PAGE_TEST 1
-check_log_page 50 1 3
+check_log_page 50 1 3 113
 grep -q 'value="CI_LOG_PAGE_TEST"' "$LOG_HTML"
 log_page error CI_LOG_EVENT_TARGET 1
-check_log_page 1 1 1
+check_log_page 1 1 1 1
 grep -q 'event-only sentinel' "$LOG_HTML"
 if grep -q 'an info log should not be an error' "$LOG_HTML"; then exit 11;fi
 log_page username ci_open_plan_user 1
 grep -q 'ci_open_plan_user' "$LOG_HTML"
 grep -q 'name="search_by"' "$LOG_HTML"
 log_page username nonexistent_ci_log_username 1
-check_log_page 0 1 1
+check_log_page 0 1 1 0
 grep -q '没有符合条件的日志' "$LOG_HTML"
 # Invalid pagination is clamped to the first page, and HTML is escaped.
 log_page all CI_LOG_PAGE_TEST -5
-check_log_page 50 1 3
+check_log_page 50 1 3 113
 log_page all '<script>alert(1)</script>' 1
 if grep -Fq '<script>alert(1)</script>' "$LOG_HTML"; then exit 12; fi
 grep -q '&lt;script&gt;' "$LOG_HTML"
