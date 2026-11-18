@@ -28,7 +28,7 @@ import os,re,html
 s=open(os.environ["LOG_HTML"],encoding="utf-8").read()
 body=re.search(r'<tbody>(.*?)</tbody>',s,re.S)
 assert body is not None,"log results table missing"
-rows=re.findall(r'<tr\b',body.group(1))
+rows=[] if 'class="empty-result"' in body.group(1) else re.findall(r'<tr\b',body.group(1))
 assert len(rows)==int(os.environ["EXPECTED_ROWS"]),(len(rows),os.environ["EXPECTED_ROWS"])
 assert "匹配 "+os.environ["EXPECTED_TOTAL"]+" 条" in html.unescape(s), "bad count"
 assert "第 "+os.environ["EXPECTED_PAGE"]+" / "+os.environ["EXPECTED_PAGES"]+" 页" in html.unescape(s),"bad page indicator"
