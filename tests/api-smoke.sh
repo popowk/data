@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "CI HTTP smoke failed at ${BASH_SOURCE[0]} line ${LINENO}" >&2' ERR
 mkdir -p storage
 cat >storage/config.php <<'EOF'
 <?php return ['db_host'=>'127.0.0.1','db_port'=>3306,'db_name'=>'phonehub_ci','db_user'=>'root','db_pass'=>'ci_password'];
@@ -491,5 +492,6 @@ TEST_RESPONSE="$loginBlocked" python3 -c 'import os,json; j=json.loads(os.enviro
 grep -q 'PhoneHub heartbeat_perf status=200 ' /tmp/phonehub-ci-server.log
 grep -q 'connect_ms=.*auth_ms=.*db_ms=.*package_ms=.*response_ms=' /tmp/phonehub-ci-server.log
 if grep -Fq "$TOKEN" /tmp/phonehub-ci-server.log; then echo 'Bearer leaked to timing logs' >&2; exit 10; fi
+echo 'CI HTTP smoke: entering automation scenarios'
 source tests/automation-smoke.sh
 echo 'PASS: authenticated mobile/model/IMEI/phone ciphertext, phone and computer blacklist, authorization, logs and signed updates + automation'
