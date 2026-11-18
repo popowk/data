@@ -54,42 +54,56 @@ if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
     $openingPlans['standard']['mobile_limit']!==5 || $openingPlans['team']['device_limit']!==10 ||
     phonehub_plan_label(null)!=='原有授权')
     throw new RuntimeException('opening plan presets invalid');
-// Owner/admin/viewer are explicit, deny-by-default console roles.
+// Protected root owner and two selectable administrator roles, deny by default.
+// Legacy viewer accounts retain readonly permissions until explicitly reassigned.
 $allowedViews=[
     'owner'=>['dashboard','accounts','groups','group_bulk','devices','packages',
       'plans','backup_keys','client_logs','releases','ai','update',
       'admins','audit','cloud_features'],
-    'admin'=>['dashboard','accounts','groups','group_bulk','devices','packages','client_logs','audit'],
+    'global'=>['dashboard','accounts','groups','group_bulk','devices','packages',
+      'plans','backup_keys','client_logs','releases','ai','update',
+      'admins','audit','cloud_features'],
+    'admin'=>['accounts','devices','plans','client_logs'],
     'viewer'=>['dashboard','accounts','groups','packages']
 ];
 foreach ($allowedViews as $role=>$allowed)
     foreach ($allowedViews['owner'] as $page)
         if (phonehub_role_can_view($role,$page)!==in_array($page,$allowed,true))
             throw new RuntimeException('role page policy failed: '.$role.' / '.$page);
-foreach (['owner','admin','viewer','not_a_role'] as $role) {
+foreach (['owner','global','admin','viewer','not_a_role'] as $role)
     if (phonehub_role_can_view($role,'unregistered_view') ||
         phonehub_role_can_action($role,'unregistered_action'))
         throw new RuntimeException('unknown backend permission was granted');
-}
-foreach (['viewer','not_a_role'] as $role)
-    foreach (['group_create','account_save','group_bulk_preview','plan_save',
-      'backup_key_generate','update_apply','device_reveal','admin_create',
-      'automation_token_create','automation_release_approve',
-      'cloud_features_save','mobile_revoke'] as $action)
+foreach (['admin','viewer','not_a_role'] as $role)
+    foreach (['group_create','group_bulk_preview','release_publish','backup_key_generate',
+        'update_apply','admin_create','admin_role_change','automation_token_create',
+        'cloud_features_save'] as $action)
         if (phonehub_role_can_action($role,$action))
-            throw new RuntimeException('read-only/invalid role may mutate data: '.$action);
-if (phonehub_role_can_action('owner','device_reveal'))
-    throw new RuntimeException('raw device identifier admin API still permitted');
+            throw new RuntimeException('staff operator can use '.$action);
+foreach (['global','admin','viewer','not_a_role'] as $role)
+    foreach (['signing_generate','signing_activate','backup_key_generate','update_apply',
+        'admin_create','admin_role_change','automation_token_rotate',
+        'automation_release_approve','owner_password','device_reveal'] as $action)
+        if (phonehub_role_can_action($role,$action))
+            throw new RuntimeException('non-owner may change protected operation: '.$role.' / '.$action);
+foreach (['account_save','plan_save','plan_toggle','mobile_revoke',
+    'device_blacklist_add','mobile_blacklist','mobile_unblacklist'] as $action)
+    if (!phonehub_role_can_action('admin',$action))
+        throw new RuntimeException('ordinary admin missing '.$action);
+foreach (['release_publish','cloud_features_save','update_check','update_diagnostics',
+    'group_bulk','ai_settings_save'] as $action)
+    if (!phonehub_role_can_action('global',$action))
+        throw new RuntimeException('global admin missing '.$action);
+if (!phonehub_role_can_action('viewer','logout') ||
+    phonehub_role_can_action('viewer','account_save') ||
+    !phonehub_role_can_action('owner','backup_key_generate') ||
+    phonehub_role_label('owner')!=='全局管理员（主账号）' ||
+    phonehub_role_label('viewer')!=='历史只读管理员')
+    throw new RuntimeException('role action policy mismatch');
 if (phonehub_role_can_view('owner','gateway') || phonehub_role_can_action('owner','gateway_install'))
     throw new RuntimeException('retired client API takeover route/action remains enabled');
 if (function_exists('gateway_status') || function_exists('gateway_install'))
     throw new RuntimeException('retired client API gateway functions remain available');
-if (!phonehub_role_can_action('viewer','logout') ||
-    !phonehub_role_can_action('admin','account_save') ||
-    phonehub_role_can_action('admin','plan_save') ||
-    !phonehub_role_can_action('owner','backup_key_generate') ||
-    phonehub_role_label('viewer')!=='只读管理员')
-    throw new RuntimeException('role action policy mismatch');
 // Apache-only fallback: updating this file does not configure Nginx.
 $apacheRules=(string)file_get_contents(dirname(__DIR__).'/.htaccess');
 if (!str_contains($apacheRules,'RewriteRule ^storage(/|$) - [F,L]') ||
