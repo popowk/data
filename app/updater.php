@@ -7,8 +7,8 @@ const UPDATE_FILES = [
     'index.php','install.php','version.json','.htaccess',
     'app/core.php','app/accounts.php','app/updater.php','app/features.php','app/gateway.php',
     'app/devices.php','app/device_admin.php','app/signing_admin.php',
-    'app/releases.php','app/release_admin.php','app/ai.php','app/mobile.php',
-    'api/phonehub.php','api/extensions.php','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','docs/客户端接入API-v0.5.md','docs/运维备份与升级.md','docs/设备管理与签名-v0.5.2.md','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','tools/bootstrap-self-update.php','assets/app.css','assets/app.js'
+    'app/releases.php','app/release_admin.php','app/automation.php','app/ai.php','app/mobile.php',
+    'api/phonehub.php','api/extensions.php','automation/v1/index.php','docs/自动化核心更新API-v0.5.12.md','deploy/nginx-automation.conf','docs/客户端接入API-v0.3.md','docs/客户端接入API-v0.4.md','docs/客户端接入API-v0.5.md','docs/运维备份与升级.md','docs/设备管理与签名-v0.5.2.md','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','tools/bootstrap-self-update.php','assets/app.css','assets/app.js'
 ];
 
 /**
@@ -162,7 +162,7 @@ function update_archive(): array {
     } finally {@unlink($file);}
 }
 function missing_runtime_modules(): array {
-    $required=['app/accounts.php','app/features.php','app/gateway.php','app/releases.php','app/release_admin.php','app/ai.php',
+    $required=['app/accounts.php','app/features.php','app/gateway.php','app/releases.php','app/release_admin.php','app/automation.php','automation/v1/index.php','app/ai.php',
         'app/devices.php','app/device_admin.php','app/signing_admin.php',
         'api/phonehub.php','api/extensions.php','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','tools/bootstrap-self-update.php'];
     return array_values(array_filter($required,static fn($name)=>!is_file(APP_ROOT.'/'.$name)));
@@ -205,7 +205,7 @@ function update_diagnostics(): array {
         'detail'=>$canBackup?'具备写入备份的条件':'备份目录不可写'];
     try {
         $migrations=(int)db()->query('SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations')->fetchColumn();
-        $checks[]=['name'=>'MySQL 数据库','status'=>$migrations>=10?'ok':'warning',
+        $checks[]=['name'=>'MySQL 数据库','status'=>$migrations>=11?'ok':'warning',
             'detail'=>'连接正常；数据结构版本 '.$migrations];
     } catch(Throwable $e) {
         error_log('PhoneHub runtime diagnostics database failure: '.get_class($e));

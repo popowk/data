@@ -39,8 +39,14 @@ if (!in_array('opening_plan_code',$metaColumns,true))
     throw new RuntimeException('opening plan migration missing');
 $planTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_plan_templates'")->fetchColumn();
 if($planTable!==1) throw new RuntimeException('plan migration table missing');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==10)
-    throw new RuntimeException('plan migration version incorrect');
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==11)
+    throw new RuntimeException('automation migration version incorrect');
+foreach(['phonehub_automation_tokens','phonehub_automation_releases',
+         'phonehub_automation_rate','phonehub_automation_audit'] as $table) {
+    $q=$pdo->prepare('SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?');
+    $q->execute([$table]);
+    if ((int)$q->fetchColumn()!==1) throw new RuntimeException('automation schema missing: '.$table);
+}
 $openingPlans=phonehub_opening_plans(true,$pdo);
 if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
     $openingPlans['standard']['mobile_limit']!==5 || $openingPlans['team']['device_limit']!==10 ||
@@ -66,6 +72,7 @@ foreach (['owner','admin','viewer','not_a_role'] as $role) {
 foreach (['viewer','not_a_role'] as $role)
     foreach (['group_create','account_save','group_bulk_preview','plan_save',
       'backup_key_generate','update_apply','device_reveal','admin_create',
+      'automation_token_create','automation_release_approve',
       'cloud_features_save','mobile_revoke'] as $action)
         if (phonehub_role_can_action($role,$action))
             throw new RuntimeException('read-only/invalid role may mutate data: '.$action);

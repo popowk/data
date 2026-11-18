@@ -54,4 +54,6 @@ function release_admin_view(): void {
       </tbody></table></div>
     </div>
     <?php
+    require_once __DIR__.'/automation.php';
+    automation_admin_view();
 }

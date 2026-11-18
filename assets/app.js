@@ -47,6 +47,21 @@
     actions.append(copy,close);dialog.append(title,description,secret,actions);overlay.append(dialog);document.body.append(overlay);
     close.focus();
   }
+  function showAutomationToken(value,expires) {
+    const overlay=document.createElement('div');overlay.className='secret-overlay';
+    const dialog=document.createElement('section');dialog.className='secret-dialog';
+    dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
+    const title=document.createElement('h2');title.textContent='发布令牌（仅显示一次）';
+    const note=document.createElement('p');note.textContent='立即复制并保存到 CI 的安全密钥库；到期：'+(expires||'未知')+' UTC。不要发送到聊天、日志或 Git 仓库。';
+    const valueEl=document.createElement('code');valueEl.className='secret-value';valueEl.textContent=value;
+    const actions=document.createElement('div');actions.className='secret-buttons';
+    const copy=document.createElement('button');copy.type='button';copy.className='btn primary';copy.textContent='复制令牌';
+    const close=document.createElement('button');close.type='button';close.className='btn';close.textContent='已安全保存，关闭';
+    copy.addEventListener('click',()=>navigator.clipboard.writeText(value).then(()=>toast('令牌已复制')).catch(()=>toast('复制失败',true)));
+    close.addEventListener('click',()=>overlay.remove());
+    actions.append(copy,close);dialog.append(title,note,valueEl,actions);overlay.append(dialog);document.body.append(overlay);
+    close.focus();
+  }
   function toast(message, error=false) {
     const el = $('#toast');
     if (!el) { const hint=$('#message'); if (hint) hint.textContent=message; return; }
@@ -109,6 +124,7 @@
       // Reveal one-time credentials before refreshing page content. If the refresh
       // fails after the server committed the password reset, the secret must not be lost.
       if (result.password) showPassword(result.username || '客户', result.password);
+      if (result.token) showAutomationToken(result.token,result.expires_at);
       await refreshAfterSuccess();
     } catch(err){toast(err.message,true);}
     finally {if(submit)submit.disabled=false;}
@@ -386,6 +402,10 @@
       'mobile-blacklist':['mobile_blacklist',{id,reason:'管理员手动拉黑'},true],
       'mobile-unblacklist':['mobile_unblacklist',{id},true],
       'release-toggle':['release_toggle',{id},true],
+      'automation-token-revoke':['automation_token_revoke',{id},true],
+      'automation-token-rotate':['automation_token_rotate',{id},true],
+      'automation-release-approve':['automation_release_approve',{id},true],
+      'automation-release-reject':['automation_release_reject',{id},true],
       'logs-purge':['logs_purge',{days:30},true],
       'gateway-install':['gateway_install',{},true]
     };
@@ -399,6 +419,7 @@
       toast(result.message||'操作成功');
       // Display one-time passwords before any non-critical page refresh.
       if(result.password)showPassword(result.username||'账号',result.password);
+      if(result.token)showAutomationToken(result.token,result.expires_at);
       await refreshAfterSuccess();
     }catch(err){toast(err.message,true);}
     finally{trigger.disabled=false;}

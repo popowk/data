@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=10) return;
+        if ($ready>=11) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -301,6 +301,51 @@ function migrate(PDO $conn): void {
           ('team','团队版',10,20,1,30)");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(10,UTC_TIMESTAMP())");
     }
+
+    if ($version < 11) {
+        // AI/CI release automation. All keys are hashed; staged ZIPs remain
+        // private files and stable publication always needs owner approval.
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_automation_tokens (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          label VARCHAR(96) NOT NULL, token_hash CHAR(64) NOT NULL UNIQUE,
+          platforms TEXT NOT NULL, channels TEXT NOT NULL, permissions TEXT NOT NULL,
+          source_ip VARCHAR(45) NULL, expires_at DATETIME NOT NULL,
+          revoked_at DATETIME NULL, created_by BIGINT UNSIGNED NOT NULL,
+          last_used_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_expires(expires_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_automation_releases (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          token_id BIGINT UNSIGNED NOT NULL, idempotency_key VARCHAR(64) NOT NULL,
+          platform VARCHAR(32) NOT NULL, channel VARCHAR(16) NOT NULL,
+          version VARCHAR(48) NOT NULL, min_client VARCHAR(48) NOT NULL,
+          notes VARCHAR(1000) NOT NULL DEFAULT '', filename VARCHAR(255) NOT NULL,
+          storage_name VARCHAR(90) NOT NULL, size_bytes BIGINT UNSIGNED NOT NULL,
+          sha256 CHAR(64) NOT NULL, commit_sha CHAR(40) NULL,
+          build_run_id VARCHAR(100) NULL, status VARCHAR(16) NOT NULL DEFAULT 'prepared',
+          approved_by BIGINT UNSIGNED NULL, approved_at DATETIME NULL,
+          published_release_id BIGINT UNSIGNED NULL, published_at DATETIME NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          UNIQUE KEY uq_automation_idempotency(token_id,idempotency_key),
+          UNIQUE KEY uq_automation_version(platform,channel,version),
+          INDEX idx_status(status,created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_automation_rate (
+          token_id BIGINT UNSIGNED NOT NULL, window_start DATETIME NOT NULL,
+          requests INT UNSIGNED NOT NULL DEFAULT 0,
+          PRIMARY KEY(token_id,window_start)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_automation_audit (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          token_id BIGINT UNSIGNED NULL, event VARCHAR(32) NOT NULL,
+          release_id BIGINT UNSIGNED NULL, detail VARCHAR(120) NOT NULL DEFAULT '',
+          source_ip VARCHAR(45) NOT NULL DEFAULT '',
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_automation_audit(created_at,token_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(11,UTC_TIMESTAMP())");
+    }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
@@ -370,6 +415,8 @@ function phonehub_role_can_action(string $role,string $action): bool {
     ]);
     $owner=array_merge($admin,[
         'signing_generate','signing_activate','plan_save','plan_toggle',
+        'automation_token_create','automation_token_revoke','automation_token_rotate',
+        'automation_release_approve','automation_release_reject',
         'backup_key_generate','diagnostic_report','update_check','update_apply',
         'update_diagnostics','release_publish','release_toggle','logs_purge',
         'ai_settings_save','admin_create','admin_toggle','admin_reset',

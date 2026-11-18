@@ -4,7 +4,7 @@ mkdir -p storage
 cat >storage/config.php <<'EOF'
 <?php return ['db_host'=>'127.0.0.1','db_port'=>3306,'db_name'=>'phonehub_ci','db_user'=>'root','db_pass'=>'ci_password'];
 EOF
-PHONEHUB_PERF_SAMPLE_PERCENT=100 php -S 127.0.0.1:18765 -t . >/tmp/phonehub-ci-server.log 2>&1 &
+PHONEHUB_PERF_SAMPLE_PERCENT=100 PHONEHUB_AUTOMATION_TEST_ALLOW_HTTP=1 php -S 127.0.0.1:18765 -t . >/tmp/phonehub-ci-server.log 2>&1 &
 server_pid=$!
 trap 'kill "$server_pid" 2>/dev/null || true; rm -f storage/config.php' EXIT
 for i in $(seq 1 40); do
@@ -491,4 +491,5 @@ TEST_RESPONSE="$loginBlocked" python3 -c 'import os,json; j=json.loads(os.enviro
 grep -q 'PhoneHub heartbeat_perf status=200 ' /tmp/phonehub-ci-server.log
 grep -q 'connect_ms=.*auth_ms=.*db_ms=.*package_ms=.*response_ms=' /tmp/phonehub-ci-server.log
 if grep -Fq "$TOKEN" /tmp/phonehub-ci-server.log; then echo 'Bearer leaked to timing logs' >&2; exit 10; fi
-echo 'PASS: authenticated mobile/model/IMEI/phone ciphertext, phone and computer blacklist, authorization, logs and signed updates'
+source tests/automation-smoke.sh
+echo 'PASS: authenticated mobile/model/IMEI/phone ciphertext, phone and computer blacklist, authorization, logs and signed updates + automation'

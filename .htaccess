@@ -3,6 +3,8 @@ Options -Indexes
 <IfModule mod_rewrite.c>
 RewriteEngine On
 RewriteRule ^storage(/|$) - [F,L]
+# Friendly automation paths. Nginx does not read this; see deploy/nginx-automation.conf.
+RewriteRule ^automation/v1/(releases(?:/prepare|/[0-9]+(?:/(?:publish|disable))?)?)/?$ automation/v1/index.php?route=$1 [QSA,L]
 </IfModule>
 # Block directly served secret/key/archive extensions where Apache applies.
 <FilesMatch "\.(key|pub|pem|sql|sqlite|db|bak|zip)$">

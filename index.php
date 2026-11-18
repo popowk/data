@@ -195,6 +195,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             audit('system_update',(string)($result['version'] ?? ''));
             json_response(['ok'=>true]+$result);
         }
+        if (str_starts_with($action,'automation_')) {
+            require __DIR__.'/app/automation.php';
+            automation_admin_action($action);
+        }
         if (in_array($action,['release_publish','release_toggle','logs_purge'],true)) {
             require __DIR__.'/app/release_admin.php';
             release_admin_action($action);
