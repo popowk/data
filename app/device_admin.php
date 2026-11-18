@@ -117,9 +117,9 @@ function device_admin_view(): void {
         <?php foreach($phones as $d): ?>
           <tr><td><b><?=h($d['username'])?></b></td><td><?=h($d['phone_model']?:'型号未上报')?><small class="device-subline"><?=h($d['display_name'])?></small></td>
           <td><code><?=h(substr($d['phone_id'],0,14))?>…</code></td>
-          <td><span class="device-sensitive"><?=h($owner?device_admin_masked($d['imei_encrypted'],3,3):($d['imei_encrypted']?'已加密':'未获取'))?></span>
+          <td><span class="device-sensitive"><?=h($d['imei_encrypted']?($owner?device_admin_masked($d['imei_encrypted'],3,3):'已加密'):($d['imei_hash']?'仅有历史摘要（需补报）':'客户端未上报'))?></span>
             <?php if($owner && $d['imei_encrypted']): ?><button class="small-link" data-action="device-reveal" data-kind="imei" data-id="<?=(int)$d['id']?>">查看</button><?php endif ?></td>
-          <td><span class="device-sensitive"><?=h($owner?device_admin_masked($d['phone_number_encrypted'],4,4):($d['phone_number_encrypted']?'已加密':'未获取'))?></span>
+          <td><span class="device-sensitive"><?=h($d['phone_number_encrypted']?($owner?device_admin_masked($d['phone_number_encrypted'],4,4):'已加密'):($d['phone_number_hash']?'仅有历史摘要（需补报）':'客户端未上报'))?></span>
             <?php if($owner && $d['phone_number_encrypted']): ?><button class="small-link" data-action="device-reveal" data-kind="phone_number" data-id="<?=(int)$d['id']?>">查看</button><?php endif ?></td>
           <td><span class="pill <?=((int)$d['blacklisted']||(int)$d['enabled']===0)?'off':'ok'?>"><?=((int)$d['blacklisted'])?'已拉黑':((int)$d['enabled']===1?'已绑定':'已解绑')?></span></td>
           <td><?=h(utc_to_cn($d['last_seen']?:$d['created_at']))?></td>
@@ -132,7 +132,7 @@ function device_admin_view(): void {
             <?php endif ?>
           </td></tr>
         <?php endforeach ?></tbody></table></div>
-        <p class="footnote">历史记录仅保存过 IMEI HMAC 的，不能逆推出 IMEI 原文；需要手机重新上报原值后才会出现可查看项。</p>
+        <p class="footnote">服务器无法主动读取安卓手机的 IMEI 或手机号。旧版客户端只上报设备指纹时会显示「客户端未上报」；仅有旧版 HMAC 摘要时显示「仅有历史摘要（需补报）」。客户端可在用户知情授权且实际能读取时，通过 <code>mobile_bind</code>（对已有 phone_id 再次调用）或 <code>mobile_heartbeat</code> 携带 <code>imei</code>、<code>phone_number</code>、<code>phone_model</code> 完成补报。普通 Android 10+ 应用可能无法读取 IMEI，部分 SIM 也未保存本机号码；勿填随机值或伪造值。</p>
       </div>
       <div class="card"><div class="card-head"><h2>管理员手动绑定手机</h2></div>
         <form data-ajax="mobile_add"><input type="hidden" name="action" value="mobile_add">

@@ -643,7 +643,7 @@ function backup_admin_view(): void {
     ?>
     <div class="page-title"><div><h1>备份密钥管理</h1>
         <p>初始化加密备份接收公钥；解密私钥只下载一次，不修改现有 Ed25519 更新签名</p></div>
-        <a class="btn" href="?view=diagnostics">查看故障诊断</a>
+        <a class="btn" href="?view=update">运行环境自检</a>
     </div>
     <div class="card"><div class="card-head"><h2>Curve25519 备份密钥</h2>
         <span class="pill <?=$status['configured']?'ok':'off'?>"><?=$status['configured']?'已配置公钥':'尚未配置'?></span></div>

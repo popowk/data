@@ -108,15 +108,8 @@ input[readonly]{background:#f7f8fb;color:#9099a6}
 .device-commands{min-width:190px}
 }
 
-/* Owner-only sanitized diagnostics report */
-.diagnostic-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:18px 0 16px}
-.diagnostic-actions .muted{font-size:12px}
-.diagnostic-label{display:block;color:#415574;font-weight:700;font-size:12px;margin:12px 0 8px}
-.diagnostic-report{display:block;width:100%;max-width:100%;min-height:320px;box-sizing:border-box;border:1px solid #d9e3f1;border-radius:11px;padding:16px;background:#f7f9fd;color:#2c405f;font:12px/1.75 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow:auto;resize:vertical}
-.diagnostic-report:focus{outline:2px solid #9ebdf9;border-color:#608be4}
 #opening-plan-field select{min-height:43px}
 #opening-plan-field .footnote{display:block;margin-top:5px;line-height:1.6}
-@media(max-width:640px){.diagnostic-actions{align-items:stretch;flex-direction:column}.diagnostic-actions .btn{width:100%}.diagnostic-report{min-height:270px}}
 
 /* Client log keyword/mode search, responsive at narrow widths. */
 .client-log-filter-form{display:grid;grid-template-columns:minmax(175px,230px) minmax(250px,1fr) auto;gap:14px;align-items:end}
@@ -135,14 +128,6 @@ input[readonly]{background:#f7f8fb;color:#9099a6}
 .account-pagination{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12px;padding:19px 0 0;color:#586983;font-size:13px}
 .empty-result{text-align:center;white-space:normal;color:#7d8ba2;padding:35px}
 .plan-stats{margin-bottom:22px}
-.diagnostic-checks{border:1px solid #e3e9f3;border-radius:11px;padding:18px;margin:12px 0 22px;background:#f9fbfe}
-.diagnostic-checks[hidden]{display:none}.diagnostic-overview{margin:0 0 18px;color:#50627c;font-weight:600}
-.diagnostic-check-group{margin:14px 0}.diagnostic-check-group h3{font-size:14px;color:#344966;margin:0 0 9px}
-.diagnostic-check-group ul{margin:0;padding:0;list-style:none;display:grid;gap:8px}
-.diagnostic-check-group li{border:1px solid #e4eaf3;border-radius:8px;background:white;padding:10px 12px;display:grid;gap:3px;white-space:normal}
-.diagnostic-check-group li strong{font-size:13px}.diagnostic-check-group li span{font-size:12px;color:#5d6e86}
-.diagnostic-check-group li small{color:#55769e;font-size:12px;line-height:1.7}
-.diagnostic-check-group.error h3{color:#b44343}.diagnostic-check-group.warning h3{color:#a77916}
 @media(max-width:1100px){.account-filter-form{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:650px){.account-filter-form{grid-template-columns:repeat(2,minmax(0,1fr))}.account-pagination{justify-content:center}}
 

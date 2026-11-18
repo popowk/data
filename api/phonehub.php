@@ -159,17 +159,14 @@ try {
         $name=trim((string)($input['display_name']??''));
         if (!preg_match('/^[a-f0-9]{64}$/D',$phone) || strlen($name)>120 || preg_match('/[\\x00-\\x1F]/',$name))
             api_error('手机设备指纹必须为 64 位 SHA-256，名称不能包含控制字符');
-        $imeiHash=api_imei_hash_from_input($input);
-        $imeiRaw=trim((string)($input['imei']??''));
-        $model=trim((string)($input['phone_model']??''));
-        if (strlen($model)>120 || preg_match('/[\\x00-\\x1F]/',$model))
-            api_error('手机型号格式不正确');
-        try {
-            $phoneNumber=device_phone_normalize(isset($input['phone_number'])?(string)$input['phone_number']:null);
-            $phoneHash=device_phone_hash($phoneNumber);
-            $encryptedImei=device_encrypt($imeiRaw);
-            $encryptedPhone=device_encrypt($phoneNumber);
-        } catch (Throwable $e) { api_error('手机身份信息格式无效或密钥不可用',400); }
+        // Enrichment happens only when the client explicitly sends values.
+        // Clients may safely call mobile_bind again for an existing phone_id.
+        $identity=api_mobile_identity_input($input);
+        $imeiHash=$identity['imei_hash'];
+        $phoneHash=$identity['phone_number_hash'];
+        $encryptedImei=$identity['imei_encrypted'];
+        $encryptedPhone=$identity['phone_number_encrypted'];
+        $model=$identity['phone_model'];
         $pdo->beginTransaction();
         $meta=client_sql('SELECT u.id,COALESCE(m.mobile_limit,0) AS mobile_limit FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.id=? FOR UPDATE',[$userId])->fetch();
         $limit=(int)($meta['mobile_limit']??0);
@@ -199,10 +196,20 @@ try {
         client_sql('INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,imei_hash,imei_encrypted,phone_model,phone_number_hash,phone_number_encrypted,enabled,last_seen) VALUES(?,?,?,?,?,?,?,?,1,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),imei_hash=COALESCE(VALUES(imei_hash),imei_hash),imei_encrypted=COALESCE(VALUES(imei_encrypted),imei_encrypted),phone_model=COALESCE(NULLIF(VALUES(phone_model),\'\'),phone_model),phone_number_hash=COALESCE(VALUES(phone_number_hash),phone_number_hash),phone_number_encrypted=COALESCE(VALUES(phone_number_encrypted),phone_number_encrypted),enabled=1,last_seen=UTC_TIMESTAMP()',[$userId,$phone,$name,$imeiHash,$encryptedImei,$model,$phoneHash,$encryptedPhone]);
         $pdo->commit();
         $active=(int)client_sql('SELECT COUNT(*) FROM phonehub_mobile_devices WHERE user_id=? AND enabled=1',[$userId])->fetchColumn();
-        api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>true,'imei_bound'=>$imeiHash!==null || !empty($existing['imei_hash']),'mobile_limit'=>$limit,'active_count'=>$active]);
+        $stored=client_sql('SELECT imei_hash,imei_encrypted,phone_number_encrypted,phone_model FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
+        api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>true,
+            'imei_bound'=>!empty($stored['imei_hash']),
+            'imei_stored'=>!empty($stored['imei_encrypted']),
+            'phone_number_bound'=>!empty($stored['phone_number_encrypted']),
+            'phone_model_received'=>!empty($stored['phone_model']),
+            'mobile_limit'=>$limit,'active_count'=>$active]);
     }
     if ($action==='mobile_list') {
-        $devices=client_sql("SELECT d.phone_id,d.display_name,d.created_at,d.last_seen,CASE WHEN d.imei_hash IS NULL THEN 0 ELSE 1 END AS imei_bound
+        $devices=client_sql("SELECT d.phone_id,d.display_name,d.created_at,d.last_seen,
+              CASE WHEN d.imei_hash IS NULL THEN 0 ELSE 1 END AS imei_bound,
+              CASE WHEN d.imei_encrypted IS NULL THEN 0 ELSE 1 END AS imei_stored,
+              CASE WHEN d.phone_number_encrypted IS NULL THEN 0 ELSE 1 END AS phone_number_bound,
+              CASE WHEN d.phone_model IS NULL OR d.phone_model='' THEN 0 ELSE 1 END AS phone_model_received
             FROM phonehub_mobile_devices d WHERE d.user_id=? AND d.enabled=1
             AND NOT EXISTS (SELECT 1 FROM phonehub_mobile_blacklist b WHERE b.enabled=1 AND
               ((b.identifier_type='phone_id' AND b.identifier_hash=d.phone_id) OR

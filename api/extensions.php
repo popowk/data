@@ -27,6 +27,36 @@ function api_imei_hash_from_input(array $input): ?string {
         api_problem('IMEI_HASH_UNAVAILABLE','服务器设备身份密钥暂不可用',503);
     }
 }
+/**
+ * Identity fields are OPTIONAL and must be explicitly supplied by the client.
+ * A regular Android app may lack permission to read IMEI or a SIM number.
+ * Never synthesize identifiers or silently treat a missing value as consent.
+ * Existing HMAC + secretbox are reused; no new identity key is generated.
+ */
+function api_mobile_identity_input(array $input): array {
+    foreach (['imei','phone_number','phone_model'] as $field) {
+        if (isset($input[$field]) && !is_string($input[$field]))
+            api_problem('INVALID_MOBILE_IDENTITY','手机身份字段必须为字符串');
+    }
+    $imei=trim((string)($input['imei']??''));
+    $imeiHash=api_imei_hash_from_input($input);
+    $model=trim((string)($input['phone_model']??''));
+    if (strlen($model)>120 || preg_match('/[\x00-\x1F]/',$model))
+        api_problem('INVALID_PHONE_MODEL','手机型号格式不正确');
+    try {
+        $number=device_phone_normalize(isset($input['phone_number'])?(string)$input['phone_number']:null);
+        $phoneHash=device_phone_hash($number);
+        $encImei=device_encrypt($imei);
+        $encPhone=device_encrypt($number);
+    } catch (Throwable $e) {
+        error_log('PhoneHub mobile identity validation/encryption: '.get_class($e));
+        api_problem('INVALID_MOBILE_IDENTITY','手机号格式无效或身份加密不可用');
+    }
+    return ['imei_hash'=>$imeiHash,'imei_encrypted'=>$encImei,
+        'phone_number_hash'=>$phoneHash,'phone_number_encrypted'=>$encPhone,
+        'phone_model'=>$model];
+}
+
 function api_mobile_quota(int $userId): array {
     $meta=client_sql('SELECT COALESCE(m.mobile_limit,0) AS lim FROM phonehub_user_meta m WHERE m.user_id=?',[$userId])->fetch();
     $count=(int)client_sql("SELECT COUNT(*) FROM phonehub_mobile_devices d WHERE d.user_id=? AND d.enabled=1
@@ -297,14 +327,21 @@ function api_extra(string $action,array $input,array $session,int $userId): void
     }
     if ($action==='mobile_check' || $action==='mobile_heartbeat') {
         $phone=api_phone((string)($input['phone_id']??''));
-        $providedImeiHash=api_imei_hash_from_input($input);
-        $found=client_sql('SELECT id,enabled,display_name,imei_hash,phone_number_hash FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
+        // Existing mobile_heartbeat callers stay compatible. New clients may
+        // explicitly include identity fields to enrich a previously bound
+        // device; mobile_check remains a read-only verification request.
+        $identity=$action==='mobile_heartbeat'?api_mobile_identity_input($input):null;
+        $providedImeiHash=$identity!==null?$identity['imei_hash']:api_imei_hash_from_input($input);
+        $providedPhoneHash=$identity['phone_number_hash']??null;
+        $found=client_sql('SELECT id,enabled,display_name,imei_hash,imei_encrypted,phone_number_hash,phone_number_encrypted,phone_model FROM phonehub_mobile_devices WHERE user_id=? AND phone_id=?',[$userId,$phone])->fetch();
         $quota=api_mobile_quota($userId);
         $knownImeiHash=$providedImeiHash??(($found && !empty($found['imei_hash']))?(string)$found['imei_hash']:null);
-        $blocked=mobile_blacklist_match($pdo,$phone,$knownImeiHash,$found['phone_number_hash']??null);
+        $blocked=mobile_blacklist_match($pdo,$phone,$knownImeiHash,$providedPhoneHash??($found['phone_number_hash']??null));
         if ($blocked) api_problem('DEVICE_BLACKLISTED','该手机已被管理员拉黑',403);
         if ($found && $providedImeiHash!==null && !empty($found['imei_hash']) && !hash_equals((string)$found['imei_hash'],$providedImeiHash))
             api_problem('DEVICE_IDENTITY_MISMATCH','手机指纹对应的 IMEI 与已绑定记录不一致',403);
+        if ($found && $providedPhoneHash!==null && !empty($found['phone_number_hash']) && !hash_equals((string)$found['phone_number_hash'],$providedPhoneHash))
+            api_problem('PHONE_IDENTITY_MISMATCH','手机指纹对应的手机号与已绑定记录不一致',403);
         // If an administrator lowers a customer's phone quota, only the oldest
         // still-enabled, non-blacklisted bindings remain eligible. Newest excess
         // bindings are reported as unbound until the quota is raised or older phones are revoked.
@@ -320,8 +357,32 @@ function api_extra(string $action,array $input,array $session,int $userId): void
             $withinQuota=$position>0 && $position<=$quota['mobile_limit'];
         }
         $bound=(bool)$withinQuota;
-        if ($bound && $action==='mobile_heartbeat') client_sql('UPDATE phonehub_mobile_devices SET last_seen=UTC_TIMESTAMP() WHERE id=?',[$found['id']]);
-        api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>(bool)$bound,'imei_bound'=>(bool)($found && !empty($found['imei_hash'])),'display_name'=>$found['display_name']??null]+$quota);
+        if ($bound && $action==='mobile_heartbeat') {
+            // Do not create a binding, change quotas or weaken blacklist checks.
+            // Sensitive values are encrypted and written only when sent on an
+            // explicitly authorized heartbeat for this already-bound phone.
+            if ($providedImeiHash!==null) {
+                $other=client_sql('SELECT id FROM phonehub_mobile_devices WHERE imei_hash=? AND enabled=1 AND NOT(user_id=? AND phone_id=?) LIMIT 1',[$providedImeiHash,$userId,$phone])->fetch();
+                if ($other) api_problem('IMEI_ALREADY_BOUND','该 IMEI 已绑定其他设备记录',403);
+            }
+            client_sql("UPDATE phonehub_mobile_devices SET
+                imei_hash=COALESCE(imei_hash,?),
+                imei_encrypted=COALESCE(imei_encrypted,?),
+                phone_number_hash=COALESCE(phone_number_hash,?),
+                phone_number_encrypted=COALESCE(phone_number_encrypted,?),
+                phone_model=COALESCE(NULLIF(phone_model,''),NULLIF(?,'')),
+                last_seen=UTC_TIMESTAMP() WHERE id=? AND user_id=? AND enabled=1",
+                [$identity['imei_hash'],$identity['imei_encrypted'],
+                 $identity['phone_number_hash'],$identity['phone_number_encrypted'],
+                 $identity['phone_model'],(int)$found['id'],$userId]);
+            $found=client_sql('SELECT id,enabled,display_name,imei_hash,imei_encrypted,phone_number_hash,phone_number_encrypted,phone_model FROM phonehub_mobile_devices WHERE id=? AND user_id=?',[(int)$found['id'],$userId])->fetch();
+        }
+        api_out(['ok'=>true,'phone_id'=>$phone,'bound'=>(bool)$bound,
+            'imei_bound'=>(bool)($found && !empty($found['imei_hash'])),
+            'imei_stored'=>(bool)($found && !empty($found['imei_encrypted'])),
+            'phone_number_bound'=>(bool)($found && !empty($found['phone_number_encrypted'])),
+            'phone_model_received'=>(bool)($found && !empty($found['phone_model'])),
+            'display_name'=>$found['display_name']??null]+$quota);
     }
     if ($action==='mobile_unbind') {
         $phone=api_phone((string)($input['phone_id']??''));

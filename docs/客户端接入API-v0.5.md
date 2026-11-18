@@ -1,6 +1,6 @@
 # PhoneHub 客户端 API 接入说明 v0.5.2
 
-服务端版本：0.5.2。协议字段 `api=1` 保持兼容。适配对象：PhoneHub 桌面 APP（此前为 0.7.1）。本版增加手机 IMEI 辅助绑定、设备黑名单，以及 MCP/Skill 云端默认关闭的授权控制。
+服务端基础协议版本：0.5.2；当前维护版本 v0.5.16，api=1 向后兼容。协议字段 `api=1` 保持兼容。适配对象：PhoneHub 桌面 APP（此前为 0.7.1）。本版增加手机 IMEI 辅助绑定、设备黑名单，以及 MCP/Skill 云端默认关闭的授权控制。
 
 ## 一、地址与认证
 
@@ -113,8 +113,8 @@ package 返回结构仍为：
 ### IMEI 辅助绑定、隐私与设备黑名单
 
 - `imei` 是可选字段，格式为 14–16 位数字；只在客户端依法能够读取、用户已明确知情同意时提交，必须使用 HTTPS。
-- 服务端收到后立即使用 `storage/mobile-identity.key` 计算 HMAC-SHA-256，只保存摘要，不保存或返回明文 IMEI。请与数据库一起备份该密钥；若密钥丢失或指纹不匹配，服务端会拒绝自动生成替代密钥，必须恢复原密钥备份，否则旧 IMEI 摘要与黑名单无法继续校验。
-- `mobile_list` 仅返回 `imei_bound` 布尔值，不返回 IMEI 或摘要。管理员页面只显示摘要前缀。
+- 服务端收到后使用 `storage/mobile-identity.key` 计算 HMAC-SHA-256，同时用 sodium secretbox 加密保存原始 IMEI，供有审计权限的主管理员按需查看；绝不明文写入数据库或在客户端 API 返回原号。请与数据库一起备份该密钥；若密钥丢失或指纹不匹配，服务端会拒绝自动生成替代密钥，必须恢复原密钥备份，否则旧 IMEI 摘要与黑名单无法继续校验。
+- `mobile_list` 返回 imei_bound、imei_stored、phone_number_bound、phone_model_received 布尔状态，不返回 IMEI、手机号原号或摘要。管理员页面仅展示遮盖值或上报状态，完整解密查看受权限和审计保护。
 - 管理员将设备拉黑时，会同时拉黑该设备的 `phone_id` 和已绑定的 IMEI 摘要，并停用匹配的所有绑定。解除黑名单只解除对应标识，不会自动恢复绑定；需要重新绑定。
 - API 对命中黑名单的绑定、检查、心跳和操作包资格进行拒绝。常见错误码：`DEVICE_BLACKLISTED`、`DEVICE_IDENTITY_MISMATCH`、`INVALID_IMEI`。
 - **Android 系统限制：** Android 10/API 29 起，普通第三方应用通常不能读取 IMEI；只有预装特权应用、设备/配置文件所有者、具备运营商权限、默认短信角色或相应特权权限的应用才可能访问。不得尝试绕过系统限制；读不到 IMEI 时继续使用 `phone_id`，`imei` 留空即可。官方说明：https://developer.android.com/about/versions/10/privacy/changes 和 https://developer.android.com/reference/android/telephony/TelephonyManager#getImei(int)
@@ -416,3 +416,20 @@ Web 服务器必须禁止 HTTP 访问 /license/storage/，否则更新私钥、�
 这组哈希用于识别已审查的文件，**不代表对未来版本固定哈希**。客户端交付包自述单次手动检查约 2.120 秒、其中一次心跳约 1.972 秒，并自述客户端测试通过；这些是**交付方的报告值，尚未由服务端实测独立复核**。若要确认 2 秒耗时来源，应启用可选 PHP 分段采样并结合 Nginx 请求耗时和客户端 DNS/TCP/TLS/TFFB 数据，不应凭这一次读数认定数据库慢。
 
 **资源保密边界：** 原 `package` 返回的加密 `envelope` 与 `content_key` 可被合法客户端同时获取，因此有效客户端仍可能提取解密后的操作包；已签名 ZIP 验证的是完整性和发布者身份，**不是 ZIP 内容加密**。批量心跳不会改变这个事实。请先按照 [运维备份与升级](运维备份与升级.md) 的 Nginx 防护要求阻止对 `/license/storage/` 的匿名直接访问，并验证所有 CDN/源站入口。
+
+## v0.5.16 既有安卓绑定的身份补报
+
+旧手机第一次 mobile_bind 如果没有传 imei、phone_number，服务器不能凭空恢复原号。v0.5.16 修复 mobile_heartbeat 只核验 IMEI 而不保存补报字段的问题。
+客户端通过 HTTPS、认证 Bearer、正确的登录电脑 device_id 调用 POST /license/api/phonehub.php?action=mobile_heartbeat。请求可选字段为 imei（14～16 位数字）、phone_number（国际号码或国内 11 位手机号）、phone_model（最多 120 字节）；必须包含已有的 phone_id（64 位小写 SHA-256）。
+
+例如：
+
+~~~json
+{"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","phone_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","imei":"490154203237518","phone_number":"13912345678","phone_model":"Test Galaxy"}
+~~~
+
+只在设备已经绑定且仍有效、未黑名单和额度允许的情况下补充加密字段，不自动新增设备或静默覆盖冲突身份。重复调用原 mobile_bind 也可以补齐已有记录。
+
+成功响应在原字段外追加 imei_stored、phone_number_bound、phone_model_received，mobile_list/mobile_check 也能读取相同的布尔状态；imei_bound 仍仅代表 HMAC 摘要存在。所有返回均不含敏感原文。
+
+client_heartbeat.batch.phones[].imei 依旧只是身份核验，不执行原号持久化。老版 Windows/Android 客户端必须更新其请求构造逻辑才能真正补报。Android 10+ 普通第三方 APP 不一定有权限读取 IMEI，SIM 号码也可能为空；无法合法获得时不要传伪造值，继续用 phone_id。

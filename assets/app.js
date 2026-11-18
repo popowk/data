@@ -217,42 +217,6 @@
     container.scrollIntoView({behavior:'smooth',block:'start'});
     form.elements.username.focus({preventScroll:true});
   }
-  function renderDiagnosticChecks(root, data) {
-    root.replaceChildren();
-    const checks=Array.isArray(data.checks)?data.checks:[];
-    const summary=data.summary||{};
-    const p=document.createElement('p');
-    p.className='diagnostic-overview';
-    p.textContent='检查结果：'+(Number(summary.errors)||0)+' 项错误、'+(Number(summary.warnings)||0)+' 项需要确认、'+
-      checks.filter(x=>x.status==='ok').length+' 项正常。以下仅是服务器本地可验证的项目。';
-    root.append(p);
-    const suggestions={
-      'Nginx 存储目录访问限制':'请在宝塔的网站 Nginx 配置里核实 storage URL 返回 403；此项不能用本地文件状态替代。',
-      '加密备份接收公钥':'先在「备份密钥」页面配置独立接收公钥并安全离线保存私钥；不代表备份已完成。',
-      '服务端更新签名':'在「系统更新」检查 Ed25519 固定公钥和签名状态；不要关闭已有强制验签。',
-      'MySQL 数据库':'检查数据库连接及迁移版本；如有错误，查看 PHP-FPM 错误日志（脱敏后分享）。',
-      '备份加密工具':'检查部署包中的 CLI 工具文件，勿用 Web 请求执行备份。'
-    };
-    [['error','错误'],['warning','需要确认'],['ok','正常']].forEach(([status,title])=>{
-      const items=checks.filter(x=>x.status===status);
-      if(!items.length)return;
-      const section=document.createElement('section');section.className='diagnostic-check-group '+status;
-      const heading=document.createElement('h3');heading.textContent=title+' · '+items.length+' 项';section.append(heading);
-      const list=document.createElement('ul');
-      items.forEach(item=>{
-        const li=document.createElement('li');
-        const name=document.createElement('strong');name.textContent=String(item.name||'检查项目');
-        const detail=document.createElement('span');detail.textContent=String(item.detail||'');
-        li.append(name,detail);
-        if(status!=='ok' && suggestions[item.name]){
-          const hint=document.createElement('small');hint.textContent=suggestions[item.name];li.append(hint);
-        }
-        list.append(li);
-      });
-      section.append(list);root.append(section);
-    });
-    root.hidden=false;
-  }
   async function checkUpdate() {
     const el=$('#update-status'),button=$('#apply-update');if(!el)return;
     el.textContent='正在从国内镜像获取版本信息…';
@@ -285,48 +249,6 @@
     if (action==='close-plan-editor'){const panel=$('#plan-editor');if(panel)panel.hidden=true;return;}
     if (action==='close-editor'){$('#account-editor').hidden=true;return;}
     if (action==='check-update'){await checkUpdate();return;}
-    if (action==='generate-diagnostic') {
-      const area=$('#diagnostic-report-text');
-      const copy=$('#copy-diagnostic');
-      const status=$('#diagnostic-status');
-      if(!area || !copy) return;
-      trigger.disabled=true;copy.disabled=true;
-      area.value='';
-      const checksRoot=$('#diagnostic-checks');
-      if(checksRoot){checksRoot.hidden=true;checksRoot.replaceChildren();}
-      if(status)status.textContent='正在检查服务端状态…';
-      try {
-        const data=await request('diagnostic_report');
-        if(typeof data.report!=='string' || !data.report.startsWith('PhoneHub 故障诊断报告'))
-          throw new Error('服务器未返回有效诊断报告');
-        area.value=data.report;
-        if(checksRoot)renderDiagnosticChecks(checksRoot,data);
-        copy.disabled=false;
-        if(status)status.textContent='报告已生成，可点击复制';
-      } catch(err) {
-        if(status)status.textContent='诊断生成失败；请检查 PHP 错误日志';
-        toast(err.message,true);
-      } finally {trigger.disabled=false;}
-      return;
-    }
-    if (action==='copy-diagnostic') {
-      const area=$('#diagnostic-report-text');
-      if(!area?.value)return;
-      try {
-        if(navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(area.value);
-        } else {
-          area.focus();area.select();
-          if(!document.execCommand('copy')) throw new Error('无法自动复制');
-          area.setSelectionRange(0,0);
-        }
-        toast('已复制脱敏诊断报告，可以直接粘贴到聊天中');
-      } catch(err) {
-        area.focus();area.select();
-        toast('自动复制不可用，诊断内容已选中，可使用 ⌘C / Ctrl+C',true);
-      }
-      return;
-    }
     if (action==='diagnose-update'){
       const target=$('#update-diagnostics');
       trigger.disabled=true;

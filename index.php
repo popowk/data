@@ -179,13 +179,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             require_once __DIR__.'/app/features.php';
             backup_admin_download_once();
         }
-        if ($action==='diagnostic_report') {
-            require_owner();
-            if (!is_file(__DIR__.'/app/updater.php'))
-                throw new RuntimeException('更新模块缺失；请先修复 app/updater.php');
-            require_once __DIR__.'/app/updater.php';
-            json_response(['ok'=>true]+update_diagnostic_report());
-        }
         if (in_array($action,['update_check','update_apply','update_diagnostics'],true)) {
             require_owner();
             require __DIR__.'/app/updater.php';
@@ -234,7 +227,7 @@ if (!admin_id()) {
 <?php exit; }
 $view=(string)($_GET['view'] ?? 'dashboard');
 if (in_array($view,['mobiles','sessions'],true)) {header('Location: index.php?view=devices',true,302);exit;}
-if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','diagnostics','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
+if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','gateway','admins','audit','cloud_features'],true)) $view='dashboard';
 $adminRole=admin_role();
 if (!phonehub_role_can_view($adminRole,$view)) { http_response_code(403); exit('当前管理员无权访问此页面'); }
 $groups=in_array($view,['dashboard','accounts','groups','group_bulk'],true) ? sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll() : [];
@@ -282,7 +275,6 @@ $nav=[
 'ai'=>['AI 接口管理','✧'],
 'cloud_features'=>['客户端能力控制','⚙'],
 'update'=>['系统更新','⟳'],
-'diagnostics'=>['故障诊断','⌕'],
 'backup_keys'=>['备份密钥','◈'],
 'gateway'=>['客户端接口接管','↪'],
 'admins'=>['管理员管理','♧'],
@@ -372,25 +364,10 @@ $accountPageLink=static function(int $page) use($accountFilters): string {
 <div class="page-title"><div><h1>平台操作包</h1><p>兼容现有 PhoneHub 加密包协议；本版本仅展示，不处理签名私钥</p></div></div>
 <div class="card"><div class="table-scroll"><table><thead><tr><th>平台包</th><th>最高版本</th><th>历史版本数量</th></tr></thead><tbody><?php foreach($packages as $p): ?><tr><td><?=h($p['package_id'])?></td><td><?=h($p['version'])?></td><td><?=h($p['versions'])?></td></tr><?php endforeach ?></tbody></table></div></div>
 <?php elseif($view==='backup_keys'): require_once __DIR__.'/app/features.php'; backup_admin_view(); ?>
-<?php elseif($view==='diagnostics'): ?>
-<div class="page-title"><div><h1>故障诊断</h1><p>一键生成可直接复制给技术支持的脱敏报告，不包含客户信息或敏感密钥</p></div><a class="btn" href="?view=update">返回系统更新</a></div>
-<div class="card">
-  <div class="card-head"><h2>服务器运行状况</h2><span class="pill ok">仅主管理员</span></div>
-  <p class="muted">采集 PHP、MySQL 版本、数据库迁移、必要程序文件、目录写入、现有 Ed25519 信任状态及最近更新动作类型。不会读取数据库密码、Token、签名私钥、设备 IMEI、手机号、客户端日志或原始 PHP 错误日志。</p>
-  <div class="diagnostic-actions">
-    <button class="btn primary" type="button" data-action="generate-diagnostic">生成诊断报告</button>
-    <button class="btn" type="button" id="copy-diagnostic" data-action="copy-diagnostic" disabled>复制完整报告</button>
-    <span id="diagnostic-status" class="muted" role="status">尚未生成</span>
-  </div>
-  <div id="diagnostic-checks" class="diagnostic-checks" aria-live="polite" hidden></div>
-  <label class="diagnostic-label" for="diagnostic-report-text">诊断内容（纯文本，可手动复制）</label>
-  <textarea id="diagnostic-report-text" class="diagnostic-report" readonly rows="16" spellcheck="false" placeholder="点击「生成诊断报告」后显示结果"></textarea>
-  <p class="footnote">如果后台直接 HTTP 500 无法打开，此页面也可能不可用。请在宝塔 PHP 错误日志中查找 Fatal error，并先遮盖绝对路径、账号、密钥及个人信息后再发送。</p>
-</div>
 <?php elseif($view==='update'): ?>
 <div class="page-title"><div><h1>系统更新</h1><p>从国内镜像获取 GitHub 仓库最新代码，完成备份后在线安装</p></div></div>
 <div class="card update-card"><div class="update-icon">⟳</div><h2>当前版本 v<?=h(app_version())?></h2><p class="muted">更新源：<code>https://git.wksite.cn/popowk/data</code></p><p class="muted">仅更新管理程序文件，自动跳过 storage 内的数据库配置和运行数据。</p>
-<div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><a class="btn" href="?view=diagnostics">复制故障报告</a><a class="btn" href="?view=backup_keys">备份密钥</a><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
+<div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><a class="btn" href="?view=backup_keys">备份密钥</a><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
 <?php
 $signingModuleReady=is_file(__DIR__.'/app/signing_admin.php');
 if ($signingModuleReady) {

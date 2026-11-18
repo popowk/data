@@ -397,7 +397,7 @@ function phonehub_role_can_view(string $role,string $view): bool {
     $admin=array_merge($viewer,['group_bulk','devices','client_logs','audit']);
     $owner=array_merge($admin,[
         'plans','backup_keys','releases','ai','cloud_features','update',
-        'diagnostics','gateway','admins'
+        'gateway','admins'
     ]);
     return match($role) {
         'owner'=>in_array($view,$owner,true),
@@ -417,7 +417,7 @@ function phonehub_role_can_action(string $role,string $action): bool {
         'signing_generate','signing_activate','plan_save','plan_toggle',
         'automation_token_create','automation_token_revoke','automation_token_rotate',
         'automation_release_approve','automation_release_reject',
-        'backup_key_generate','diagnostic_report','update_check','update_apply',
+        'backup_key_generate','update_check','update_apply',
         'update_diagnostics','release_publish','release_toggle','logs_purge',
         'ai_settings_save','admin_create','admin_toggle','admin_reset',
         'admin_delete','owner_password','device_reveal','device_blacklist_add',

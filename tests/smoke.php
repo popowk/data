@@ -56,7 +56,7 @@ if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
 // Owner/admin/viewer are explicit, deny-by-default console roles.
 $allowedViews=[
     'owner'=>['dashboard','accounts','groups','group_bulk','devices','packages',
-      'plans','backup_keys','client_logs','releases','ai','update','diagnostics',
+      'plans','backup_keys','client_logs','releases','ai','update',
       'gateway','admins','audit','cloud_features'],
     'admin'=>['dashboard','accounts','groups','group_bulk','devices','packages','client_logs','audit'],
     'viewer'=>['dashboard','accounts','groups','packages']
@@ -258,22 +258,13 @@ if (strpos($cloudHtml,'name="mcp_codex_enabled"')===false ||
     strpos($cloudHtml,'name="mcp_harness_enabled"')===false)
     throw new RuntimeException('MCP subplatform switches missing');
 
-$safeReport=update_diagnostic_report();
-$reportText=(string)($safeReport['report']??'');
-if (!str_starts_with($reportText,'PhoneHub 故障诊断报告') ||
-    !str_contains($reportText,'MySQL 版本') ||
-    !str_contains($reportText,'自更新签名'))
-    throw new RuntimeException('copyable sanitized diagnostics incomplete');
-$testConfig=require APP_STORE.'/config.php';
-foreach ([(string)$testConfig['db_pass'],(string)($_SESSION['admin_user']??'')] as $forbiddenValue)
-    if ($forbiddenValue!=='' && str_contains($reportText,$forbiddenValue))
-        throw new RuntimeException('diagnostic report contains protected configuration fields');
-if (strlen($reportText)>8000) throw new RuntimeException('diagnostic report not bounded');
 $diagnostics=update_diagnostics();
 if (($diagnostics['summary']['errors']??-1)!==0)
     throw new RuntimeException('runtime diagnostics returned errors in CI environment: '.json_encode($diagnostics,JSON_UNESCAPED_UNICODE));
 if (!array_filter($diagnostics['checks'],static fn($check)=>($check['name']??'')==='MySQL 数据库' && ($check['status']??'')==='ok'))
     throw new RuntimeException('runtime diagnostics did not validate database connection');
+if (phonehub_role_can_view('owner','diagnostics') || phonehub_role_can_action('owner','diagnostic_report'))
+    throw new RuntimeException('removed diagnostic page/action is still accessible');
 
 ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false ||

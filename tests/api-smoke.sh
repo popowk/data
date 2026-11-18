@@ -333,6 +333,37 @@ if(!$row || $row["phone_model"]!=="Test Galaxy" || $row["imei_encrypted"]==="490
     $row["phone_number_hash"]!==device_phone_hash("+8613912345678")) exit(3);
 '
 
+
+# A real defect: old phone records may have no identity fields, and older
+# mobile_heartbeat ignored explicitly supplied identity metadata. Ensure it
+# remains empty when no fields are sent, then can be enriched safely.
+php -r '
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$p->prepare("UPDATE phonehub_mobile_devices SET imei_hash=NULL,imei_encrypted=NULL,phone_number_hash=NULL,phone_number_encrypted=NULL,phone_model=? WHERE phone_id=?")
+  ->execute(["",str_repeat("b",64)]);
+'
+legacyHeartbeatWithoutIdentity=$(api mobile_heartbeat "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\"}")
+TEST_RESPONSE="$legacyHeartbeatWithoutIdentity" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and not j["imei_stored"] and not j["phone_number_bound"],j'
+identityHeartbeat=$(api mobile_heartbeat "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"imei\":\"490154203237518\",\"phone_number\":\"13912345678\",\"phone_model\":\"Test Galaxy\"}")
+TEST_RESPONSE="$identityHeartbeat" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and j["imei_bound"] and j["imei_stored"] and j["phone_number_bound"] and j["phone_model_received"],j'
+identityList=$(api mobile_list "{\"device_id\":\"$DEVICE\"}")
+TEST_RESPONSE="$identityList" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["devices"][0]["imei_stored"] and j["devices"][0]["phone_number_bound"],j'
+identityMismatch=$(api mobile_heartbeat "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"phone_number\":\"13912345679\"}")
+TEST_RESPONSE="$identityMismatch" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="PHONE_IDENTITY_MISMATCH",j'
+identityMalformed=$(api mobile_heartbeat "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"phone_number\":123456}")
+TEST_RESPONSE="$identityMalformed" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert not j["ok"] and j["error_code"]=="INVALID_MOBILE_IDENTITY",j'
+php -r '
+require "app/core.php";require "app/devices.php";
+$cfg=require "storage/config.php";
+$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
+$row=$p->query("SELECT imei_encrypted,phone_number_encrypted,phone_number_hash,phone_model FROM phonehub_mobile_devices WHERE phone_id=REPEAT(CHAR(98),64) LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+if (!$row || device_decrypt($row["imei_encrypted"])!=="490154203237518"
+ || device_decrypt($row["phone_number_encrypted"])!=="+8613912345678"
+ || $row["phone_number_hash"]!==device_phone_hash("+8613912345678")
+ || $row["phone_model"]!=="Test Galaxy") exit(3);
+'
+
 after=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$after" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and "envelope" in j,j'
 
