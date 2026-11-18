@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.5.25",
+  "version": "0.5.26",
   "channel": "stable",
   "released_at": "2026-11-19",
-  "notes": "在现有 scrcpy 下载地址旁新增官网主程序下载地址配置，独立保存与公开 GET ?action=main_program_download 查询。默认暂用 https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip 占位；支持 ZIP/EXE/MSI、ETag/304 与 300 秒客户端缓存，只有全局管理员可修改。MySQL 5.7 迁移 13 安全插入 main_program 行，保留已有 scrcpy 地址；扩展权限和 HTTP 回归测试。"
+  "notes": "客户端登录名额满时自动撤销最早建立的有效旧电脑会话后登录新电脑，旧电脑的全部 Token 立即失效。兼容显式 replace_device_id 优先替换；同电脑重新登录不额外占名额。按客户行锁事务确保并发登录额度正确，处理管理员降低配额后多台超额情形；新增 replaced_devices 数量与 HTTP 端到端回归测试。原账号权限/黑名单/授权到期验证保持不变。"
 }
