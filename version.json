@@ -1,7 +1,7 @@
 {
   "name": "PhoneHub 授权管理",
-  "version": "0.5.19",
+  "version": "0.5.20",
   "channel": "stable",
   "released_at": "2026-11-18",
-  "notes": "停用历史 29 文件 V1 自更新签名；保留 V2 作为 v0.5.18 最后升级桥接，新增 V3 已签名动态文件清单与仅限 app/gateway.php 的受控删除/回滚迁移能力。当前 V3 remove=[]，暂不删除占位文件。统一公钥初始化与后台签名启用到 V3，不轮换 Ed25519 密钥。"
+  "notes": "完成 V3-only 服务器自更新迁移：移除 V2 签名清单、固定清单辅助函数和网关 app/gateway.php 空占位；继续使用既有 Ed25519 公钥，V3 签名 remove=[app/gateway.php] 让 v0.5.19 自动备份并安全删除旧文件。更早版本不再支持直接在线升级，其他业务 API 不变。"
 }

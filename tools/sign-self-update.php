@@ -27,13 +27,9 @@ update_validate_files($files);
 $version=json_decode($files['version.json'],true,512,JSON_THROW_ON_ERROR)['version']??null;
 if (!is_string($version) || !preg_match('/^\d+\.\d+\.\d+$/D',$version))
     throw new RuntimeException('发布版本号无效');
-// V1 signing is retired. V2 is emitted for the installed v0.5.18
-// updater's last supported transition; V3 is mandatory for new updaters.
-// Both are signed with the EXISTING pinned Ed25519 key, never re-keyed.
+// A single V3 manifest is signed with the existing, pinned Ed25519 key.
+// The signed remove list is intentionally constrained by updater policy.
 $pub=sodium_crypto_sign_publickey_from_secretkey($key);
-$v2Manifest=update_signed_manifest($files,$version);
-$v2Sig=base64_encode(sodium_crypto_sign_detached($v2Manifest,$key));
-update_verify_signed_archive($files,$version,$v2Manifest,$v2Sig,$pub);
 $remove=[];
 foreach(UPDATE_V3_REMOVABLE_FILES as $retired) {
     if (!in_array($retired,UPDATE_FILES,true)) $remove[]=$retired;
@@ -46,8 +42,6 @@ $dir=APP_ROOT.'/deploy';
 if (!is_dir($dir) && !mkdir($dir,0755,true))
     throw new RuntimeException('无法创建 deploy 目录');
 foreach ([
-    'self-update-manifest-v2.json'=>$v2Manifest,
-    'self-update-manifest-v2.sig'=>$v2Sig."\n",
     'self-update-manifest-v3.json'=>$v3Manifest,
     'self-update-manifest-v3.sig'=>$v3Sig."\n"
 ] as $name=>$bytes) {
@@ -55,7 +49,7 @@ foreach ([
     if (file_put_contents($destination,$bytes,LOCK_EX)!==strlen($bytes))
         throw new RuntimeException('签名清单写入失败：'.$name);
 }
-echo "Server update manifests V2 transition + V3 signed for v".$version."\n";
+echo "Server V3 self-update manifest signed for v".$version."\n";
 echo "Public key fingerprint (SHA-256): ".hash('sha256',$pub)."\n";
-echo "V1 removed; publish only signed V2/V3 in transitional release.\n";
+echo "Only the signed V3 manifest is published; existing Ed25519 keys are unchanged.\n";
 echo "Do not commit the private key or put it on the website.\n";

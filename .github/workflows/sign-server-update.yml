@@ -71,16 +71,13 @@ jobs:
               $files[$path]=$data;
             }
             $ver=json_decode($files["version.json"],true,512,JSON_THROW_ON_ERROR)["version"];
-            update_verify_signed_archive($files,$ver,
-              file_get_contents("deploy/self-update-manifest-v2.json"),
-              file_get_contents("deploy/self-update-manifest-v2.sig"),$pub);
             $v3=update_v3_verify_catalog($ver,
               file_get_contents("deploy/self-update-manifest-v3.json"),
               file_get_contents("deploy/self-update-manifest-v3.sig"),$pub);
             update_v3_verify_files($files,$v3);
-            if ($v3["remove"]!==[])
-              throw new RuntimeException("V3 preparation release must not remove production files");
-            echo "Independent Ed25519 verification passed for V2 transition + V3 preparation ".$ver."\n";
+            if ($v3["remove"]!==["app/gateway.php"])
+              throw new RuntimeException("V3-only release must authorize the signed gateway retirement");
+            echo "Independent Ed25519 V3-only signature and approved removal verified for ".$ver."\n";
           ' "$secret_file"
       - name: Commit signed manifest only
         if: steps.signing.outputs.enabled == 'true'
@@ -88,7 +85,7 @@ jobs:
           set -euo pipefail
           git config user.name "phonehub-update-signer[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- deploy/self-update-manifest-v2.json deploy/self-update-manifest-v2.sig deploy/self-update-manifest-v3.json deploy/self-update-manifest-v3.sig
+          git add -- deploy/self-update-manifest-v3.json deploy/self-update-manifest-v3.sig
           if git diff --cached --quiet; then
             echo "Signed manifest is unchanged"
           else

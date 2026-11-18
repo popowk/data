@@ -5,20 +5,16 @@ const UPDATE_ARCHIVE = 'https://git.wksite.cn/popowk/data/archive/refs/heads/mai
 const UPDATE_MAX_BYTES = 16777216;
 const UPDATE_FILES = [
     'index.php','install.php','version.json','.htaccess',
-    'app/core.php','app/accounts.php','app/updater.php','app/features.php','app/gateway.php',
+    'app/core.php','app/accounts.php','app/updater.php','app/features.php',
     'app/devices.php','app/device_admin.php','app/signing_admin.php',
     'app/releases.php','app/release_admin.php','app/automation.php','app/ai.php','app/mobile.php',
     'api/phonehub.php','api/extensions.php','automation/v1/index.php','docs/自动化核心更新API-v0.5.12.md','deploy/nginx-automation.conf','docs/客户端接入API-v0.5.md','docs/运维备份与升级.md','docs/设备管理与签名-v0.5.2.md','tools/backup-crypto.php','tools/backup-server.php','tools/sign-self-update.php','tools/bootstrap-self-update.php','assets/app.css','assets/app.js'
 ];
 
 /**
- * Signed catalog migration (v0.5.19): the V2 release still lists the inert
- * gateway file so an installed v0.5.18 updater can install this release.
- * V3 authorizes a later REMOVAL of that one retired file, only when signed by
- * the currently pinned Ed25519 public key. No arbitrary deletion allowed.
- *
- * Gate: first upgrade every supported server to the V3-capable updater,
- * THEN ship a higher-version V3-only release removing app/gateway.php.
+ * V3-only signed inventory since v0.5.20. Its signed tombstone permits
+ * deleting only the retired gateway stub; never arbitrary paths, storage
+ * configuration, private keys or other business files.
  */
 const UPDATE_V3_REMOVABLE_FILES = ['app/gateway.php'];
 
@@ -65,39 +61,6 @@ function update_trust_public_key(string $store): ?string {
     if (!is_string($key) || strlen($key)!==SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES)
         throw new RuntimeException('更新签名信任公钥格式错误，已拒绝安装');
     return $key;
-}
-function update_signed_manifest_for_list(array $files,string $version,array $fileList): string {
-    $hashes=[];
-    foreach($fileList as $path) {
-        if (!isset($files[$path]) || !is_string($files[$path]))
-            throw new RuntimeException('签名清单缺少程序文件：'.$path);
-        $hashes[$path]=hash('sha256',$files[$path]);
-    }
-    ksort($hashes,SORT_STRING);
-    return json_encode(['format'=>1,'version'=>$version,'files'=>$hashes],
-        JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
-}
-function update_signed_manifest(array $files,string $version): string {
-    return update_signed_manifest_for_list($files,$version,UPDATE_FILES);
-}
-function update_verify_signed_archive_for_list(array $files,string $version,?string $manifest,?string $signature,string $publicKey,array $fileList): void {
-    if (!extension_loaded('sodium')) throw new RuntimeException('独立签名更新需要 PHP sodium 扩展');
-    if (!is_string($manifest) || !is_string($signature) || $manifest==='' || $signature==='')
-        throw new RuntimeException('更新源缺少独立签名清单，已拒绝安装');
-    $sig=base64_decode(trim($signature),true);
-    if (!is_string($sig) || strlen($sig)!==SODIUM_CRYPTO_SIGN_BYTES ||
-        !sodium_crypto_sign_verify_detached($sig,$manifest,$publicKey))
-        throw new RuntimeException('更新包独立 Ed25519 签名不可信，已拒绝安装');
-    $decoded=json_decode($manifest,true);
-    if (!is_array($decoded) || ($decoded['format']??null)!==1 ||
-        ($decoded['version']??null)!==$version || !is_array($decoded['files']??null))
-        throw new RuntimeException('已签名更新清单版本或格式错误');
-    $expected=json_decode(update_signed_manifest_for_list($files,$version,$fileList),true,512,JSON_THROW_ON_ERROR);
-    if ($decoded['files']!==$expected['files'])
-        throw new RuntimeException('更新内容与已签名文件摘要不一致，已拒绝安装');
-}
-function update_verify_signed_archive(array $files,string $version,?string $manifest,?string $signature,string $publicKey): void {
-    update_verify_signed_archive_for_list($files,$version,$manifest,$signature,$publicKey,UPDATE_FILES);
 }
 /**
  * V3 signed manifest format 2:
@@ -314,7 +277,7 @@ function update_diagnostics(): array {
             'detail'=>$signatureReady?'已配置固定 Ed25519 公钥，更新必须验签':'尚未配置独立信任公钥，仍为兼容模式的 HTTPS 镜像更新'];
     }
     $checks[]=['name'=>'更新清单迁移准备','status'=>'ok',
-        'detail'=>'支持 V3 固定公钥签名文件集及受控删除；当前仅允许未来删除旧网关占位 app/gateway.php'];
+        'detail'=>'仅支持 V3 固定公钥签名更新；允许签名清理历史 app/gateway.php 占位文件'];
     $checks[]=['name'=>'Nginx 存储目录访问限制','status'=>'warning',
         'detail'=>'需在宝塔确认 /license/storage/ 被拒绝访问；本地文件检查无法证明公网访问控制'];
     $recipient=APP_STORE.'/backup-recipient.pub';

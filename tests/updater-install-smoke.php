@@ -120,10 +120,12 @@ try {
         'storage/config.php was overwritten');
     verify(is_file($store.'/backups/'.$result['backup'].'/app/accounts.php'),
         'rollback backup missing app/accounts.php');
-    // Simulate NEXT release (post-migration): the signed V3 manifest
-    // excludes the obsolete gateway and authorizes deleting ONLY that path.
+    // An upgraded v0.5.19 server still contains the old gateway stub.
+    // This V3-only release must delete it using the signed remove tombstone.
+    $gateway=$root.'/app/gateway.php';
+    verify(file_put_contents($gateway,"<?php\n// retired v0.5.19 gateway stub\n")!==false,
+        'cannot seed retired v0.5.19 gateway');
     $future=$changed;
-    unset($future['app/gateway.php']);
     $removals=['app/gateway.php'];
     update_validate_files($future,update_v3_catalog_paths($removals));
     try {
