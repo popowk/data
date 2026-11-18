@@ -53,7 +53,7 @@ function operation_package_decode(string $json,?string $expectedId=null,?int $ex
     return ['envelope'=>$encoded,'content_key'=>$data['content_key']];
 }
 function operation_package_publish_record(string $packageId,int $version,string $payload): array {
-    require_owner();
+    require_global_admin();
     if (!preg_match('/^[a-z0-9-]{1,32}$/D',$packageId))
         throw new RuntimeException('操作包 ID 应为 1–32 位小写字母、数字或连字符');
     if ($version<1 || $version>2147483647)
@@ -75,7 +75,7 @@ function operation_package_publish_record(string $packageId,int $version,string 
         'message'=>'已发布加密操作包 '.$packageId.' v'.$version];
 }
 function operation_package_publish_upload(array $file,array $post): array {
-    require_owner();
+    require_global_admin();
     if (!isset($file['error']) || (int)$file['error']!==UPLOAD_ERR_OK ||
         !is_uploaded_file((string)($file['tmp_name']??'')))
         throw new RuntimeException('上传失败；请检查 JSON 文件及 PHP 上传大小限制');
@@ -98,7 +98,7 @@ function operation_package_publish_upload(array $file,array $post): array {
     return operation_package_publish_record($id,(int)$versionString,$bytes);
 }
 function operation_package_toggle(int $id): array {
-    require_owner();
+    require_global_admin();
     if ($id<1) throw new RuntimeException('操作包版本 ID 不正确');
     $row=sql('SELECT id,package_id,version,enabled FROM phonehub_packages WHERE id=?',[$id])->fetch();
     if (!$row) throw new RuntimeException('此操作包历史版本不存在');
@@ -110,7 +110,7 @@ function operation_package_toggle(int $id): array {
 }
 
 function release_admin_action(string $action): never {
-    require_owner();
+    require_global_admin();
     if ($action==='release_publish') {
         $r=release_publish($_FILES['file']??[],$_POST);
         json_response(['ok'=>true,'message'=>'已发布签名更新包 '.$r['platform'].' v'.$r['version']]+$r);
@@ -197,7 +197,7 @@ function release_package_overview(): void {
     <?php
 }
 function release_admin_view(): void {
-    require_owner();
+    require_global_admin();
     $list=sql('SELECT id,platform,channel,version,min_client,size_bytes,sha256,signature,enabled,created_at FROM phonehub_releases ORDER BY id DESC LIMIT 200')->fetchAll();
     ?>
     <div class="page-title"><div><h1>版本发布与操作包</h1><p>分别管理客户端签名 ZIP 更新和加密操作包，支持加密操作包发布、上下架及下载统计</p></div></div>

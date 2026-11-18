@@ -393,48 +393,57 @@ function admin_role(): string {
  */
 final class PhoneHubPermissionException extends RuntimeException {}
 function phonehub_role_can_view(string $role,string $view): bool {
+    // Keep the protected original owner, add two selectable roles. Legacy
+    // viewers are never promoted silently during an upgrade.
     $viewer=['dashboard','accounts','groups','packages'];
-    $admin=array_merge($viewer,['group_bulk','devices','client_logs','audit']);
-    $owner=array_merge($admin,[
-        'plans','backup_keys','releases','ai','cloud_features','update',
-        'admins'
-    ]);
+    $staff=['accounts','devices','plans','client_logs'];
+    $global=['dashboard','accounts','groups','group_bulk','devices','packages',
+        'plans','backup_keys','client_logs','releases','ai','cloud_features',
+        'update','admins','audit'];
     return match($role) {
-        'owner'=>in_array($view,$owner,true),
-        'admin'=>in_array($view,$admin,true),
+        'owner','global'=>in_array($view,$global,true),
+        'admin'=>in_array($view,$staff,true),
         'viewer'=>in_array($view,$viewer,true),
         default=>false
     };
 }
 function phonehub_role_can_action(string $role,string $action): bool {
     $viewer=['logout'];
-    $admin=array_merge($viewer,[
-        'group_create','group_delete','account_save','reset_sessions',
-        'revoke_session','account_password','group_bulk','group_bulk_preview',
-        'mobile_add','mobile_revoke'
+    $staff=array_merge($viewer,[
+        'account_save','reset_sessions','revoke_session','account_password',
+        'mobile_add','mobile_revoke','device_blacklist_add',
+        'mobile_blacklist','mobile_unblacklist','plan_save','plan_toggle'
     ]);
-    $owner=array_merge($admin,[
-        'signing_generate','signing_activate','plan_save','plan_toggle',
+    $global=array_merge($staff,[
+        'group_create','group_delete','group_bulk','group_bulk_preview',
+        'release_publish','release_toggle','package_publish','package_toggle',
+        'ai_settings_save','cloud_features_save','logs_purge',
+        'update_check','update_diagnostics'
+    ]);
+    // Only the protected original owner may change trust, runtime installation,
+    // backup secret provisioning, machine credentials or admin authority.
+    $owner=array_merge($global,[
+        'signing_generate','signing_activate','backup_key_generate','update_apply',
         'automation_token_create','automation_token_revoke','automation_token_rotate',
         'automation_release_approve','automation_release_reject',
-        'backup_key_generate','update_check','update_apply',
-        'update_diagnostics','release_publish','release_toggle','package_publish','package_toggle','logs_purge',
-        'ai_settings_save','admin_create','admin_toggle','admin_reset',
-        'admin_delete','owner_password','device_blacklist_add',
-        'mobile_blacklist','mobile_unblacklist','cloud_features_save',
-        // No legacy client API takeover action in the test release.
+        'admin_create','admin_role_change','admin_toggle','admin_reset',
+        'admin_delete','owner_password'
     ]);
     return match($role) {
         'owner'=>in_array($action,$owner,true),
-        'admin'=>in_array($action,$admin,true),
+        'global'=>in_array($action,$global,true),
+        'admin'=>in_array($action,$staff,true),
         'viewer'=>in_array($action,$viewer,true),
         default=>false
     };
 }
 function phonehub_role_label(string $role): string {
     return match($role) {
-        'owner'=>'主管理员', 'admin'=>'普通管理员',
-        'viewer'=>'只读管理员', default=>'无效角色'
+        'owner'=>'全局管理员（主账号）',
+        'global'=>'全局管理员',
+        'admin'=>'普通管理员',
+        'viewer'=>'历史只读管理员',
+        default=>'无效角色'
     };
 }
 function phonehub_require_view(string $view): void {
@@ -446,6 +455,11 @@ function phonehub_require_action(string $action): void {
     require_admin();
     if (!phonehub_role_can_action(admin_role(),$action))
         throw new PhoneHubPermissionException('当前管理员无权执行此操作');
+}
+function require_global_admin(): void {
+    require_admin();
+    if (!in_array(admin_role(),['owner','global'],true))
+        throw new PhoneHubPermissionException('仅全局管理员可以执行此操作');
 }
 function require_owner(): void {
     require_admin();

@@ -140,75 +140,67 @@ $s=$p->query("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code FROM phon
 $row=$s->fetch(PDO::FETCH_ASSOC);
 if (!$row || (int)$row["device_limit"]!==1 || (int)$row["mobile_limit"]!==1 || $row["opening_plan_code"]!=="personal") exit(2);
 '
-# HTTP regression: owner creates a read-only administrator. Its authenticated
-# GET and forged POST paths must both be blocked by server-side permissions.
-viewerCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
-  --data-urlencode "csrf=$CSRF" --data-urlencode "action=admin_create" \
-  --data-urlencode "username=ci_readonly_operator" --data-urlencode "role=viewer")
-viewerPassword=$(TEST_RESPONSE="$viewerCreated" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and len(j["password"])>=12,j; print(j["password"])')
-viewerCookies=$(mktemp)
-viewerHtml=$(mktemp)
-curl -fsS -c "$viewerCookies" 'http://127.0.0.1:18765/index.php' -o "$viewerHtml"
-viewerCsrf=$(python3 -c 'import re,sys; s=open(sys.argv[1]).read(); m=re.search(r"name=.csrf. content=.([0-9a-f]{64}).",s); assert m; print(m.group(1))' "$viewerHtml")
-viewerLogin=$(curl -sS -b "$viewerCookies" -c "$viewerCookies" -X POST 'http://127.0.0.1:18765/index.php' \
-  --data-urlencode "csrf=$viewerCsrf" --data-urlencode "action=login" \
-  --data-urlencode "username=ci_readonly_operator" --data-urlencode "password=$viewerPassword")
-TEST_RESPONSE="$viewerLogin" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
+# Role regression: two selectable roles; old viewers never become writers automatically.
+globalCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$CSRF" --data-urlencode 'action=admin_create' --data-urlencode 'username=ci_global_operator' --data-urlencode 'role=global')
+globalPassword=$(TEST_RESPONSE="$globalCreated" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and len(j["password"])>=12,j;print(j["password"])')
+normalCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$CSRF" --data-urlencode 'action=admin_create' --data-urlencode 'username=ci_normal_operator' --data-urlencode 'role=admin')
+normalPassword=$(TEST_RESPONSE="$normalCreated" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and len(j["password"])>=12,j;print(j["password"])')
+viewerAttempt=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$CSRF" --data-urlencode 'action=admin_create' --data-urlencode 'username=ci_new_viewer_blocked' --data-urlencode 'role=viewer')
+TEST_RESPONSE="$viewerAttempt" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+
+login_operator() {
+  local username="$1" password="$2" cookie="$3" html="$4"
+  curl -fsS -c "$cookie" 'http://127.0.0.1:18765/index.php' -o "$html"
+  local operator_csrf
+  operator_csrf=$(python3 -c 'import re,sys;s=open(sys.argv[1]).read();m=re.search(r"name=.csrf. content=.([0-9a-f]{64}).",s);assert m;print(m.group(1))' "$html")
+  local login_result
+  login_result=$(curl -sS -b "$cookie" -c "$cookie" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$operator_csrf" --data-urlencode 'action=login' --data-urlencode "username=$username" --data-urlencode "password=$password")
+  TEST_RESPONSE="$login_result" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+  printf '%s' "$operator_csrf"
+}
+globalCookies=$(mktemp);globalHtml=$(mktemp)
+globalCsrf=$(login_operator ci_global_operator "$globalPassword" "$globalCookies" "$globalHtml")
+normalCookies=$(mktemp);normalHtml=$(mktemp)
+normalCsrf=$(login_operator ci_normal_operator "$normalPassword" "$normalCookies" "$normalHtml")
+for page in releases cloud_features admins audit update groups; do
+  status=$(curl -sS -b "$globalCookies" -o "$globalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
+  test "$status" = 200 || { echo "global GET denied $page ($status)" >&2; exit 1; }
+done
+# Sensitive owner functions must remain inaccessible even to global admins.
+for action in admin_create admin_role_change backup_key_generate update_apply signing_generate automation_token_create; do
+  status=$(curl -sS -b "$globalCookies" -o "$globalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$globalCsrf" --data-urlencode "action=$action")
+  test "$status" = 403 || { echo "global POST allowed $action ($status)" >&2; exit 1; }
+done
+for page in accounts devices plans client_logs; do
+  status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
+  test "$status" = 200 || { echo "ordinary GET denied $page ($status)" >&2; exit 1; }
+done
+for page in dashboard groups group_bulk packages releases cloud_features update admins audit; do
+  status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
+  test "$status" = 403 || { echo "ordinary GET allowed $page ($status)" >&2; exit 1; }
+done
+for action in group_create group_bulk_preview release_publish package_publish admin_create backup_key_generate update_apply cloud_features_save; do
+  status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=$action")
+  test "$status" = 403 || { echo "ordinary POST allowed $action ($status)" >&2; exit 1; }
+done
+normalPlan=$(curl -sS -b "$normalCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$normalCsrf" --data-urlencode 'action=plan_save' --data-urlencode 'name=CI Normal Plan' --data-urlencode 'device_limit=2' --data-urlencode 'mobile_limit=3' --data-urlencode 'sort_order=8')
+TEST_RESPONSE="$normalPlan" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["id"]>0,j'
+normalProtected=$(curl -sS -b "$normalCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$normalCsrf" --data-urlencode 'action=account_save' --data-urlencode 'username=ci_forbidden_entitlement' --data-urlencode 'opening_plan=personal' --data-urlencode 'entitlements[]=mcp')
+TEST_RESPONSE="$normalProtected" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and "全局管理员" in j["error"],j'
+# Legacy viewers may be reassigned by the protected owner, with session invalidation.
+php -r 'require "app/core.php"; db()->prepare("INSERT INTO phonehub_admins(username,password_hash,role,enabled) VALUES(?,?,?,1)")->execute(["ci_legacy_viewer",password_hash("ci-viewer-test-123456",PASSWORD_BCRYPT),"viewer"]);'
+viewerCookies=$(mktemp);viewerHtml=$(mktemp)
+viewerCsrf=$(login_operator ci_legacy_viewer ci-viewer-test-123456 "$viewerCookies" "$viewerHtml")
 curl -fsS -b "$viewerCookies" 'http://127.0.0.1:18765/index.php?view=packages' -o "$viewerHtml"
 grep -q '操作包管理中心' "$viewerHtml"
-if grep -q 'data-ajax="package_publish"\|data-action="package-toggle"' "$viewerHtml"; then
-  echo 'Read-only account can see package write controls' >&2; exit 1
-fi
-for action in package_toggle package_publish; do
-  denied=$(curl -sS -b "$viewerCookies" -o "$viewerHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' \
-    --data-urlencode "csrf=$viewerCsrf" --data-urlencode "action=$action" \
-    --data-urlencode "id=$operationId")
-  test "$denied" = 403 || { echo "Unauthorized package operation $action allowed: $denied" >&2;exit 1; }
-done
-curl -fsS -b "$viewerCookies" 'http://127.0.0.1:18765/index.php?view=accounts' -o "$viewerHtml"
-grep -q '只读查看，不允许修改授权' "$viewerHtml"
-if grep -q 'data-action="new-account"' "$viewerHtml"; then echo "viewer can see account editor" >&2; exit 9; fi
-for page in admins devices audit update group_bulk; do
-  status=$(curl -sS -b "$viewerCookies" -o "$viewerHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
-  test "$status" = 403 || { echo "viewer GET bypassed $page ($status)" >&2; exit 9; }
-done
-for operation in group_create account_save group_bulk_preview plan_save backup_key_generate update_apply device_reveal; do
-  status=$(curl -sS -b "$viewerCookies" -o "$viewerHtml" -w '%{http_code}' \
-    -X POST 'http://127.0.0.1:18765/index.php' \
-    --data-urlencode "csrf=$viewerCsrf" --data-urlencode "action=$operation" \
-    --data-urlencode "name=forbidden_group" --data-urlencode "username=forbidden_account")
-  test "$status" = 403 || { echo "viewer POST bypassed $operation ($status)" >&2; exit 9; }
-  python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); assert not j["ok"] and "无权" in j["error"],j' "$viewerHtml"
-done
-viewerLogout=$(curl -sS -b "$viewerCookies" -X POST 'http://127.0.0.1:18765/index.php' \
-  --data-urlencode "csrf=$viewerCsrf" --data-urlencode "action=logout")
-TEST_RESPONSE="$viewerLogout" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
-rm -f "$viewerCookies" "$viewerHtml"
-# Existing normal administrators retain the previous authorization maintenance
-# capability, while owner-only operations remain forbidden through direct POST.
-normalCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
-  --data-urlencode "csrf=$CSRF" --data-urlencode "action=admin_create" \
-  --data-urlencode "username=ci_normal_operator" --data-urlencode "role=admin")
-normalPassword=$(TEST_RESPONSE="$normalCreated" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j; print(j["password"])')
-normalCookies=$(mktemp)
-normalHtml=$(mktemp)
-curl -fsS -c "$normalCookies" 'http://127.0.0.1:18765/index.php' -o "$normalHtml"
-normalCsrf=$(python3 -c 'import re,sys; s=open(sys.argv[1]).read(); m=re.search(r"name=.csrf. content=.([0-9a-f]{64}).",s); assert m; print(m.group(1))' "$normalHtml")
-normalLogin=$(curl -sS -b "$normalCookies" -c "$normalCookies" -X POST 'http://127.0.0.1:18765/index.php' \
-  --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=login" \
-  --data-urlencode "username=ci_normal_operator" --data-urlencode "password=$normalPassword")
-TEST_RESPONSE="$normalLogin" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
-allowedWrite=$(curl -sS -b "$normalCookies" -X POST 'http://127.0.0.1:18765/index.php' \
-  --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=group_create" \
-  --data-urlencode "name=CI Normal Admin Allowed Group")
-TEST_RESPONSE="$allowedWrite" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
-status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' \
-  -X POST 'http://127.0.0.1:18765/index.php' \
-  --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=plan_save" \
-  --data-urlencode "name=Forbidden plan" --data-urlencode "device_limit=2")
-test "$status" = 403
-python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); assert not j["ok"],j' "$normalHtml"
-rm -f "$normalCookies" "$normalHtml"
+status=$(curl -sS -b "$viewerCookies" -o "$viewerHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$viewerCsrf" --data-urlencode 'action=plan_save')
+test "$status" = 403 || { echo "Legacy viewer can write plan" >&2;exit 1; }
+viewerId=$(php -r 'require "app/core.php"; $s=db()->prepare("SELECT id FROM phonehub_admins WHERE username=?");$s->execute(["ci_legacy_viewer"]);echo $s->fetchColumn();')
+changed=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$CSRF" --data-urlencode 'action=admin_role_change' --data-urlencode "id=$viewerId" --data-urlencode 'role=admin')
+TEST_RESPONSE="$changed" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+curl -fsS -b "$viewerCookies" 'http://127.0.0.1:18765/index.php?view=plans' -o "$viewerHtml"
+if grep -q '新增套餐' "$viewerHtml"; then echo "Old viewer session survived privilege change" >&2;exit 1; fi
+rm -f "$globalCookies" "$globalHtml" "$normalCookies" "$normalHtml" "$viewerCookies" "$viewerHtml"
 # Owner-managed templates apply only to newly created accounts; edits and
 # deactivations must not retroactively alter existing authorizations.
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=plans' -o "$adminHtml"

@@ -5,7 +5,7 @@ require_once __DIR__.'/devices.php';
 function device_admin_action(string $action): never {
     require_admin();
     if ($action==='device_blacklist_add') {
-        require_owner();
+        phonehub_require_action($action);
         $kind=(string)($_POST['kind']??'');
         $id=(int)($_POST['id']??0);
         $input=strtolower(trim((string)($_POST['identifier']??'')));
@@ -44,7 +44,7 @@ function device_admin_action(string $action): never {
 
 function device_admin_view(): void {
     require_admin();
-    $owner=admin_role()==='owner';
+    $canBlock=phonehub_role_can_action(admin_role(),'device_blacklist_add');
     $computers=sql("SELECT MIN(s.id) AS id,s.user_id,u.username,s.device_id,MAX(s.expires_at) AS expires_at,
       COUNT(*) AS sessions FROM phonehub_sessions s JOIN phonehub_users u ON u.id=s.user_id
       WHERE s.expires_at>UTC_TIMESTAMP() GROUP BY s.user_id,s.device_id,u.username ORDER BY expires_at DESC LIMIT 300")->fetchAll();
@@ -82,7 +82,7 @@ function device_admin_view(): void {
             <button class="small-link" type="button" data-device-copy="<?=h($d['device_id'])?>">复制 ID</button></td>
           <td><?=(int)$d['sessions']?></td><td><?=h(utc_to_cn($d['expires_at']))?></td>
           <td><button class="small-link" data-action="revoke-session" data-id="<?=(int)$d['id']?>">撤销会话</button>
-          <?php if($owner): ?><button class="small-link danger-action" data-action="device-block" data-kind="computer_id" data-id="<?=(int)$d['id']?>">拉黑电脑 ID</button><?php endif ?></td></tr>
+          <?php if($canBlock): ?><button class="small-link danger-action" data-action="device-block" data-kind="computer_id" data-id="<?=(int)$d['id']?>">拉黑电脑 ID</button><?php endif ?></td></tr>
         <?php endforeach ?>
         </tbody></table></div></div>
     </section>
@@ -96,7 +96,7 @@ function device_admin_view(): void {
           <td><?=h(utc_to_cn($d['last_seen']?:$d['created_at']))?></td>
           <td class="device-commands">
             <?php if((int)$d['enabled']): ?><button class="small-link" data-action="mobile-revoke" data-id="<?=(int)$d['id']?>">解绑</button><?php endif ?>
-            <?php if($owner): ?>
+            <?php if($canBlock): ?>
               <button class="small-link danger-action" data-action="device-block" data-kind="phone_id" data-id="<?=(int)$d['id']?>">拉黑指纹</button>
             <?php endif ?>
           </td></tr>
@@ -117,7 +117,7 @@ function device_admin_view(): void {
       </div>
     </section>
     <section data-device-panel="blacklist" hidden>
-      <?php if($owner): ?><div class="card"><div class="card-head"><h2>单独禁止指定标识</h2></div>
+      <?php if($canBlock): ?><div class="card"><div class="card-head"><h2>单独禁止指定标识</h2></div>
         <form data-ajax="device_blacklist_add" data-confirm-submit="确认独立拉黑此标识？匹配电脑会话或手机绑定将立即撤销。">
           <input type="hidden" name="action" value="device_blacklist_add">
           <div class="form-grid">
@@ -133,7 +133,7 @@ function device_admin_view(): void {
         <?php foreach($blacklist as $b): $typeName=['computer_id'=>'电脑 ID','phone_id'=>'手机指纹'][$b['identifier_type']]??'其他'; ?>
           <tr><td><?=h($typeName)?></td><td><code><?=h(substr($b['identifier_hash'],0,16))?>…</code></td>
             <td><?=h($b['reason'])?></td><td><?=h(utc_to_cn($b['created_at']))?></td>
-            <td><?php if($owner): ?><button class="small-link" data-action="mobile-unblacklist" data-id="<?=(int)$b['id']?>">解除拉黑</button><?php else: ?><span class="muted">主管理员操作</span><?php endif ?></td>
+            <td><?php if($canBlock): ?><button class="small-link" data-action="mobile-unblacklist" data-id="<?=(int)$b['id']?>">解除拉黑</button><?php else: ?><span class="muted">设备管理员操作</span><?php endif ?></td>
           </tr>
         <?php endforeach ?></tbody></table></div>
       </div>

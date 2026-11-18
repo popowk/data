@@ -430,7 +430,8 @@ function automation_api(): never {
     automation_fail('NOT_FOUND','自动化接口或请求方法不存在',404);
 }
 function automation_admin_view(): void {
-    require_owner();
+    require_global_admin();
+    $canOperate=admin_role()==='owner';
     $tokens=sql('SELECT id,label,platforms,channels,permissions,source_ip,expires_at,revoked_at,last_used_at
         FROM phonehub_automation_tokens ORDER BY id DESC LIMIT 50')->fetchAll();
     $stages=sql('SELECT a.id,a.platform,a.channel,a.version,a.status,a.sha256,a.size_bytes,
@@ -440,7 +441,7 @@ function automation_admin_view(): void {
     ?>
     <div class="card"><div class="card-head"><h2>AI / CI 专用发布令牌</h2></div>
       <p class="muted">仅主管理员管理。令牌只显示一次；自动化端只允许执行勾选权限，并按平台、渠道、有效期和可选来源 IP 限制。stable 始终需要主管理员审批。</p>
-      <form data-ajax="automation_token_create">
+      <?php if($canOperate): ?><form data-ajax="automation_token_create">
         <div class="form-grid">
           <div class="field"><label>令牌名称</label><input name="label" required maxlength="64" placeholder="CI beta 发布机器人"></div>
           <div class="field"><label>有效期（天）</label><input name="expires_days" type="number" min="1" max="365" value="30" required></div>
@@ -458,14 +459,14 @@ function automation_admin_view(): void {
             <label><input type="checkbox" name="permissions[]" value="<?=h($p)?>" checked> <?=h($p)?></label>
             <?php endforeach ?></div></div>
         </div><div class="editor-actions"><button class="btn primary">生成一次性令牌</button></div>
-      </form>
+      </form><?php endif ?>
       <div class="table-scroll"><table><thead><tr><th>令牌</th><th>范围与权限</th><th>到期 / 最近使用</th><th>状态</th><th>操作</th></tr></thead><tbody>
       <?php foreach($tokens as $t): ?>
       <tr><td><b>#<?=(int)$t['id']?> <?=h($t['label'])?></b></td>
       <td><?=h(implode('、',automation_csv_list($t['platforms'])))?> / <?=h(implode('、',automation_csv_list($t['channels'])))?><small><?=h(implode('、',automation_csv_list($t['permissions'])))?><?=$t['source_ip']?' · IP '.h($t['source_ip']):''?></small></td>
       <td><?=h($t['expires_at'])?> UTC <small><?=h($t['last_used_at']??'从未使用')?></small></td>
       <td><?= $t['revoked_at']?'已撤销':(strtotime($t['expires_at'].' UTC')<=time()?'已过期':'有效')?></td>
-      <td><?php if(!$t['revoked_at'] && strtotime($t['expires_at'].' UTC')>time()): ?>
+      <td><?php if($canOperate && !$t['revoked_at'] && strtotime($t['expires_at'].' UTC')>time()): ?>
         <button class="small-link" data-action="automation-token-rotate" data-id="<?=(int)$t['id']?>">轮换</button>
         <button class="small-link" data-action="automation-token-revoke" data-id="<?=(int)$t['id']?>">撤销</button>
       <?php endif ?></td></tr>
@@ -479,10 +480,10 @@ function automation_admin_view(): void {
       <td><?=h($r['platform'].' / '.$r['channel'].' / '.$r['version'])?></td>
       <td><code><?=h(substr($r['sha256'],0,16))?>…</code> <small><?=h($r['commit_sha']??'')?></small></td>
       <td><?=h($r['status'])?> <?=$r['approved_at']?'· 已批准':''?></td>
-      <td><?php if($r['status']==='prepared' && $r['channel']==='stable' && !$r['approved_at']): ?>
+      <td><?php if($canOperate && $r['status']==='prepared' && $r['channel']==='stable' && !$r['approved_at']): ?>
          <button class="small-link" data-action="automation-release-approve" data-id="<?=(int)$r['id']?>">批准 stable</button>
       <?php endif ?>
-      <?php if($r['status']==='prepared'): ?>
+      <?php if($canOperate && $r['status']==='prepared'): ?>
          <button class="small-link" data-action="automation-release-reject" data-id="<?=(int)$r['id']?>">拒绝</button>
       <?php endif ?></td></tr>
       <?php endforeach ?></tbody></table></div>

@@ -77,10 +77,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $aiEnabled=isset($_POST['ai_enabled'])?1:0;
             $allowClientAiKey=isset($_POST['allow_client_ai_key'])?1:0;
-            if ($allowClientAiKey) {
-                $alreadyAllowed=$id?(int)sql('SELECT allow_client_ai_key FROM phonehub_users WHERE id=?',[$id])->fetchColumn():0;
-                if (!$alreadyAllowed) require_owner();
-            }
+            $isGlobalOperator=in_array(admin_role(),['owner','global'],true);
+            $alreadyAllowed=$id?(int)sql('SELECT allow_client_ai_key FROM phonehub_users WHERE id=?',[$id])->fetchColumn():0;
+            if ($allowClientAiKey && !$alreadyAllowed) require_global_admin();
+            // A staff edit must not revoke an existing global-only BYOK grant.
+            if (!$isGlobalOperator) $allowClientAiKey=$alreadyAllowed;
             $aiDailyLimit=(int)($_POST['ai_daily_limit']??100);
             if ($aiDailyLimit<0 || $aiDailyLimit>5000) throw new RuntimeException('AI 每日请求额度必须为 0–5000');
             if ($allowClientAiKey && !$aiEnabled) throw new RuntimeException('关闭 AI 功能时不能单独开放客户端自带 Key');
@@ -92,7 +93,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (array_intersect($entitlements,['mcp-codex','mcp-harness']) && !in_array('mcp',$entitlements,true))
                 throw new RuntimeException('Codex、DeepSeek Harness MCP 必须同时授予 MCP 上级权限');
             $previousEntitlements=$id?(json_decode((string)sql('SELECT entitlements FROM phonehub_users WHERE id=?',[$id])->fetchColumn(),true)?:[]):[];
-            if (array_diff(array_intersect(['mcp','skill','mcp-codex','mcp-harness'],$entitlements),$previousEntitlements)) require_owner();
+            $protectedEntitlements=['mcp','skill','mcp-codex','mcp-harness'];
+            if (array_diff(array_intersect($protectedEntitlements,$entitlements),$previousEntitlements))
+                require_global_admin();
+            if (!$isGlobalOperator) {
+                // A staff edit must preserve previously granted advanced scopes.
+                $entitlements=array_values(array_unique(array_merge(
+                    $entitlements,array_values(array_intersect($protectedEntitlements,$previousEntitlements))
+                )));
+            }
             $until=input_to_utc(trim((string)($_POST['license_until'] ?? '')));
             $notes=trim((string)($_POST['notes'] ?? ''));
             if (utf8_length($notes)>500) throw new RuntimeException('备注不能超过 500 字');
@@ -170,7 +179,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             json_response(['ok'=>true]+signing_activate_trust());
         }
         if (in_array($action,['plan_save','plan_toggle'],true)) {
-            require_owner();
             require_once __DIR__.'/app/features.php';
             plan_admin_action($action);
         }
@@ -180,7 +188,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             backup_admin_download_once();
         }
         if (in_array($action,['update_check','update_apply','update_diagnostics'],true)) {
-            require_owner();
+            if ($action==='update_apply') require_owner();
+            else require_global_admin();
             require __DIR__.'/app/updater.php';
             if ($action==='update_check') json_response(['ok'=>true]+check_update());
             if ($action==='update_diagnostics') json_response(['ok'=>true]+update_diagnostics());
@@ -225,14 +234,15 @@ if (!admin_id()) {
 <form data-ajax="login"><input type="hidden" name="action" value="login"><div class="field"><label>管理员账号</label><input name="username" autocomplete="username" required autofocus></div><div class="field"><label>管理员密码</label><input type="password" name="password" autocomplete="current-password" required></div>
 <button class="btn primary full">登录</button></form><p id="message" class="footnote"></p></main><script src="assets/app.js?v=<?=rawurlencode(app_version())?>" defer></script></body></html>
 <?php exit; }
-$view=(string)($_GET['view'] ?? 'dashboard');
+$adminRole=admin_role();
+$view=(string)($_GET['view'] ?? ($adminRole==='admin'?'accounts':'dashboard'));
 if (in_array($view,['mobiles','sessions'],true)) {header('Location: index.php?view=devices',true,302);exit;}
 if ($view==='gateway') {http_response_code(404);exit('旧客户端接口接管功能已移除；请使用新版授权 API');}
-if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','admins','audit','cloud_features'],true)) $view='dashboard';
-$adminRole=admin_role();
+if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','admins','audit','cloud_features'],true))
+    $view=$adminRole==='admin'?'accounts':'dashboard';
 // Keep old saved links working while removing duplicate sidebar entries.
 if ($view==='ai') { header('Location: index.php?view=cloud_features#ai-management',true,302);exit; }
-if ($view==='packages' && $adminRole==='owner') { header('Location: index.php?view=releases#legacy-operation-packages',true,302);exit; }
+if ($view==='packages' && in_array($adminRole,['owner','global'],true)) { header('Location: index.php?view=releases#legacy-operation-packages',true,302);exit; }
 if (!phonehub_role_can_view($adminRole,$view)) { http_response_code(403); exit('当前管理员无权访问此页面'); }
 // Keep only internal administrative bookmarks: no legacy client API endpoint.
 if ($view==='group_bulk') {header('Location: index.php?view=groups#group-bulk',true,302);exit;}
@@ -307,11 +317,11 @@ $nav=[
 <div class="field"><label>授权截止时间（北京时间，留空永久）</label><input name="license_until" type="datetime-local" step="1"></div>
 <div class="field"><label>电脑授权名额（1–100）</label><input name="device_limit" type="number" min="1" max="100" value="3"></div>
 <div class="field"><label>安卓手机名额（0 表示禁止绑定）</label><input name="mobile_limit" type="number" min="0" max="1000" value="1"></div>
-<div class="field span2"><label>平台与扩展权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked> 抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu"> 小红书</label><label><input type="checkbox" name="entitlements[]" value="mcp"> MCP</label><label><input type="checkbox" name="entitlements[]" value="mcp-codex"> Codex MCP</label><label><input type="checkbox" name="entitlements[]" value="mcp-harness"> DeepSeek Harness MCP</label><label><input type="checkbox" name="entitlements[]" value="skill"> Skill</label></div><span class="footnote">MCP/Skill 还需在「客户端能力控制」打开全局开关；新客户默认不授权。</span></div>
+<div class="field span2"><label>平台与扩展权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked> 抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu"> 小红书</label><label><input type="checkbox" name="entitlements[]" value="mcp" <?=$adminRole==='admin'?'disabled':''?>> MCP</label><label><input type="checkbox" name="entitlements[]" value="mcp-codex" <?=$adminRole==='admin'?'disabled':''?>> Codex MCP</label><label><input type="checkbox" name="entitlements[]" value="mcp-harness" <?=$adminRole==='admin'?'disabled':''?>> DeepSeek Harness MCP</label><label><input type="checkbox" name="entitlements[]" value="skill" <?=$adminRole==='admin'?'disabled':''?>> Skill</label></div><span class="footnote">MCP/Skill 还需在「客户端能力控制」打开全局开关；新客户默认不授权。</span></div>
 <div class="field"><label>账号状态</label><label class="check-row"><input type="checkbox" name="enabled" checked> 启用账号</label></div>
 <div class="field"><label>AI 功能</label><label class="check-row"><input type="checkbox" name="ai_enabled" checked> 允许使用 AI</label></div>
 <div class="field"><label>AI 每日请求额度（0–5000）</label><input name="ai_daily_limit" type="number" min="0" max="5000" value="100"></div>
-<div class="field span2"><label>客户端自带 API Key</label><label class="check-row"><input type="checkbox" name="allow_client_ai_key"> 允许该客户自带 Key（还需主管理员开启全局开关）</label></div>
+<div class="field span2"><label>客户端自带 API Key</label><label class="check-row"><input type="checkbox" name="allow_client_ai_key" <?=$adminRole==='admin'?'disabled':''?>> 允许该客户自带 Key（还需全局开关）</label></div>
 <div class="field span2"><label>内部备注</label><input name="notes" maxlength="500" placeholder="可填写客户联系方式、购买产品等"></div>
 </div><div class="editor-actions"><button class="btn primary">保存授权</button></div></form></div>
 <?php endif ?>
@@ -368,9 +378,9 @@ $accountPageLink=static function(int $page) use($accountFilters): string {
 <?php release_package_overview(); ?>
 <?php elseif($view==='update'): ?>
 <div class="page-title"><div><h1>系统维护</h1><p>统一管理程序在线更新、运行环境自检、签名信任和独立加密备份密钥。</p></div></div>
-<div class="update-actions maintenance-nav"><a class="btn" href="#maintenance-update">系统更新与自检</a><a class="btn" href="#maintenance-backup">备份密钥管理</a></div>
+<div class="update-actions maintenance-nav"><a class="btn" href="#maintenance-update">系统更新与自检</a><?php if($adminRole==='owner'): ?><a class="btn" href="#maintenance-backup">备份密钥管理</a><?php endif ?></div>
 <div class="card update-card" id="maintenance-update"><div class="update-icon">⟳</div><h2>当前版本 v<?=h(app_version())?></h2><p class="muted">更新源：<code>https://git.wksite.cn/popowk/data</code></p><p class="muted">仅更新管理程序文件，自动跳过 storage 内的数据库配置和运行数据。</p>
-<div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><a class="btn" href="#maintenance-backup">备份密钥</a><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
+<div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><?php if($adminRole==='owner'): ?><a class="btn" href="#maintenance-backup">备份密钥</a><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button><?php endif ?></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
 <?php
 $signingModuleReady=is_file(__DIR__.'/app/signing_admin.php');
 if ($signingModuleReady) {
@@ -389,7 +399,9 @@ if ($signingModuleReady) {
  <div class="card-head"><h2>Ed25519 签名密钥管理</h2><span class="pill <?=$signing['state']==='active'?'ok':'off'?>"><?=$signing['state']==='active'?'强制验签已启用':($signing['state']==='pending'?'等待发布签名':'尚未初始化')?></span></div>
  <p class="muted">主管理员在这里直接初始化签名密钥，服务器生成 Ed25519 私钥并加密传入 GitHub Actions Secret，随后擦除本次服务器内存中的私钥；只保留固定公钥。使用 GitHub 一次性 Token，不保存 Token、私钥或签名明文在数据库。</p>
  <?php if(isset($signing['fingerprint'])): ?><p class="muted">公钥 SHA-256 指纹：<code><?=h($signing['fingerprint'])?></code></p><?php endif ?>
- <?php if($signing['state']==='unconfigured'): ?>
+ <?php if($adminRole!=='owner'): ?>
+ <p class="muted">全局管理员可查看更新与签名状态；更换信任密钥及安装服务器更新仅主账号可操作。</p>
+ <?php elseif($signing['state']==='unconfigured'): ?>
  <form data-ajax="signing_generate"><input type="hidden" name="action" value="signing_generate">
   <div class="field"><label>GitHub 临时访问 Token（须有 popowk/data 仓库 Actions Secrets 写入权限）</label><input type="password" name="github_token" autocomplete="off" required placeholder="只用于本次安全配置，不保存"></div>
   <p class="footnote">初始化后由 GitHub Actions 自动签名。镜像签名尚未发布时不会启用固定公钥，避免锁死现有更新通道。</p>
@@ -404,7 +416,7 @@ if ($signingModuleReady) {
  </div>
 <?php endif ?>
 <div class="card"><h2>更新说明</h2><p class="muted">安装前自动备份原文件。下载、解压、写入或校验失败会报错；写入阶段失败将尝试自动回滚。更新过程不删除客户、会话和数据库。镜像站需要支持 GitHub 源码 ZIP 下载接口。</p></div>
-<?php require_once __DIR__.'/app/features.php';backup_admin_view(true); ?>
+<?php if($adminRole==='owner'): require_once __DIR__.'/app/features.php';backup_admin_view(true); endif; ?>
 <?php elseif($view==='audit'): $before=max(0,(int)($_GET['before']??0)); $auditSql="SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id ORDER BY a.id DESC LIMIT 51"; $audits=$before>0?sql("SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id WHERE a.id < ? ORDER BY a.id DESC LIMIT 51",[$before])->fetchAll():sql($auditSql)->fetchAll(); $hasOlder=count($audits)>50; if($hasOlder)array_pop($audits); $nextBefore=$audits?(int)$audits[count($audits)-1]['id']:0; ?>
 <div class="page-title"><div><h1>管理员操作记录</h1><p>按时间倒序展示，每页 50 条；可继续加载更早记录</p></div><?php if($before>0): ?><a class="btn" href="?view=audit">返回最新记录</a><?php endif ?></div><div class="card"><div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div><?php if($hasOlder && $nextBefore>0): ?><div class="editor-actions"><a class="btn" href="?view=audit&amp;before=<?=$nextBefore?>">更早记录</a></div><?php endif ?></div>
 <?php elseif ($view==='releases'): require __DIR__.'/app/release_admin.php'; release_admin_view(); ?>
