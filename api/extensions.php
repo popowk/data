@@ -26,6 +26,23 @@ function api_mobile_quota(int $userId): array {
            (b.identifier_type='phone_hash' AND d.phone_number_hash IS NOT NULL AND b.identifier_hash=d.phone_number_hash)))",[$userId])->fetchColumn();
     return ['mobile_limit'=>(int)($meta['lim']??0),'active_count'=>$count];
 }
+/**
+ * Read the four current global feature gates in one DB query per heartbeat.
+ * This is request-local only: never cache a revoked privilege across checks.
+ */
+function api_cloud_feature_flags(): array {
+    $rows=client_sql("SELECT setting_key,setting_value FROM phonehub_feature_settings
+        WHERE setting_key IN ('mcp_enabled','skill_enabled','mcp_codex_enabled','mcp_harness_enabled')")->fetchAll();
+    $settings=[];
+    foreach ($rows as $row) $settings[(string)$row['setting_key']]=(string)$row['setting_value']==='1';
+    $mcp=!empty($settings['mcp_enabled']);
+    return [
+        'mcp'=>$mcp,
+        'skill'=>!empty($settings['skill_enabled']),
+        'mcp-codex'=>$mcp && !empty($settings['mcp_codex_enabled']),
+        'mcp-harness'=>$mcp && !empty($settings['mcp_harness_enabled'])
+    ];
+}
 function api_cloud_feature_enabled(string $feature): bool {
     if (!in_array($feature,['mcp','skill','mcp-codex','mcp-harness'],true)) return false;
     if (in_array($feature,['mcp-codex','mcp-harness'],true) &&
@@ -107,7 +124,7 @@ function api_latest_release(string $platform,string $channel): ?array {
  * This never returns a package envelope, content key, upstream API key, or
  * mobile identity HMAC/encrypted original.
  */
-function api_heartbeat_batch(array $batch,array $session,int $userId,array $quota): array {
+function api_heartbeat_batch(array $batch,array $session,int $userId,array $quota,array $cloudFlags=[]): array {
     global $pdo;
     if (array_diff(array_keys($batch),['phones','package_versions']))
         api_problem('INVALID_HEARTBEAT_BATCH','批量心跳包含未知字段');
@@ -200,7 +217,7 @@ function api_heartbeat_batch(array $batch,array $session,int $userId,array $quot
     foreach ($packageRows as $p) {
         $id=(string)$p['package_id'];
         if (in_array($id,['mcp','skill','mcp-codex','mcp-harness'],true) &&
-            (!api_cloud_feature_enabled($id) ||
+            (!($cloudFlags[$id]??false) ||
              (in_array($id,['mcp-codex','mcp-harness'],true) && !in_array('mcp',$permitted,true))))
             continue;
         $latest=(int)$p['latest_version'];
@@ -241,16 +258,17 @@ function api_extra(string $action,array $input,array $session,int $userId): void
     if ($action==='ai_chat') api_ai_chat($input,$session,$userId);
     if (in_array($action,['license_status','capabilities','client_config','client_heartbeat'],true)) {
         $quota=api_mobile_quota($userId);
+        $cloudFlags=api_cloud_feature_flags();
         $permitted=json_decode((string)$session['entitlements'],true)?:[];
         $account=client_sql('SELECT device_limit FROM phonehub_users WHERE id=?',[$userId])->fetch();
         $pcUsed=(int)client_sql('SELECT COUNT(DISTINCT device_id) FROM phonehub_sessions WHERE user_id=? AND expires_at>UTC_TIMESTAMP()',[$userId])->fetchColumn();
         $features=api_true_features([
                 'mobile_bind'=>true,'mobile_unbind'=>true,'package_requires_mobile_binding'=>true,
                 'update_check'=>true,'update_download'=>true,'log_batch'=>true,'device_list'=>true,'device_revoke'=>true,
-                'mcp_available'=>api_cloud_feature_enabled('mcp') && in_array('mcp',$permitted,true),
-                'skill_available'=>api_cloud_feature_enabled('skill') && in_array('skill',$permitted,true),
-                'mcp_codex_available'=>api_cloud_feature_enabled('mcp-codex') && in_array('mcp',$permitted,true) && in_array('mcp-codex',$permitted,true),
-                'mcp_harness_available'=>api_cloud_feature_enabled('mcp-harness') && in_array('mcp',$permitted,true) && in_array('mcp-harness',$permitted,true)
+                'mcp_available'=>($cloudFlags['mcp']??false) && in_array('mcp',$permitted,true),
+                'skill_available'=>($cloudFlags['skill']??false) && in_array('skill',$permitted,true),
+                'mcp_codex_available'=>($cloudFlags['mcp-codex']??false) && in_array('mcp',$permitted,true) && in_array('mcp-codex',$permitted,true),
+                'mcp_harness_available'=>($cloudFlags['mcp-harness']??false) && in_array('mcp',$permitted,true) && in_array('mcp-harness',$permitted,true)
         ]);
         $response=[
             'ok'=>true,'username'=>$session['username'],'server_time'=>time(),
@@ -267,7 +285,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
             if (!is_array($input['batch']) ||
                 ($input['batch']!==[] && array_is_list($input['batch'])))
                 api_problem('INVALID_HEARTBEAT_BATCH','batch 必须为 JSON 对象');
-            $response['batch']=api_heartbeat_batch($input['batch'],$session,$userId,$quota);
+            $response['batch']=api_heartbeat_batch($input['batch'],$session,$userId,$quota,$cloudFlags);
         }
         api_out($response);
     }
