@@ -87,7 +87,7 @@ function ai_server_secret(): string {
     return ai_decrypt_secret(ai_setting('api_key_ciphertext',''));
 }
 function ai_save_settings(array $post): array {
-    require_owner();
+    require_global_admin();
     $enabled=isset($post['enabled'])?'1':'0';
     $byok=isset($post['client_key_enabled'])?'1':'0';
     $model=(string)($post['model']??AI_DEFAULT_MODEL);
@@ -291,7 +291,7 @@ function api_ai_chat(array $input,array $session,int $userId): never {
     api_out($decoded);
 }
 function ai_admin_view(bool $embedded=false): void {
-    require_owner();
+    require_global_admin();
     $s=ai_settings();
     $usage=sql("SELECT u.username,g.mode,g.model,g.status,g.http_status,g.prompt_tokens,g.completion_tokens,g.elapsed_ms,g.created_at
         FROM phonehub_ai_usage g JOIN phonehub_users u ON u.id=g.user_id ORDER BY g.id DESC LIMIT 100")->fetchAll();
@@ -324,7 +324,7 @@ function ai_admin_view(bool $embedded=false): void {
     <?php
 }
 function ai_admin_action(string $action): never {
-    require_owner();
+    require_global_admin();
     if ($action==='ai_settings_save') json_response(['ok'=>true]+ai_save_settings($_POST));
     throw new RuntimeException('未知 AI 管理操作');
 }
