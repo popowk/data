@@ -680,7 +680,10 @@ function phonehub_account_history_record(int $userId,string $source,array $befor
             $changes['notes']=['redacted'=>true];
         if (!$changes) return false;
     }
-    $encoded=json_encode($changes,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+    // A reset has no field-level values. Persist an empty JSON object rather
+    // than an array to preserve the structured-diff schema.
+    $encoded=$source==='password_reset'?'{}':
+        json_encode($changes,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
     if (strlen($encoded)>16384) throw new RuntimeException('授权变更内容异常，请联系管理员');
     $actorId=admin_id();
     if ($actorId<1) throw new RuntimeException('授权变更缺少管理员身份');
