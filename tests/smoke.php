@@ -413,7 +413,7 @@ unset($_GET['device_tab']);
 if (strpos($computerHtml,'设备管理')===false || strpos($computerHtml,'电脑设备')===false ||
     strpos($computerHtml,'安卓手机')===false || strpos($computerHtml,'禁止访问')===false ||
     strpos($computerHtml,'device-search-form')===false ||
-    strpos($computerHtml,'撤销该电脑全部会话')===false ||
+    strpos($computerHtml,'电脑设备与会话')===false ||
     strpos($mobileHtml,'<th>状态</th>')===false ||
     strpos($mobileHtml,'手机指纹')===false ||
     strpos($blacklistHtml,'有效禁止访问记录')===false)
