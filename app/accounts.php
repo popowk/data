@@ -17,6 +17,8 @@ function account_reset_password(int $userId): array {
         $hash=password_hash_safe($password);
         sql('UPDATE phonehub_users SET password_hash=? WHERE id=?',[$hash,$userId]);
         sql('DELETE FROM phonehub_sessions WHERE user_id=?',[$userId]);
+        // Only the reset event is stored, never the new password or hash.
+        phonehub_account_history_record($userId,'password_reset',[],[]);
         audit('account_password',(string)$target['username']);
         $connection->commit();
         return ['username'=>(string)$target['username'],'password'=>$password];
