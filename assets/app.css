@@ -158,3 +158,10 @@ input[readonly]{background:#f7f8fb;color:#9099a6}
 .device-search-form .muted{font-size:12px}
 .device-pager{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin:16px 0 8px;font-size:13px;color:#526987}
 @media(max-width:760px){.device-search-form input{flex-basis:100%;min-width:0}.device-pager{justify-content:center}}
+
+/* Structured, read-only account authorization change timeline. */
+.account-history-table{width:100%}
+.account-history-table td{vertical-align:top;overflow-wrap:anywhere}
+.account-history-meta{min-width:170px;background:var(--surface-secondary,transparent);border-bottom:1px solid #e3e8f1}
+.account-history-meta .muted{font-size:12px;line-height:1.65}
+.account-history-table td:nth-child(3),.account-history-table td:nth-child(4){max-width:350px}
