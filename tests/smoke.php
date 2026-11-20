@@ -41,7 +41,7 @@ if (!in_array('opening_plan_code',$metaColumns,true))
     throw new RuntimeException('opening plan migration missing');
 $planTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_plan_templates'")->fetchColumn();
 if($planTable!==1) throw new RuntimeException('plan migration table missing');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==13)
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==14)
     throw new RuntimeException('main program download migration version incorrect');
 $defaultScrcpy=$pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn();
 if($defaultScrcpy!==SCRCPY_DEFAULT_DOWNLOAD_URL)
@@ -50,7 +50,7 @@ $defaultMain=$pdo->query("SELECT download_url FROM phonehub_download_settings WH
 if($defaultMain!==MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL)
     throw new RuntimeException('main program URL placeholder is missing');
 $pdo->exec("UPDATE phonehub_download_settings SET download_url='https://example.com/custom-scrcpy.zip' WHERE resource='scrcpy'");
-$pdo->exec("DELETE FROM phonehub_admin_migrations WHERE version=13");
+$pdo->exec("DELETE FROM phonehub_admin_migrations WHERE version>=13");
 migrate($pdo);
 if($pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn()!=='https://example.com/custom-scrcpy.zip')
     throw new RuntimeException('main program migration overwrote administrator scrcpy URL');
@@ -60,6 +60,18 @@ if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resou
     throw new RuntimeException('scrcpy migration seeded duplicate rows');
 if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resource='main_program'")->fetchColumn()!==1)
     throw new RuntimeException('main program migration seeded duplicate rows');
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==14)
+    throw new RuntimeException('computer replacement audit migration failed');
+$replacementColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_computer_replacement_events'")->fetchAll(PDO::FETCH_COLUMN);
+foreach (['id','user_id','replaced_count','created_at'] as $needed)
+    if(!in_array($needed,$replacementColumns,true))
+        throw new RuntimeException('missing replacement audit field '.$needed);
+if(array_intersect($replacementColumns,['device_id','token_hash','ip_address','source_ip']))
+    throw new RuntimeException('replacement event table contains private device or token fields');
+migrate($pdo);
+if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_admin_migrations WHERE version=14")->fetchColumn()!==1)
+    throw new RuntimeException('computer replacement audit migration is not idempotent');
 foreach (['https://example.com/PhoneHub.exe','https://example.com/PhoneHub.msi',
           MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL] as $validMain) {
     if(main_program_validate_download_url($validMain)!==$validMain)
