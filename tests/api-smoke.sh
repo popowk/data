@@ -988,6 +988,11 @@ rangeCode=$(curl -sS -w '%{http_code}' -X POST "$BASE""update_download" \
 [ "$rangeCode" = 206 ] && [ "$(wc -c </tmp/phonehub-ci-range.bin)" = 10 ]
 # Owner can delete only disabled old core whose channel still has a newer
 # enabled version; verified ZIP and latest signed release remain untouched.
+coreOwnerCookies=$(mktemp);coreOwnerHtml=$(mktemp)
+curl -fsS -c "$coreOwnerCookies" 'http://127.0.0.1:18765/index.php' -o "$coreOwnerHtml"
+coreOwnerCsrf=$(python3 -c 'import re,sys;s=open(sys.argv[1]).read();m=re.search(r"name=.csrf. content=.([0-9a-f]{64}).",s);assert m;print(m.group(1))' "$coreOwnerHtml")
+coreOwnerLogin=$(curl -sS -b "$coreOwnerCookies" -c "$coreOwnerCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$coreOwnerCsrf" --data-urlencode 'action=login' --data-urlencode 'username=ci_ai_owner' --data-urlencode 'password=ci-owner-test-123456')
+TEST_RESPONSE="$coreOwnerLogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
 legacyCoreInfo=$(php -r '
 require "app/core.php";require "app/releases.php";
 $filename=bin2hex(random_bytes(20)).".zip";
@@ -1002,14 +1007,14 @@ echo db()->lastInsertId()."|".$path;
 ')
 oldCoreId="${legacyCoreInfo%%|*}"
 oldCorePath="${legacyCoreInfo#*|}"
-curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases&release_q=0.7.0' -o "$adminHtml"
+curl -fsS -b "$coreOwnerCookies" 'http://127.0.0.1:18765/index.php?view=releases&release_q=0.7.0' -o "$coreOwnerHtml"
 grep -q 'data-action="release-delete"' "$adminHtml"
-newestDelete=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
- --data-urlencode "csrf=$CSRF" --data-urlencode 'action=release_delete' \
+newestDelete=$(curl -sS -b "$coreOwnerCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$coreOwnerCsrf" --data-urlencode 'action=release_delete' \
  --data-urlencode "id=$releaseId")
 TEST_RESPONSE="$newestDelete" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
-removedCore=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
- --data-urlencode "csrf=$CSRF" --data-urlencode 'action=release_delete' \
+removedCore=$(curl -sS -b "$coreOwnerCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$coreOwnerCsrf" --data-urlencode 'action=release_delete' \
  --data-urlencode "id=$oldCoreId")
 TEST_RESPONSE="$removedCore" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["deleted"] and not j["file_cleanup_pending"],j'
 test ! -f "$oldCorePath"
@@ -1021,6 +1026,7 @@ if(!$latest || !hash_equals(getenv("EXPECTED_HASH"),hash_file("sha256",release_s
 if((int)sql("SELECT COUNT(*) FROM phonehub_admin_audit WHERE action=?",["release_delete"])->fetchColumn()<1)exit(6);
 '
 echo 'CI HTTP smoke: obsolete core deletion protected active latest and signed archive'
+rm -f "$coreOwnerCookies" "$coreOwnerHtml"
 rm -f /tmp/phonehub-ci-update.zip /tmp/phonehub-ci-range.bin
 # New blacklist action uses only phone fingerprint, not IMEI/SIM number.
 php -r '
