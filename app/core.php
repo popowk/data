@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=14) return;
+        if ($ready>=15) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -378,6 +378,21 @@ function migrate(PDO $conn): void {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(14,UTC_TIMESTAMP())");
     }
+    if ($version < 15) {
+        // Optional sampled PHP timing only. No customer/account/device data.
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_api_perf_samples (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          action VARCHAR(32) NOT NULL,
+          http_status SMALLINT UNSIGNED NOT NULL,
+          total_ms INT UNSIGNED NOT NULL,
+          db_ms INT UNSIGNED NOT NULL,
+          query_count SMALLINT UNSIGNED NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_perf_when(created_at),
+          INDEX idx_perf_action_when(action,created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(15,UTC_TIMESTAMP())");
+    }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
@@ -431,7 +446,7 @@ function phonehub_role_can_view(string $role,string $view): bool {
     $staff=['accounts','devices','plans','client_logs'];
     $global=['dashboard','accounts','groups','group_bulk','devices','packages',
         'plans','backup_keys','client_logs','releases','ai','cloud_features',
-        'update','admins','audit'];
+        'update','admins','audit','performance'];
     return match($role) {
         'owner','global'=>in_array($view,$global,true),
         'admin'=>in_array($view,$staff,true),
