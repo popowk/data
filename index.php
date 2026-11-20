@@ -255,7 +255,7 @@ $adminRole=admin_role();
 $view=(string)($_GET['view'] ?? ($adminRole==='admin'?'accounts':'dashboard'));
 if (in_array($view,['mobiles','sessions'],true)) {header('Location: index.php?view=devices',true,302);exit;}
 if ($view==='gateway') {http_response_code(404);exit('旧客户端接口接管功能已移除；请使用新版授权 API');}
-if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','admins','audit','cloud_features'],true))
+if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','admins','audit','cloud_features','performance'],true))
     $view=$adminRole==='admin'?'accounts':'dashboard';
 // Keep old saved links working while removing duplicate sidebar entries.
 if ($view==='ai') { header('Location: index.php?view=cloud_features#ai-management',true,302);exit; }
@@ -303,6 +303,7 @@ $nav=[
 'devices'=>['设备管理','▣'],
 'plans'=>['套餐管理','▤'],
 'client_logs'=>['客户端日志','☷'],
+'performance'=>['接口性能监控','▤'],
 'releases'=>['版本发布与操作包','⇧'],
 'cloud_features'=>['客户端能力与 AI','⚙'],
 'update'=>['系统维护','⟳'],
@@ -441,6 +442,6 @@ if($adminRole==='owner') backup_admin_view(true);
 <?php elseif($view==='audit'): $before=max(0,(int)($_GET['before']??0)); $auditSql="SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id ORDER BY a.id DESC LIMIT 51"; $audits=$before>0?sql("SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id WHERE a.id < ? ORDER BY a.id DESC LIMIT 51",[$before])->fetchAll():sql($auditSql)->fetchAll(); $hasOlder=count($audits)>50; if($hasOlder)array_pop($audits); $nextBefore=$audits?(int)$audits[count($audits)-1]['id']:0; ?>
 <div class="page-title"><div><h1>管理员操作记录</h1><p>按时间倒序展示，每页 50 条；可继续加载更早记录</p></div><?php if($before>0): ?><a class="btn" href="?view=audit">返回最新记录</a><?php endif ?></div><div class="card"><div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div><?php if($hasOlder && $nextBefore>0): ?><div class="editor-actions"><a class="btn" href="?view=audit&amp;before=<?=$nextBefore?>">更早记录</a></div><?php endif ?></div>
 <?php elseif ($view==='releases'): require __DIR__.'/app/release_admin.php'; release_admin_view(); ?>
-<?php elseif (in_array($view,['admins','devices','client_logs','cloud_features'],true)): require __DIR__.'/app/features.php'; feature_view($view); ?>
+<?php elseif (in_array($view,['admins','devices','client_logs','cloud_features','performance'],true)): require __DIR__.'/app/features.php'; feature_view($view); ?>
 <?php endif ?>
 </main></div></div><div class="toast" id="toast" role="status" aria-live="polite"></div><script src="assets/app.js?v=<?=rawurlencode(app_version())?>" defer></script></body></html>
