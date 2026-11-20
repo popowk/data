@@ -185,7 +185,6 @@
     }
     form.elements.id.value=payload?.id || 0;
     form.elements.username.value=payload?.username || '';
-    form.elements.password.value='';
     form.elements.group_id.value=payload?.group_id || 0;
     form.elements.device_limit.value=payload?.device_limit || 3;
     form.elements.mobile_limit.value=payload?.mobile_limit ?? 1;
