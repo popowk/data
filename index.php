@@ -105,11 +105,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $until=input_to_utc(trim((string)($_POST['license_until'] ?? '')));
             $notes=trim((string)($_POST['notes'] ?? ''));
             if (utf8_length($notes)>500) throw new RuntimeException('备注不能超过 500 字');
-            // Customer passwords are generated on create and can only be
-            // changed by the dedicated account_password endpoint. Reject
-            // forged/legacy POSTs even though the UI does not offer editing.
-            if (isset($_POST['password']) && (string)$_POST['password']!=='')
-                throw new PhoneHubPermissionException('请使用独立的客户密码重置功能，不允许通过授权表单修改密码');
+            // A password may be selected at creation time only. Editing an
+            // existing customer never changes its password; reset remains
+            // exclusively available through account_password.
+            $submittedPassword=$_POST['password']??'';
+            if (!is_string($submittedPassword))
+                throw new RuntimeException('客户密码格式不正确');
+            if (!$creating && $submittedPassword!=='')
+                throw new PhoneHubPermissionException('已有客户密码请使用独立的密码重置功能修改');
+            // Empty on creation retains existing secure random generation.
+            $newPassword=$creating
+                ? ($submittedPassword!==''?$submittedPassword:random_password())
+                : '';
+            $newPasswordHash=$creating?password_hash_safe($newPassword):'';
             db()->beginTransaction();
             if ($id) {
                 $old=sql('SELECT username,enabled,device_limit FROM phonehub_users WHERE id=? FOR UPDATE',[$id])->fetch();
@@ -135,10 +143,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$enabled || $limit<(int)$old['device_limit'])
                     sql('DELETE FROM phonehub_sessions WHERE user_id=?',[$id]);
             } else {
-                $newPassword=random_password();
-                $hash=password_hash_safe($newPassword);
                 sql('INSERT INTO phonehub_users(username,password_hash,enabled,device_limit,license_until,entitlements,ai_enabled,allow_client_ai_key,ai_daily_limit) VALUES(?,?,?,?,?,?,?,?,?)',
-                    [$name,$hash,$enabled,$limit,$until,json_encode($entitlements),$aiEnabled,$allowClientAiKey,$aiDailyLimit]);
+                    [$name,$newPasswordHash,$enabled,$limit,$until,json_encode($entitlements),$aiEnabled,$allowClientAiKey,$aiDailyLimit]);
                 $id=(int)db()->lastInsertId();
             }
             sql('INSERT INTO phonehub_user_meta(user_id,group_id,mobile_limit,notes,opening_plan_code) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE group_id=VALUES(group_id),mobile_limit=VALUES(mobile_limit),notes=VALUES(notes),opening_plan_code=COALESCE(VALUES(opening_plan_code),opening_plan_code)',
@@ -323,14 +329,17 @@ $nav=[
 <div class="stats"><div class="stat"><span>客户总数</span><strong><?=$total?></strong><small>全部授权账号</small></div><div class="stat"><span>正常授权</span><strong><?=$enabled?></strong><small>账号启用中（不含到期校验）</small></div><div class="stat"><span>电脑名额占用</span><strong><?=$devices?></strong><small>未过期的设备会话</small></div><div class="stat"><span>客户分组</span><strong><?=count($groups)?></strong><small>支持自主分组管理</small></div></div>
 <div class="card"><div class="card-head"><h2>最近客户</h2><a href="?view=accounts">查看全部</a></div><div class="table-scroll"><table><thead><tr><th>客户账号</th><th>分组</th><th>电脑名额</th><th>授权期限</th><th>状态</th></tr></thead><tbody><?php foreach (array_slice($accounts,0,8) as $a): ?><tr><td><b><?=h($a['username'])?></b></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td></tr><?php endforeach ?></tbody></table></div></div>
 <?php elseif ($view==='accounts'): ?>
-<div class="page-title"><div><h1>客户授权</h1><p>新增客户自动生成随机密码；安卓手机额度由当前客户端接口实时检查</p></div><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><button class="btn primary" data-action="new-account">+ 创建客户</button><?php else: ?><span class="muted">只读查看，不允许修改授权</span><?php endif ?></div>
+<div class="page-title"><div><h1>客户授权</h1><p>新建客户可设置密码，留空则生成安全随机密码；已有客户只能通过独立重置功能改密</p></div><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><button class="btn primary" data-action="new-account">+ 创建客户</button><?php else: ?><span class="muted">只读查看，不允许修改授权</span><?php endif ?></div>
 <?php if(phonehub_role_can_action($adminRole,'account_save')): ?>
 <div class="card editor" id="account-editor" hidden><div class="card-head"><h2 id="editor-title">创建客户</h2><button class="text-button" data-action="close-editor">关闭</button></div>
 <form data-ajax="account_save"><input name="action" type="hidden" value="account_save"><input name="id" type="hidden" value="0">
 <div class="form-grid">
 <div class="field span2" id="opening-plan-field"><label for="opening-plan">客户套餐（创建后可修改）</label><select id="opening-plan" name="opening_plan" required><option value="">请选择客户套餐</option><?php foreach(phonehub_opening_plans(false) as $code=>$plan): ?><option value="<?=h($code)?>" data-pc="<?=(int)$plan['device_limit']?>" data-mobile="<?=(int)$plan['mobile_limit']?>" data-enabled="<?=(int)$plan['enabled']?>" <?=$plan['enabled']?'':'disabled'?>><?=h($plan['label'])?><?=$plan['enabled']?'':'（已停用）'?> · <?=(int)$plan['device_limit']?> 台电脑 / <?=(int)$plan['mobile_limit']?> 台手机</option><?php endforeach ?><option value="custom">自定义授权额度</option></select><span class="footnote">切换套餐会按新套餐设置电脑和手机额度；原套餐未变时保留当前额度，也可单独调整。套餐不影响其他平台、AI 权限、到期时间或费用。</span></div>
 <div class="field"><label>客户账号</label><input name="username" required minlength="3" maxlength="64"></div>
-<div class="field"><label>客户密码</label><p class="footnote">创建客户时自动生成；修改密码请使用客户列表中的“重置密码”，新密码只显示一次。</p></div>
+<div class="field" id="customer-create-password-field"><label for="customer-create-password">初始密码（仅创建客户时）</label>
+<input id="customer-create-password" name="password" type="password" autocomplete="new-password"
+  minlength="12" maxlength="128" placeholder="留空自动生成安全密码，或输入 12–128 字节密码">
+<span class="footnote">可自行指定初始密码；留空则自动生成。已有客户修改密码请在客户列表使用“重置密码”。密码不会显示在编辑界面。</span></div>
 <div class="field"><label>客户分组</label><select name="group_id"><option value="0">未分组</option><?php foreach($groups as $g): ?><option value="<?=(int)$g['id']?>"><?=h($g['name'])?></option><?php endforeach ?></select></div>
 <div class="field"><label>授权截止时间（北京时间，留空永久）</label><input name="license_until" type="datetime-local" step="1"></div>
 <div class="field"><label>电脑授权名额（1–100）</label><input name="device_limit" type="number" min="1" max="100" value="3"></div>
