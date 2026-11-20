@@ -378,7 +378,9 @@ $accountPageLink=static function(int $page) use($accountFilters): string {
 <td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><td class="actions">
 <button class="small-link" data-edit="<?=h(json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP|JSON_HEX_TAG))?>">编辑</button>
 <button class="small-link" data-action="reset-account-password" data-id="<?=(int)$a['id']?>">重置密码</button>
-<button class="small-link" data-action="revoke-account" data-id="<?=(int)$a['id']?>">踢下线</button></td><?php endif ?></tr><?php endforeach ?>
+<button class="small-link" data-action="revoke-account" data-id="<?=(int)$a['id']?>">踢下线</button>
+<?php if(in_array($adminRole,['owner','global'],true)): ?><a class="small-link" href="<?=h('index.php?'.http_build_query(['view'=>'audit','audit_q'=>$a['username']]))?>">授权记录</a><?php endif ?>
+</td><?php endif ?></tr><?php endforeach ?>
 <?php if (!$accounts): ?><tr><td colspan="<?=phonehub_role_can_action($adminRole,'account_save')?9:8?>" class="empty-result">没有符合条件的客户，请调整筛选条件。</td></tr><?php endif ?>
 </tbody></table></div>
 <nav class="account-pagination" aria-label="客户列表分页">
@@ -439,8 +441,36 @@ require_once __DIR__.'/app/features.php';
 history_cleanup_admin_view();
 if($adminRole==='owner') backup_admin_view(true);
 ?>
-<?php elseif($view==='audit'): $before=max(0,(int)($_GET['before']??0)); $auditSql="SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id ORDER BY a.id DESC LIMIT 51"; $audits=$before>0?sql("SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id WHERE a.id < ? ORDER BY a.id DESC LIMIT 51",[$before])->fetchAll():sql($auditSql)->fetchAll(); $hasOlder=count($audits)>50; if($hasOlder)array_pop($audits); $nextBefore=$audits?(int)$audits[count($audits)-1]['id']:0; ?>
-<div class="page-title"><div><h1>管理员操作记录</h1><p>按时间倒序展示，每页 50 条；可继续加载更早记录</p></div><?php if($before>0): ?><a class="btn" href="?view=audit">返回最新记录</a><?php endif ?></div><div class="card"><div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div><?php if($hasOlder && $nextBefore>0): ?><div class="editor-actions"><a class="btn" href="?view=audit&amp;before=<?=$nextBefore?>">更早记录</a></div><?php endif ?></div>
+<?php elseif($view==='audit'):
+$before=max(0,(int)($_GET['before']??0));
+$auditQ=trim((string)($_GET['audit_q']??''));
+if(utf8_length($auditQ)>80) $auditQ=utf8_limit($auditQ,80);
+$auditWhere=[];$auditParams=[];
+if($auditQ!=='') {
+    $auditLike='%'.str_replace(['\\','%','_'],['\\\\','\\%','\\_'],$auditQ).'%';
+    $auditWhere[]='(a.target LIKE ? OR a.action LIKE ?)';
+    $auditParams[]=$auditLike;$auditParams[]=$auditLike;
+}
+if($before>0) {$auditWhere[]='a.id < ?';$auditParams[]=$before;}
+$auditSql="SELECT a.id,a.action,a.target,a.ip,a.created_at,m.username
+    FROM phonehub_admin_audit a LEFT JOIN phonehub_admins m ON m.id=a.admin_id".
+    ($auditWhere?' WHERE '.implode(' AND ',$auditWhere):'')." ORDER BY a.id DESC LIMIT 51";
+$audits=sql($auditSql,$auditParams)->fetchAll();
+$hasOlder=count($audits)>50;if($hasOlder)array_pop($audits);
+$nextBefore=$audits?(int)$audits[count($audits)-1]['id']:0;
+$auditPageLink=static fn(int $id):string=>'index.php?'.http_build_query([
+    'view'=>'audit','audit_q'=>$auditQ,'before'=>$id]);
+?>
+<div class="page-title"><div><h1>管理员操作记录</h1><p>按时间倒序，每页 50 条；可按操作类型和历史目标文本检索</p></div><?php if($before>0): ?><a class="btn" href="<?=h($auditPageLink(0))?>">返回最新记录</a><?php endif ?></div>
+<div class="card">
+<form class="device-search-form" method="get" action="index.php"><input type="hidden" name="view" value="audit">
+<label for="admin-audit-q">客户账号、操作名称或目标摘要</label>
+<input id="admin-audit-q" name="audit_q" maxlength="80" value="<?=h($auditQ)?>" placeholder="请输入关键词">
+<button type="submit" class="btn">查询审计记录</button>
+<?php if($auditQ!==''): ?><a class="btn" href="?view=audit">清除筛选</a><?php endif ?>
+</form>
+<p class="footnote">历史记录按原审计目标文本搜索。部分旧操作只保存了记录 ID 或摘要，无法还原未记录的字段差异。</p>
+<div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div><?php if($hasOlder && $nextBefore>0): ?><div class="editor-actions"><a class="btn" href="<?=h($auditPageLink($nextBefore))?>">更早记录</a></div><?php endif ?></div>
 <?php elseif ($view==='releases'): require __DIR__.'/app/release_admin.php'; release_admin_view(); ?>
 <?php elseif (in_array($view,['admins','devices','client_logs','cloud_features','performance'],true)): require __DIR__.'/app/features.php'; feature_view($view); ?>
 <?php endif ?>
