@@ -46,8 +46,94 @@ function phonehub_group_member_snapshot(array $ids): string {
     return hash('sha256',implode(',',array_map(static fn($id)=>(string)(int)$id,$ids)));
 }
 
+/**
+ * Bounded, explicit history cleanup. Core license/device/keys are never
+ * eligible for deletion. MySQL table and date-column names are static code,
+ * while durations are range checked and passed as bound values.
+ */
+function phonehub_history_cleanup_targets(): array {
+    return [
+      'client_logs'=>['label'=>'客户端运行日志','table'=>'phonehub_client_logs','date'=>'created_at','min'=>7,'default'=>30],
+      'ai_usage'=>['label'=>'AI 请求统计','table'=>'phonehub_ai_usage','date'=>'created_at','min'=>30,'default'=>180],
+      'replacement_events'=>['label'=>'自动换机统计','table'=>'phonehub_computer_replacement_events','date'=>'created_at','min'=>30,'default'=>180],
+      'package_downloads'=>['label'=>'操作包下载历史','table'=>'phonehub_package_downloads','date'=>'downloaded_at','min'=>90,'default'=>365],
+      'admin_audit'=>['label'=>'管理员操作审计（仅主账号）','table'=>'phonehub_admin_audit','date'=>'created_at','min'=>365,'default'=>730]
+    ];
+}
+function phonehub_history_cleanup_action(string $action): never {
+    require_global_admin();
+    $targets=phonehub_history_cleanup_targets();
+    $kind=(string)($_POST['kind']??'');
+    if (!isset($targets[$kind])) throw new RuntimeException('历史记录类型无效');
+    if ($kind==='admin_audit') require_owner();
+    $days=filter_var($_POST['days']??null,FILTER_VALIDATE_INT);
+    $policy=$targets[$kind];
+    if ($days===false || $days===null || $days<$policy['min'] || $days>3650)
+        throw new RuntimeException('保留天数不符合该类型的安全下限（'.$policy['min'].'–3650 天）');
+    $cutoff=gmdate('Y-m-d H:i:s',time()-$days*86400);
+    $table=$policy['table'];$date=$policy['date'];
+    if ($action==='history_cleanup_preview') {
+        $count=(int)sql("SELECT COUNT(*) FROM $table WHERE $date < ?",[$cutoff])->fetchColumn();
+        $created=time();
+        $secret=hash_hmac('sha256',"$kind|$days|$cutoff|$count|$created",csrf());
+        json_response(['ok'=>true,'kind'=>$kind,'label'=>$policy['label'],'days'=>$days,
+            'eligible'=>$count,'batch_limit'=>500,'preview_at'=>$created,'preview_count'=>$count,
+            'preview_token'=>$secret,
+            'message'=>'仅预览，不会删除任何记录']);
+    }
+    if ($action==='history_cleanup_apply') {
+        $issued=filter_var($_POST['preview_at']??null,FILTER_VALIDATE_INT);
+        $count=filter_var($_POST['preview_count']??null,FILTER_VALIDATE_INT);
+        $token=(string)($_POST['preview_token']??'');
+        if (!is_int($issued) || $issued>time()+30 || $issued<time()-300 ||
+            !is_int($count) || $count<0 || !preg_match('/^[a-f0-9]{64}$/D',$token))
+            throw new RuntimeException('历史清理预览已失效，请重新预览');
+        $expected=hash_hmac('sha256',"$kind|$days|$cutoff|$count|$issued",csrf());
+        // Cutoff can shift by seconds. Reconstruct it from the snapshot
+        // timestamp and fixed duration for exact confirmation semantics.
+        $confirmedCutoff=gmdate('Y-m-d H:i:s',$issued-$days*86400);
+        $expected=hash_hmac('sha256',"$kind|$days|$confirmedCutoff|$count|$issued",csrf());
+        if (!hash_equals($expected,$token)) throw new RuntimeException('历史清理预览校验失败');
+        $current=(int)sql("SELECT COUNT(*) FROM $table WHERE $date < ?",[$confirmedCutoff])->fetchColumn();
+        if ($current!==$count) throw new RuntimeException('待清理数量已变化，请重新预览');
+        // This deliberately processes 500 rows per confirmed action rather
+        // than a table-wide DELETE that can lock production for a long time.
+        $removed=$current>0 ? sql("DELETE FROM $table WHERE $date < ? ORDER BY id ASC LIMIT 500",
+            [$confirmedCutoff])->rowCount() : 0;
+        audit('history_cleanup',"$kind days=$days removed=$removed");
+        json_response(['ok'=>true,'removed'=>$removed,'remaining'=>max(0,$current-$removed),
+            'message'=>'本次清理 '.$removed.' 条；剩余约 '.max(0,$current-$removed).' 条，请重新预览后再清理']);
+    }
+    throw new RuntimeException('未知历史清理操作');
+}
+function history_cleanup_admin_view(): void {
+    require_global_admin();
+    $targets=phonehub_history_cleanup_targets();
+    $owner=admin_role()==='owner';
+    ?>
+    <div class="card" id="maintenance-history">
+      <div class="card-head"><h2>历史记录保留与分批清理</h2><span class="count">先预览，每次最多 500 条</span></div>
+      <p class="muted">仅清理明确选择的历史统计，不处理客户授权、电脑会话、设备绑定、操作包文件、签名或密钥。默认不执行自动删除。</p>
+      <form data-ajax="history_cleanup_apply">
+        <input type="hidden" name="action" value="history_cleanup_apply">
+        <div class="form-grid">
+          <div class="field"><label>历史记录类型</label><select name="kind" id="history-cleanup-kind">
+            <?php foreach($targets as $key=>$config): if ($key==='admin_audit' && !$owner) continue; ?>
+            <option value="<?=h($key)?>" data-default="<?=(int)$config['default']?>" data-min="<?=(int)$config['min']?>"><?=h($config['label'])?>（至少保留 <?=(int)$config['min']?> 天）</option>
+            <?php endforeach ?>
+          </select></div>
+          <div class="field"><label>保留最近天数</label><input name="days" id="history-cleanup-days" type="number" min="7" max="3650" value="30" required></div>
+        </div>
+        <p class="footnote">预览确认后本次最多清理 500 条旧记录；还剩数据时可重复操作。管理审计仅主管理员可操作，并至少保留一年。</p>
+        <div class="editor-actions"><button type="submit" class="btn">预览并确认清理</button></div>
+      </form>
+    </div>
+    <?php
+}
 function feature_action(string $action): never {
     phonehub_require_action($action);
+    if (in_array($action,['history_cleanup_preview','history_cleanup_apply'],true))
+        phonehub_history_cleanup_action($action);
     $id=(int)($_POST['id'] ?? 0);
     if ($action==='admin_create') {
         require_owner();
