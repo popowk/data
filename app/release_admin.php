@@ -271,7 +271,7 @@ function release_admin_view(): void {
     </div>
     <div class="card" id="main-program-download-settings">
       <div class="card-head"><h2>官网主程序下载地址</h2><span class="count">程序启动时查询</span></div>
-      <p class="muted">独立于 scrcpy 的主程序下载链接配置，暂时使用相同 ZIP 地址作为占位值。正式下载文件确定后请替换；支持 ZIP / EXE / MSI，查询接口使用 300 秒缓存。</p>
+      <p class="muted">独立于 scrcpy 的主程序下载地址，支持后台实时修改。首次安装可能使用 ZIP 初始化占位值，请以当前表单显示的已保存地址为准；支持 ZIP / EXE / MSI 和 300 秒缓存。</p>
       <form data-ajax="main_program_url_save">
         <input type="hidden" name="action" value="main_program_url_save">
         <div class="field">
