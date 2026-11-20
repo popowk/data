@@ -1008,7 +1008,7 @@ echo db()->lastInsertId()."|".$path;
 oldCoreId="${legacyCoreInfo%%|*}"
 oldCorePath="${legacyCoreInfo#*|}"
 curl -fsS -b "$coreOwnerCookies" 'http://127.0.0.1:18765/index.php?view=releases&release_q=0.7.0' -o "$coreOwnerHtml"
-grep -q 'data-action="release-delete"' "$adminHtml"
+grep -q 'data-action="release-delete"' "$coreOwnerHtml"
 newestDelete=$(curl -sS -b "$coreOwnerCookies" -X POST 'http://127.0.0.1:18765/index.php' \
  --data-urlencode "csrf=$coreOwnerCsrf" --data-urlencode 'action=release_delete' \
  --data-urlencode "id=$releaseId")
