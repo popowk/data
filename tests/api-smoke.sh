@@ -228,6 +228,20 @@ planCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.
   --data-urlencode "device_limit=99" --data-urlencode "mobile_limit=999" \
   --data-urlencode "enabled=on" --data-urlencode "entitlements[]=douyin")
 TEST_RESPONSE="$planCreated" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["id"]>0 and len(j["password"])>=12,j'
+PLAN_ID=$(TEST_RESPONSE="$planCreated" python3 -c 'import os,json;print(json.loads(os.environ["TEST_RESPONSE"])["id"])')
+CREATION_PASSWORD=$(TEST_RESPONSE="$planCreated" python3 -c 'import os,json;print(json.loads(os.environ["TEST_RESPONSE"])["password"])')
+PLAN_ID="$PLAN_ID" CREATION_PASSWORD="$CREATION_PASSWORD" php -r '
+require "app/core.php";
+$row=sql("SELECT source,actor_name,changes_json FROM phonehub_account_change_events WHERE user_id=? ORDER BY id",[(int)getenv("PLAN_ID")])->fetchAll();
+if(count($row)!==1 || $row[0]["source"]!=="create" || $row[0]["actor_name"]!=="ci_ai_owner")exit(11);
+$changes=json_decode($row[0]["changes_json"],true);
+if(($changes["opening_plan_code"]["after"]??null)!=="personal" ||
+   ($changes["device_limit"]["after"]??null)!==1 ||
+   ($changes["mobile_limit"]["after"]??null)!==1 ||
+   ($changes["entitlements"]["after"]??[])!==["douyin"])exit(12);
+if(str_contains($row[0]["changes_json"],getenv("CREATION_PASSWORD")) ||
+   str_contains($row[0]["changes_json"],"password_hash"))exit(13);
+'
 # Creation can optionally use a user-chosen initial password; editing still
 # cannot mutate passwords. Blank retains the random-password behavior above.
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts' -o "$adminHtml"
@@ -300,7 +314,7 @@ for page in accounts devices plans client_logs; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 200 || { echo "ordinary GET denied $page ($status)" >&2; exit 1; }
 done
-for page in dashboard groups group_bulk packages releases cloud_features update admins audit performance; do
+for page in dashboard groups group_bulk packages releases cloud_features update admins audit performance account_history; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 403 || { echo "ordinary GET allowed $page ($status)" >&2; exit 1; }
 done
@@ -387,6 +401,27 @@ switchedAccount=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/in
   --data-urlencode "mobile_limit=999" --data-urlencode "enabled=on" \
   --data-urlencode "entitlements[]=douyin")
 TEST_RESPONSE="$switchedAccount" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"],j'
+PLAN_USER_ID="$planSwitchId" php -r '
+require "app/core.php";
+$events=sql("SELECT actor_name,source,changes_json FROM phonehub_account_change_events
+ WHERE user_id=? ORDER BY id DESC LIMIT 1",[(int)getenv("PLAN_USER_ID")])->fetch();
+$diff=json_decode((string)$events["changes_json"],true);
+if(!$events || $events["source"]!=="update" || $events["actor_name"]!=="ci_ai_owner" ||
+   ($diff["opening_plan_code"]["before"]??null)!=="personal" ||
+   ($diff["opening_plan_code"]["after"]??null)!=="standard" ||
+   ($diff["device_limit"]["before"]??null)!==1 ||
+   ($diff["device_limit"]["after"]??null)!==3 ||
+   ($diff["mobile_limit"]["before"]??null)!==1 ||
+   ($diff["mobile_limit"]["after"]??null)!==5)exit(14);
+'
+curl -fsS -b "$adminCookies" "http://127.0.0.1:18765/index.php?view=account_history&user_id=$planSwitchId" -o "$adminHtml"
+grep -q '客户授权变更明细' "$adminHtml"
+grep -q '开户套餐' "$adminHtml"
+grep -q 'ci_ai_owner' "$adminHtml"
+grep -q '变更明细' "$adminHtml"
+# Stable customer IDs, not usernames or untrusted query strings, bind history.
+missingHistory=$(curl -sS -b "$adminCookies" -o "$adminHtml" -w '%{http_code}' 'http://127.0.0.1:18765/index.php?view=account_history&user_id=0')
+test "$missingHistory" = 404
 PLAN_USER_ID="$planSwitchId" php -r '
 $cfg=require "storage/config.php";$p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
 $s=$p->prepare("SELECT u.device_limit,m.mobile_limit,m.opening_plan_code,u.entitlements FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE u.id=?");$s->execute([(int)getenv("PLAN_USER_ID")]);$r=$s->fetch(PDO::FETCH_ASSOC);
@@ -495,6 +530,19 @@ applied=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php'
   --data-urlencode "group_id=$groupId" --data-urlencode "apply_device_limit=on" \
   --data-urlencode "device_limit=6" --data-urlencode "preview_snapshot=$freshSnapshot")
 TEST_RESPONSE="$applied" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and "2" in j["message"],j'
+GROUP_ID="$groupId" php -r '
+require "app/core.php";
+$rows=sql("SELECT e.user_id,e.source,e.actor_name,e.changes_json
+ FROM phonehub_account_change_events e
+ JOIN phonehub_user_meta m ON m.user_id=e.user_id
+ WHERE m.group_id=? AND e.source=? ORDER BY e.user_id",[(int)getenv("GROUP_ID"),"group_bulk"])->fetchAll();
+if(count($rows)!==2)exit(15);
+foreach($rows as $row){
+ $diff=json_decode($row["changes_json"],true);
+ if($row["actor_name"]!=="ci_ai_owner" || ($diff["device_limit"]["after"]??null)!==6 ||
+    count($diff)!==1)exit(16);
+}
+'
 GROUP_ID="$groupId" php -r '
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);

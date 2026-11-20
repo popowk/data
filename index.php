@@ -119,11 +119,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 : '';
             $newPasswordHash=$creating?password_hash_safe($newPassword):'';
             db()->beginTransaction();
+            $historyBefore=[];
             if ($id) {
                 $old=sql('SELECT username,enabled,device_limit FROM phonehub_users WHERE id=? FOR UPDATE',[$id])->fetch();
                 if (!$old) throw new RuntimeException('账号不存在');
                 $oldMeta=sql('SELECT opening_plan_code FROM phonehub_user_meta WHERE user_id=? FOR UPDATE',[$id])->fetch();
                 $previousPlan=$oldMeta?($oldMeta['opening_plan_code']??null):null;
+                // Fetch after acquiring the customer lock to avoid stale
+                // before/after comparisons with concurrent admin changes.
+                $historyBefore=phonehub_account_history_snapshots([$id])[$id]??[];
                 if ($requestedPlan!=='' && $requestedPlan!==$previousPlan) {
                     if ($requestedPlan!=='custom') {
                         // Lock the currently enabled preset; never trust a
@@ -149,6 +153,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             sql('INSERT INTO phonehub_user_meta(user_id,group_id,mobile_limit,notes,opening_plan_code) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE group_id=VALUES(group_id),mobile_limit=VALUES(mobile_limit),notes=VALUES(notes),opening_plan_code=COALESCE(VALUES(opening_plan_code),opening_plan_code)',
                 [$id,$group?:null,$mobile,$notes,$openingPlan]);
+            $historyAfter=phonehub_account_history_snapshots([$id])[$id]??[];
+            phonehub_account_history_record($id,$creating?'create':'update',$historyBefore,$historyAfter);
             audit('account_save',$name);
             if ($planChanged)
                 audit('account_plan_change',$name.' '.($previousPlan??'legacy').' -> '.$openingPlan);
@@ -261,7 +267,7 @@ $adminRole=admin_role();
 $view=(string)($_GET['view'] ?? ($adminRole==='admin'?'accounts':'dashboard'));
 if (in_array($view,['mobiles','sessions'],true)) {header('Location: index.php?view=devices',true,302);exit;}
 if ($view==='gateway') {http_response_code(404);exit('旧客户端接口接管功能已移除；请使用新版授权 API');}
-if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','admins','audit','cloud_features','performance'],true))
+if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','packages','plans','backup_keys','client_logs','releases','ai','update','admins','audit','cloud_features','performance','account_history'],true))
     $view=$adminRole==='admin'?'accounts':'dashboard';
 // Keep old saved links working while removing duplicate sidebar entries.
 if ($view==='ai') { header('Location: index.php?view=cloud_features#ai-management',true,302);exit; }
@@ -388,7 +394,7 @@ $accountPageLink=static function(int $page) use($accountFilters): string {
 <button class="small-link" data-edit="<?=h(json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP|JSON_HEX_TAG))?>">编辑</button>
 <button class="small-link" data-action="reset-account-password" data-id="<?=(int)$a['id']?>">重置密码</button>
 <button class="small-link" data-action="revoke-account" data-id="<?=(int)$a['id']?>">踢下线</button>
-<?php if(in_array($adminRole,['owner','global'],true)): ?><a class="small-link" href="<?=h('index.php?'.http_build_query(['view'=>'audit','audit_q'=>$a['username']]))?>">授权记录</a><?php endif ?>
+<?php if(in_array($adminRole,['owner','global'],true)): ?><a class="small-link" href="<?=h('index.php?'.http_build_query(['view'=>'account_history','user_id'=>(int)$a['id']]))?>">变更明细</a><?php endif ?>
 </td><?php endif ?></tr><?php endforeach ?>
 <?php if (!$accounts): ?><tr><td colspan="<?=phonehub_role_can_action($adminRole,'account_save')?9:8?>" class="empty-result">没有符合条件的客户，请调整筛选条件。</td></tr><?php endif ?>
 </tbody></table></div>
@@ -450,6 +456,77 @@ require_once __DIR__.'/app/features.php';
 history_cleanup_admin_view();
 if($adminRole==='owner') backup_admin_view(true);
 ?>
+<?php elseif($view==='account_history'):
+phonehub_require_view('account_history');
+$historyUserId=filter_var($_GET['user_id']??null,FILTER_VALIDATE_INT);
+if(!is_int($historyUserId) || $historyUserId<1) {http_response_code(404);exit('客户记录不存在');}
+$historyUser=sql('SELECT id,username FROM phonehub_users WHERE id=?',[$historyUserId])->fetch();
+if(!$historyUser) {http_response_code(404);exit('客户记录不存在');}
+$historyBefore=max(0,(int)($_GET['before']??0));
+$historyParams=[$historyUserId];
+$historyWhere=' WHERE e.user_id=?';
+if($historyBefore>0) {$historyWhere.=' AND e.id<?';$historyParams[]=$historyBefore;}
+$historyEvents=sql('SELECT e.id,e.source,e.actor_name,e.changes_json,e.created_at
+    FROM phonehub_account_change_events e'.$historyWhere.
+    ' ORDER BY e.id DESC LIMIT 26',$historyParams)->fetchAll();
+$hasMoreHistory=count($historyEvents)>25;
+if($hasMoreHistory)array_pop($historyEvents);
+$historyNext=$historyEvents?(int)$historyEvents[count($historyEvents)-1]['id']:0;
+$historyLink=static fn(int $id): string=>'index.php?'.http_build_query([
+    'view'=>'account_history','user_id'=>$historyUserId,'before'=>$id]);
+$historySources=['create'=>'创建客户','update'=>'编辑授权',
+  'group_bulk'=>'分组批量修改','password_reset'=>'密码重置'];
+$historyLabels=phonehub_account_history_fields();
+?>
+<div class="page-title"><div>
+  <h1>客户授权变更明细</h1>
+  <p><?=h($historyUser['username'])?> · 客户 ID #<?=(int)$historyUserId?> · 每页最多 25 条事件</p>
+</div><a class="btn" href="index.php?view=accounts">返回客户列表</a></div>
+<div class="card"><p class="muted">从 v0.5.32 起记录实际字段变化，不补造升级前未保存的历史。创建、编辑、批量修改和密码重置都会标明操作者；密码、密钥、Token 与备注内容不会进入此表。没有实际变化的重复保存不会新增变更事件。</p>
+  <?php if(!$historyEvents): ?><p class="footnote">暂无可查询的授权变更记录。</p><?php endif ?>
+  <div class="table-scroll"><table class="account-history-table"><thead>
+  <tr><th>时间（北京时间）/ 操作者</th><th>变更字段</th><th>修改前</th><th>修改后</th></tr>
+  </thead><tbody>
+  <?php foreach($historyEvents as $event):
+    $changes=json_decode((string)$event['changes_json'],true);
+    if(!is_array($changes))$changes=[];
+    $first=true;
+    $count=max(1,count($changes));
+  ?>
+    <?php if(!$changes): ?>
+      <tr><td><b><?=h(utc_to_cn($event['created_at']))?></b>
+        <div class="muted"><?=h($event['actor_name'])?> · <?=h($historySources[$event['source']]??$event['source'])?></div></td>
+        <td colspan="3">密码已重置；不记录密码、密码哈希或密钥。</td></tr>
+    <?php else: ?>
+      <?php foreach($changes as $field=>$delta):
+        $redacted=$field==='notes' && is_array($delta) && !empty($delta['redacted']);
+        if(!isset($historyLabels[$field]) && !$redacted)continue;
+      ?>
+      <tr>
+        <?php if($first): ?><td rowspan="<?=$count?>" class="account-history-meta">
+            <b><?=h(utc_to_cn($event['created_at']))?></b>
+            <div class="muted"><?=h($event['actor_name'])?></div>
+            <div class="muted"><?=h($historySources[$event['source']]??$event['source'])?></div>
+          </td><?php $first=false; endif ?>
+        <td><?=h($redacted?'内部备注（内容隐藏）':$historyLabels[$field])?></td>
+        <?php if($redacted): ?>
+          <td>不展示</td><td>已修改</td>
+        <?php else: ?>
+          <td><?=h($event['source']==='create'?'—':phonehub_account_history_value($field,$delta['before']??null))?></td>
+          <td><?=h(phonehub_account_history_value($field,$delta['after']??null))?></td>
+        <?php endif ?>
+      </tr>
+      <?php endforeach ?>
+    <?php endif ?>
+  <?php endforeach ?>
+  </tbody></table></div>
+  <?php if($hasMoreHistory && $historyNext>0): ?><div class="editor-actions">
+    <a class="btn" href="<?=h($historyLink($historyNext))?>">更早的变更记录</a>
+  </div><?php endif ?>
+  <?php if($historyBefore>0): ?><div class="editor-actions">
+    <a class="btn" href="<?=h($historyLink(0))?>">返回最新记录</a>
+  </div><?php endif ?>
+</div>
 <?php elseif($view==='audit'):
 $before=max(0,(int)($_GET['before']??0));
 $auditQ=trim((string)($_GET['audit_q']??''));

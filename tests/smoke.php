@@ -41,7 +41,7 @@ if (!in_array('opening_plan_code',$metaColumns,true))
     throw new RuntimeException('opening plan migration missing');
 $planTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_plan_templates'")->fetchColumn();
 if($planTable!==1) throw new RuntimeException('plan migration table missing');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==15)
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==16)
     throw new RuntimeException('performance sample migration version incorrect');
 $defaultScrcpy=$pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn();
 if($defaultScrcpy!==SCRCPY_DEFAULT_DOWNLOAD_URL)
@@ -60,7 +60,7 @@ if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resou
     throw new RuntimeException('scrcpy migration seeded duplicate rows');
 if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resource='main_program'")->fetchColumn()!==1)
     throw new RuntimeException('main program migration seeded duplicate rows');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==15)
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==16)
     throw new RuntimeException('performance sample migration failed');
 $replacementColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_computer_replacement_events'")->fetchAll(PDO::FETCH_COLUMN);
@@ -82,6 +82,17 @@ if(array_intersect($perfColumns,['device_id','user_id','ip','token','request_bod
 migrate($pdo);
 if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_admin_migrations WHERE version=15")->fetchColumn()!==1)
     throw new RuntimeException('performance telemetry migration is not idempotent');
+$changeColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_account_change_events'")->fetchAll(PDO::FETCH_COLUMN);
+foreach (['id','user_id','actor_id','actor_name','source','changes_json','created_at'] as $column)
+    if(!in_array($column,$changeColumns,true))
+        throw new RuntimeException('customer authorization audit schema missing '.$column);
+foreach (['password','password_hash','token_hash','api_key','notes'] as $forbidden)
+    if (in_array($forbidden,$changeColumns,true))
+        throw new RuntimeException('customer authorization audit stores forbidden sensitive field '.$forbidden);
+migrate($pdo);
+if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_admin_migrations WHERE version=16")->fetchColumn()!==1)
+    throw new RuntimeException('customer authorization audit migration not idempotent');
 foreach (['https://example.com/PhoneHub.exe','https://example.com/PhoneHub.msi',
           MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL] as $validMain) {
     if(main_program_validate_download_url($validMain)!==$validMain)
@@ -124,10 +135,10 @@ if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
 $allowedViews=[
     'owner'=>['dashboard','accounts','groups','group_bulk','devices','packages',
       'plans','backup_keys','client_logs','releases','ai','update',
-      'admins','audit','cloud_features'],
+      'admins','audit','cloud_features','account_history'],
     'global'=>['dashboard','accounts','groups','group_bulk','devices','packages',
       'plans','backup_keys','client_logs','releases','ai','update',
-      'admins','audit','cloud_features'],
+      'admins','audit','cloud_features','account_history'],
     'admin'=>['accounts','devices','plans','client_logs'],
     'viewer'=>['dashboard','accounts','groups','packages']
 ];
@@ -506,6 +517,37 @@ $remainingSessions=(int)$pdo->query("SELECT COUNT(*) FROM phonehub_sessions WHER
 $auditCount=(int)$pdo->query("SELECT COUNT(*) FROM phonehub_admin_audit WHERE action='account_password' AND target='phonehub_reset_ci_user'")->fetchColumn();
 if ($resetResult['username']!=='phonehub_reset_ci_user' || !password_verify($resetResult['password'],$storedResetHash) || $remainingSessions!==0 || $auditCount<1)
     throw new RuntimeException('customer password reset regression: hash/session/audit mismatch');
+$resetHistory=sql('SELECT actor_name,source,changes_json FROM phonehub_account_change_events WHERE user_id=?',[$resetUserId])->fetchAll();
+if(count($resetHistory)!==1 || $resetHistory[0]['source']!=='password_reset' ||
+    $resetHistory[0]['actor_name']!=='ci_ai_owner' ||
+    $resetHistory[0]['changes_json']!=='{}' ||
+    str_contains(json_encode($resetHistory),'old-reset-password') ||
+    str_contains(json_encode($resetHistory),$resetResult['password']))
+    throw new RuntimeException('password reset history must store only the event with no secret');
+$changeConnection=db();
+$changeConnection->beginTransaction();
+try {
+    $before=phonehub_account_history_snapshots([$resetUserId])[$resetUserId]??[];
+    if(phonehub_account_history_record($resetUserId,'update',$before,$before))
+        throw new RuntimeException('unchanged authorization created a fake change event');
+    $after=$before;$after['device_limit']=5;$after['notes']='private-note-13911112222';
+    if(!phonehub_account_history_record($resetUserId,'update',$before,$after))
+        throw new RuntimeException('changed authorization was not audited');
+    $changes=sql('SELECT changes_json FROM phonehub_account_change_events
+      WHERE user_id=? AND source=? ORDER BY id DESC LIMIT 1',[$resetUserId,'update'])->fetchColumn();
+    $decoded=json_decode((string)$changes,true);
+    if(($decoded['device_limit']['after']??null)!==5 ||
+        empty($decoded['notes']['redacted']) ||
+        str_contains((string)$changes,'private-note-13911112222') ||
+        str_contains((string)$changes,'password'))
+        throw new RuntimeException('authorization history diff validation failed');
+    $changeConnection->rollBack();
+} catch(Throwable $e) {
+    if($changeConnection->inTransaction())$changeConnection->rollBack();
+    throw $e;
+}
+if((int)sql('SELECT COUNT(*) FROM phonehub_account_change_events WHERE user_id=?',[$resetUserId])->fetchColumn()!==1)
+    throw new RuntimeException('rolled-back authorization change incorrectly persisted');
 unset($_SESSION['admin_id'],$_SESSION['auth_version'],$_SESSION['admin_user']);
 @unlink(APP_STORE.'/config.php');
 

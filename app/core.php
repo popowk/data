@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=15) return;
+        if ($ready>=16) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -393,6 +393,22 @@ function migrate(PDO $conn): void {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(15,UTC_TIMESTAMP())");
     }
+    if ($version < 16) {
+        // Append-only application audit of customer authorization changes.
+        // No passwords, hashes, tokens, keys, raw notes or request bodies.
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_account_change_events (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          user_id BIGINT UNSIGNED NOT NULL,
+          actor_id BIGINT UNSIGNED NOT NULL,
+          actor_name VARCHAR(64) NOT NULL,
+          source VARCHAR(24) NOT NULL,
+          changes_json MEDIUMTEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_account_change_user_id(user_id,id),
+          INDEX idx_account_change_created(created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(16,UTC_TIMESTAMP())");
+    }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
@@ -446,7 +462,7 @@ function phonehub_role_can_view(string $role,string $view): bool {
     $staff=['accounts','devices','plans','client_logs'];
     $global=['dashboard','accounts','groups','group_bulk','devices','packages',
         'plans','backup_keys','client_logs','releases','ai','cloud_features',
-        'update','admins','audit','performance'];
+        'update','admins','audit','performance','account_history'];
     return match($role) {
         'owner','global'=>in_array($view,$global,true),
         'admin'=>in_array($view,$staff,true),
@@ -587,6 +603,117 @@ function random_password(int $length=20): string {
 function audit(string $action, string $target): void {
     sql('INSERT INTO phonehub_admin_audit(admin_id,action,target,ip) VALUES(?,?,?,?)',
         [admin_id(), $action, utf8_limit($target,150), (string)($_SERVER['REMOTE_ADDR'] ?? '')]);
+}
+/**
+ * Allowlisted authorization fields only. Notes are compared in memory but
+ * their text is never persisted in change events. Credential fields are never
+ * queried, compared or stored by this subsystem.
+ */
+function phonehub_account_history_fields(): array {
+    return [
+      'username'=>'客户账号',
+      'opening_plan_code'=>'开户套餐',
+      'group_id'=>'客户分组 ID',
+      'device_limit'=>'电脑授权名额',
+      'mobile_limit'=>'安卓手机名额',
+      'license_until'=>'授权截止时间',
+      'entitlements'=>'平台与扩展权限',
+      'enabled'=>'账号状态',
+      'ai_enabled'=>'AI 功能',
+      'allow_client_ai_key'=>'客户端自带 Key 权限',
+      'ai_daily_limit'=>'AI 每日请求额度'
+    ];
+}
+/**
+ * Read a consistent, normalized snapshot of customers while caller holds
+ * customer row locks inside an authorization-writing transaction.
+ */
+function phonehub_account_history_snapshots(array $ids): array {
+    $ids=array_values(array_unique(array_filter(array_map('intval',$ids),static fn(int $id)=>$id>0)));
+    $snapshots=[];
+    foreach (array_chunk($ids,200) as $part) {
+        $slots=implode(',',array_fill(0,count($part),'?'));
+        $rows=sql('SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,
+                u.ai_enabled,u.allow_client_ai_key,u.ai_daily_limit,
+                m.opening_plan_code,m.group_id,m.mobile_limit,m.notes
+            FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id
+            WHERE u.id IN ('.$slots.') ORDER BY u.id',$part)->fetchAll();
+        foreach($rows as $row) {
+            $entitlements=json_decode((string)$row['entitlements'],true);
+            $entitlements=array_values(array_unique(array_filter(is_array($entitlements)?$entitlements:[],
+                static fn($value)=>is_string($value))));
+            sort($entitlements,SORT_STRING);
+            $snapshots[(int)$row['id']]=[
+              'username'=>(string)$row['username'],
+              'opening_plan_code'=>$row['opening_plan_code']??null,
+              'group_id'=>$row['group_id']===null?null:(int)$row['group_id'],
+              'device_limit'=>(int)$row['device_limit'],
+              'mobile_limit'=>(int)($row['mobile_limit']??0),
+              'license_until'=>$row['license_until']??null,
+              'entitlements'=>$entitlements,
+              'enabled'=>(int)$row['enabled'],
+              'ai_enabled'=>(int)$row['ai_enabled'],
+              'allow_client_ai_key'=>(int)$row['allow_client_ai_key'],
+              'ai_daily_limit'=>(int)$row['ai_daily_limit'],
+              'notes'=>(string)($row['notes']??'')
+            ];
+        }
+    }
+    return $snapshots;
+}
+function phonehub_account_history_record(int $userId,string $source,array $before,array $after): bool {
+    if (!db()->inTransaction())
+        throw new RuntimeException('授权变更明细必须与授权更新在同一数据库事务内');
+    if ($userId<1 || !in_array($source,['create','update','group_bulk','password_reset'],true))
+        throw new RuntimeException('授权变更明细参数无效');
+    $changes=[];
+    if ($source!=='password_reset') {
+        foreach (phonehub_account_history_fields() as $field=>$label) {
+            $from=$before[$field]??null;
+            $to=$after[$field]??null;
+            if ($source==='create' && $to===null) continue;
+            if ($source==='create' || $from!==$to)
+                $changes[$field]=['before'=>$from,'after'=>$to];
+        }
+        // Mark that notes changed without ever storing their sensitive text.
+        if ((string)($before['notes']??'')!==(string)($after['notes']??''))
+            $changes['notes']=['redacted'=>true];
+        if (!$changes) return false;
+    }
+    // A reset has no field-level values. Persist an empty JSON object rather
+    // than an array to preserve the structured-diff schema.
+    $encoded=$source==='password_reset'?'{}':
+        json_encode($changes,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+    if (strlen($encoded)>16384) throw new RuntimeException('授权变更内容异常，请联系管理员');
+    $actorId=admin_id();
+    if ($actorId<1) throw new RuntimeException('授权变更缺少管理员身份');
+    static $actors=[];
+    if (!isset($actors[$actorId])) {
+        $actors[$actorId]=(string)sql('SELECT username FROM phonehub_admins WHERE id=?',[$actorId])->fetchColumn();
+        if ($actors[$actorId]==='') throw new RuntimeException('管理员账号不存在');
+    }
+    sql('INSERT INTO phonehub_account_change_events
+        (user_id,actor_id,actor_name,source,changes_json,created_at)
+        VALUES(?,?,?,?,?,UTC_TIMESTAMP())',
+        [$userId,$actorId,$actors[$actorId],$source,$encoded]);
+    return true;
+}
+function phonehub_account_history_value(string $field,mixed $value): string {
+    if ($value===null) return $field==='license_until'?'永久':'—';
+    if ($field==='license_until')return utc_to_cn((string)$value);
+    if ($field==='group_id')return '分组 #'.(int)$value;
+    if ($field==='entitlements') {
+        if (!is_array($value) || !$value)return '无';
+        $labels=['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP',
+            'mcp-codex'=>'Codex MCP','mcp-harness'=>'DeepSeek Harness MCP',
+            'skill'=>'Skill'];
+        return implode('、',array_map(static fn($entry)=>$labels[(string)$entry]??(string)$entry,$value));
+    }
+    if (in_array($field,['enabled','ai_enabled','allow_client_ai_key'],true))
+        return (int)$value===1?'开启':'关闭';
+    if ($field==='opening_plan_code')
+        return $value===''?'历史套餐（未指定）':(string)$value;
+    return (string)$value;
 }
 function json_response(array $data, int $status=200): never {
     http_response_code($status); header('Content-Type: application/json; charset=utf-8');
