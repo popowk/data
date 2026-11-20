@@ -136,6 +136,10 @@ function release_admin_action(string $action): never {
         $result=release_toggle((int)($_POST['id']??0));
         json_response(['ok'=>true]+$result);
     }
+    if ($action==='release_delete') {
+        $result=release_delete_obsolete_core((int)($_POST['id']??0));
+        json_response(['ok'=>true]+$result);
+    }
     if ($action==='package_publish') {
         json_response(['ok'=>true]+operation_package_publish_upload($_FILES['file']??[],$_POST));
     }
@@ -315,6 +319,20 @@ function release_admin_view(): void {
         [$releaseLike,$releaseLike,$releaseLike])->fetchAll();
     $releasePageLink=static fn(int $page): string =>
         'index.php?'.http_build_query(['view'=>'releases','release_q'=>$releaseQ,'release_page'=>$page]).'#release-history';
+    // The owner may delete a disabled older core only when the channel has
+    // a *newer* enabled core. PHP uses semantic version ordering, never ID.
+    $enabledCore=sql("SELECT channel,version FROM phonehub_releases
+        WHERE platform='core' AND enabled=1")->fetchAll();
+    $canDeleteCore=static function(array $row) use ($enabledCore): bool {
+        if (admin_role()!=='owner' || (string)$row['platform']!=='core' || (int)$row['enabled']!==0)
+            return false;
+        foreach ($enabledCore as $enabled) {
+            if ((string)$enabled['channel']===(string)$row['channel'] &&
+                version_compare((string)$enabled['version'],(string)$row['version'],'>'))
+                return true;
+        }
+        return false;
+    };
     ?>
     <div class="page-title"><div><h1>版本发布与操作包</h1><p>分别管理客户端签名 ZIP 更新和加密操作包，支持加密操作包发布、上下架及下载统计</p></div></div>
     <div class="card" id="scrcpy-download-settings">
@@ -374,7 +392,12 @@ function release_admin_view(): void {
         <span class="muted">第 <?=$releasePage?> / <?=$releasePages?> 页</span>
       </form>
       <div class="table-scroll"><table><thead><tr><th>更新目标</th><th>渠道</th><th>版本</th><th>最低客户端</th><th>大小</th><th>状态</th><th>操作</th></tr></thead><tbody>
-        <?php foreach($list as $x): ?><tr><td><?=h($x['platform'])?></td><td><?=h($x['channel'])?></td><td><b><?=h($x['version'])?></b></td><td><?=h($x['min_client'])?></td><td><?=number_format((int)$x['size_bytes']/1024/1024,2)?> MB</td><td><span class="pill <?=(int)$x['enabled']?'ok':'off'?>"><?=(int)$x['enabled']?'已发布':'已停用'?></span></td><td><button class="small-link" data-action="release-toggle" data-id="<?=(int)$x['id']?>"><?=(int)$x['enabled']?'暂停下载':'恢复下载'?></button></td></tr><?php endforeach ?>
+        <?php foreach($list as $x): ?><tr><td><?=h($x['platform'])?></td><td><?=h($x['channel'])?></td><td><b><?=h($x['version'])?></b></td><td><?=h($x['min_client'])?></td><td><?=number_format((int)$x['size_bytes']/1024/1024,2)?> MB</td><td><span class="pill <?=(int)$x['enabled']?'ok':'off'?>"><?=(int)$x['enabled']?'已发布':'已停用'?></span></td><td><button class="small-link" data-action="release-toggle" data-id="<?=(int)$x['id']?>"><?=(int)$x['enabled']?'暂停下载':'恢复下载'?></button>
+        <?php if($canDeleteCore($x)): ?>
+        <button class="small-link danger-action" data-action="release-delete"
+          data-id="<?=(int)$x['id']?>" data-label="<?=h($x['channel'].' core v'.$x['version'])?>">永久删除旧版</button>
+        <?php endif ?>
+        </td></tr><?php endforeach ?>
       </tbody></table></div>
       <?php if($releasePages>1): ?><nav class="device-pager" aria-label="签名版本分页">
         <?php if($releasePage>1): ?><a class="btn" href="<?=h($releasePageLink($releasePage-1))?>">上一页</a><?php endif ?>
