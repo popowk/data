@@ -219,6 +219,10 @@ function api_heartbeat_batch(array $batch,array $session,int $userId,array $quot
     $permitted=array_values(array_unique(array_filter(is_array($allowed)?$allowed:[],
         static fn($id)=>is_string($id) && preg_match('/^[a-z0-9-]{1,32}$/D',$id))));
     if (count($permitted)>16) api_problem('HEARTBEAT_BATCH_LIMIT','客户操作包授权数量超过批量上限');
+    // Douyin notification is a distinct package, but shares the parent
+    // Douyin entitlement. Expand only this explicit ID, never a prefix.
+    if (in_array('douyin',$permitted,true) && !in_array('douyin-notification',$permitted,true))
+        $permitted[]='douyin-notification';
     $packageRows=[];
     if ($permitted) {
         $slots=implode(',',array_fill(0,count($permitted),'?'));
@@ -368,7 +372,7 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         $result=[];
         foreach($rows as $row) {
             $pid=(string)$row['package_id'];
-            if (!in_array($pid,$allowed,true) || isset($result[$pid])) continue;
+            if (!phonehub_operation_package_allowed($pid,is_array($allowed)?$allowed:[]) || isset($result[$pid])) continue;
             if (in_array($pid,['mcp','skill','mcp-codex','mcp-harness'],true) && !api_cloud_feature_enabled($pid)) continue;
             $result[$pid]=['package_id'=>$pid,'version'=>(int)$row['version'],'download_allowed'=>$ready];
         }
@@ -379,7 +383,8 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         if (!preg_match('/^[a-z0-9-]{1,32}$/D',$id)) api_problem('INVALID_PACKAGE','操作包 ID 无效');
         $allowed=json_decode((string)$session['entitlements'],true)?:[];
         if (in_array($id,['mcp','skill','mcp-codex','mcp-harness'],true)) api_require_cloud_feature($id,$session);
-        if (!in_array($id,$allowed,true)) api_problem('NOT_ENTITLED','未授权此操作包',403);
+        if (!phonehub_operation_package_allowed($id,is_array($allowed)?$allowed:[]))
+            api_problem('NOT_ENTITLED','未授权此操作包',403);
         $row=client_sql('SELECT version FROM phonehub_packages WHERE package_id=? AND enabled=1 ORDER BY version DESC LIMIT 1',[$id])->fetch();
         if (!$row) api_problem('NOT_FOUND','未发布此操作包',404);
         $quota=api_mobile_quota($userId);

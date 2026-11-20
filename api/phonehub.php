@@ -319,7 +319,8 @@ try {
     if ($action==='package') {
         $id=(string)($input['package_id']??'douyin');
         if (!preg_match('/^[a-z0-9-]{1,32}$/D',$id) ||
-            !in_array($id,(array)json_decode((string)$session['entitlements'],true),true)) api_error('没有此操作包的授权',403);
+            !phonehub_operation_package_allowed($id,(array)json_decode((string)$session['entitlements'],true)))
+            api_error('没有此操作包的授权',403);
         if (in_array($id,['mcp','skill','mcp-codex','mcp-harness'],true)) {
             require_once __DIR__.'/extensions.php';
             api_require_cloud_feature($id,$session);

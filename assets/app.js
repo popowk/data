@@ -196,6 +196,15 @@
       picker.disabled=false;
     }
     form.elements.id.value=payload?.id || 0;
+    const createPasswordField=$('#customer-create-password-field');
+    if(createPasswordField){
+      createPasswordField.hidden=!!payload;
+      const passwordInput=form.elements.password;
+      passwordInput.value='';
+      // Disabled fields are never submitted on edits, avoiding browser
+      // autofill turning an ordinary edit into a forbidden password change.
+      passwordInput.disabled=!!payload;
+    }
     form.elements.username.value=payload?.username || '';
     form.elements.group_id.value=payload?.group_id || 0;
     form.elements.device_limit.value=payload?.device_limit || 3;
@@ -293,6 +302,18 @@
         toast(result.message||'已拉黑');await refreshAfterSuccess();
       } catch(err) {toast(err.message,true);}
       finally {trigger.disabled=false;}
+      return;
+    }
+    if (action==='release-delete') {
+      const label=trigger.dataset.label||'该旧版 core';
+      if(!confirm('确认永久删除【'+label+'】？\n将删除版本记录及服务器中的旧 ZIP 文件，无法从后台恢复。仅可删除已停用且有更新版本仍启用的 core。'))return;
+      trigger.disabled=true;
+      try {
+        const result=await request('release_delete',{id});
+        toast(result.message||'旧版已删除',!!result.file_cleanup_pending);
+        await refreshAfterSuccess();
+      }catch(err){toast(err.message,true);}
+      finally{trigger.disabled=false;}
       return;
     }
     const map={

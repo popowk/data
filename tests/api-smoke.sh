@@ -228,6 +228,31 @@ planCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.
   --data-urlencode "device_limit=99" --data-urlencode "mobile_limit=999" \
   --data-urlencode "enabled=on" --data-urlencode "entitlements[]=douyin")
 TEST_RESPONSE="$planCreated" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["id"]>0 and len(j["password"])>=12,j'
+# Creation can optionally use a user-chosen initial password; editing still
+# cannot mutate passwords. Blank retains the random-password behavior above.
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts' -o "$adminHtml"
+grep -q 'id="customer-create-password"' "$adminHtml"
+customInitialPassword='CI-chosen-Password-2026!'
+chosenCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$CSRF" --data-urlencode 'action=account_save' \
+ --data-urlencode 'username=ci_custom_password' --data-urlencode 'opening_plan=personal' \
+ --data-urlencode 'enabled=on' --data-urlencode 'entitlements[]=douyin' \
+ --data-urlencode "password=$customInitialPassword")
+TEST_RESPONSE="$chosenCreated" EXPECTED_PASSWORD="$customInitialPassword" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["password"]==os.environ["EXPECTED_PASSWORD"],j'
+INITIAL_PASSWORD="$customInitialPassword" php -r '
+require "app/core.php";
+$hash=sql("SELECT password_hash FROM phonehub_users WHERE username=?",["ci_custom_password"])->fetchColumn();
+if(!$hash || $hash===getenv("INITIAL_PASSWORD") || !password_verify(getenv("INITIAL_PASSWORD"),$hash))exit(10);
+'
+customLogin=$(curl -sS -X POST 'http://127.0.0.1:18765/api/phonehub.php?action=login' -H 'Content-Type: application/json' \
+ --data '{"username":"ci_custom_password","password":"CI-chosen-Password-2026!","device_id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}')
+TEST_RESPONSE="$customLogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["username"]=="ci_custom_password",j'
+weakCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$CSRF" --data-urlencode 'action=account_save' \
+ --data-urlencode 'username=ci_weak_pw' --data-urlencode 'opening_plan=personal' \
+ --data-urlencode 'enabled=on' --data-urlencode 'password=short')
+TEST_RESPONSE="$weakCreated" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and "密码长度" in j["error"],j'
+php -r 'require "app/core.php";if((int)sql("SELECT COUNT(*) FROM phonehub_users WHERE username=?",["ci_weak_pw"])->fetchColumn()!==0)exit(3);'
 php -r '
 $cfg=require "storage/config.php";
 $p=new PDO("mysql:host=".$cfg["db_host"].";port=".$cfg["db_port"].";dbname=".$cfg["db_name"].";charset=utf8mb4",$cfg["db_user"],$cfg["db_pass"]);
@@ -267,7 +292,7 @@ TEST_RESPONSE="$globalMain" python3 -c 'import os,json;j=json.loads(os.environ["
 globalScrcpy=$(curl -sS -b "$globalCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$globalCsrf" --data-urlencode 'action=scrcpy_url_save' --data-urlencode 'download_url=https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')
 TEST_RESPONSE="$globalScrcpy" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
 # Sensitive owner functions must remain inaccessible even to global admins.
-for action in admin_create admin_role_change backup_key_generate update_apply signing_generate automation_token_create; do
+for action in admin_create admin_role_change backup_key_generate update_apply signing_generate automation_token_create release_delete; do
   status=$(curl -sS -b "$globalCookies" -o "$globalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$globalCsrf" --data-urlencode "action=$action")
   test "$status" = 403 || { echo "global POST allowed $action ($status)" >&2; exit 1; }
 done
@@ -279,7 +304,7 @@ for page in dashboard groups group_bulk packages releases cloud_features update 
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 403 || { echo "ordinary GET allowed $page ($status)" >&2; exit 1; }
 done
-for action in group_create group_bulk_preview release_publish package_publish scrcpy_url_save main_program_url_save history_cleanup_preview history_cleanup_apply admin_create backup_key_generate update_apply cloud_features_save; do
+for action in group_create group_bulk_preview release_publish release_delete package_publish scrcpy_url_save main_program_url_save history_cleanup_preview history_cleanup_apply admin_create backup_key_generate update_apply cloud_features_save; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=$action")
   test "$status" = 403 || { echo "ordinary POST allowed $action ($status)" >&2; exit 1; }
 done
@@ -743,6 +768,41 @@ before=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$before" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] is False and "绑定" in j["error"],j'
 bound=$(api mobile_bind "{\"device_id\":\"$DEVICE\",\"phone_id\":\"$PHONE\",\"display_name\":\"CI Android\",\"phone_model\":\"Test Galaxy\",\"phone_number\":\"+8613912345678\",\"imei\":\"490154203237518\"}")
 TEST_RESPONSE="$bound" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["bound"] and "imei_bound" not in j and "phone_number_bound" not in j,j'
+# Douyin family: the notification package is a separate ID/version, while
+# authorization uses the same douyin parent. No arbitrary douyin-* wildcard.
+php -r '
+require "app/core.php";
+$envelope=json_encode(["manifest"=>base64_encode("notification-ci"),
+ "signature"=>base64_encode(random_bytes(64)),"nonce"=>base64_encode(random_bytes(24)),
+ "ciphertext"=>base64_encode("notification-ci-data")],JSON_THROW_ON_ERROR);
+$key=base64_encode(random_bytes(32));
+sql("INSERT INTO phonehub_packages(package_id,version,envelope,content_key,enabled) VALUES(?,?,?,?,1)",
+ ["douyin-notification",1,$envelope,$key]);
+sql("INSERT INTO phonehub_packages(package_id,version,envelope,content_key,enabled) VALUES(?,?,?,?,1)",
+ ["douyin-other",1,$envelope,$key]);
+'
+notificationList=$(api package_list "{\"device_id\":\"$DEVICE\"}")
+TEST_RESPONSE="$notificationList" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);ids={p["package_id"] for p in j["packages"]};assert j["ok"] and "douyin" in ids and "douyin-notification" in ids and "douyin-other" not in ids,j'
+notificationCheck=$(api package_check "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin-notification\"}")
+TEST_RESPONSE="$notificationCheck" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["version"]==1 and j["download_allowed"],j'
+otherDenied=$(api package_check "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin-other\"}")
+TEST_RESPONSE="$otherDenied" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and j["error_code"]=="NOT_ENTITLED",j'
+notificationDownload=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin-notification\"}")
+TEST_RESPONSE="$notificationDownload" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["envelope"] and j["content_key"],j'
+notificationBatch=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\"}],\"package_versions\":{\"douyin\":0,\"douyin-notification\":0}}}")
+TEST_RESPONSE="$notificationBatch" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);packs={x["package_id"]:x for x in j["batch"]["packages"]};assert j["ok"] and "douyin-notification" in packs and packs["douyin-notification"]["update_available"] and packs["douyin-notification"]["download_allowed"] and "douyin-other" not in packs,j'
+# Earlier scenarios intentionally remove the owner cookie. Re-authenticate
+# for this late UI check rather than accidentally testing the login page.
+groupingCookies=$(mktemp);groupingHtml=$(mktemp)
+curl -fsS -c "$groupingCookies" 'http://127.0.0.1:18765/index.php' -o "$groupingHtml"
+groupingCsrf=$(python3 -c 'import re,sys;s=open(sys.argv[1]).read();m=re.search(r"name=.csrf. content=.([0-9a-f]{64}).",s);assert m;print(m.group(1))' "$groupingHtml")
+groupingLogin=$(curl -sS -b "$groupingCookies" -c "$groupingCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$groupingCsrf" --data-urlencode 'action=login' --data-urlencode 'username=ci_ai_owner' --data-urlencode 'password=ci-owner-test-123456')
+TEST_RESPONSE="$groupingLogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+curl -fsS -b "$groupingCookies" 'http://127.0.0.1:18765/index.php?view=releases&pkg_q=douyin' -o "$groupingHtml"
+grep -q '抖音' "$groupingHtml"
+grep -q 'douyin-notification' "$groupingHtml"
+grep -q '通知操作包' "$groupingHtml"
+rm -f "$groupingCookies" "$groupingHtml"
 # New binding and repeated legacy heartbeat must ignore sensitive fields.
 php -r '
 $cfg=require "storage/config.php";
@@ -926,6 +986,47 @@ rangeCode=$(curl -sS -w '%{http_code}' -X POST "$BASE""update_download" \
   -H "Authorization: Bearer $TOKEN" -o /tmp/phonehub-ci-range.bin \
   --data "{\"device_id\":\"$DEVICE\",\"release_id\":$releaseId}")
 [ "$rangeCode" = 206 ] && [ "$(wc -c </tmp/phonehub-ci-range.bin)" = 10 ]
+# Owner can delete only disabled old core whose channel still has a newer
+# enabled version; verified ZIP and latest signed release remain untouched.
+coreOwnerCookies=$(mktemp);coreOwnerHtml=$(mktemp)
+curl -fsS -c "$coreOwnerCookies" 'http://127.0.0.1:18765/index.php' -o "$coreOwnerHtml"
+coreOwnerCsrf=$(python3 -c 'import re,sys;s=open(sys.argv[1]).read();m=re.search(r"name=.csrf. content=.([0-9a-f]{64}).",s);assert m;print(m.group(1))' "$coreOwnerHtml")
+coreOwnerLogin=$(curl -sS -b "$coreOwnerCookies" -c "$coreOwnerCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$coreOwnerCsrf" --data-urlencode 'action=login' --data-urlencode 'username=ci_ai_owner' --data-urlencode 'password=ci-owner-test-123456')
+TEST_RESPONSE="$coreOwnerLogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+legacyCoreInfo=$(php -r '
+require "app/core.php";require "app/releases.php";
+$filename=bin2hex(random_bytes(20)).".zip";
+$path=release_store()."/".$filename;
+file_put_contents($path,"ci-obsolete-core-archive");
+sql("INSERT INTO phonehub_releases
+ (platform,channel,version,min_client,notes,filename,storage_name,size_bytes,sha256,manifest,signature,enabled)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,0)",
+ ["core","stable","0.7.0","0.7.0","ci obsolete","ci-old-core.zip",
+  $filename,filesize($path),hash_file("sha256",$path),"{}",base64_encode(random_bytes(64))]);
+echo db()->lastInsertId()."|".$path;
+')
+oldCoreId="${legacyCoreInfo%%|*}"
+oldCorePath="${legacyCoreInfo#*|}"
+curl -fsS -b "$coreOwnerCookies" 'http://127.0.0.1:18765/index.php?view=releases&release_q=0.7.0' -o "$coreOwnerHtml"
+grep -q 'data-action="release-delete"' "$coreOwnerHtml"
+newestDelete=$(curl -sS -b "$coreOwnerCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$coreOwnerCsrf" --data-urlencode 'action=release_delete' \
+ --data-urlencode "id=$releaseId")
+TEST_RESPONSE="$newestDelete" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+removedCore=$(curl -sS -b "$coreOwnerCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$coreOwnerCsrf" --data-urlencode 'action=release_delete' \
+ --data-urlencode "id=$oldCoreId")
+TEST_RESPONSE="$removedCore" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["deleted"] and not j["file_cleanup_pending"],j'
+test ! -f "$oldCorePath"
+OLD_CORE_ID="$oldCoreId" LATEST_CORE_ID="$releaseId" EXPECTED_HASH="$releaseHash" php -r '
+require "app/core.php";require "app/releases.php";
+if((int)sql("SELECT COUNT(*) FROM phonehub_releases WHERE id=?",[(int)getenv("OLD_CORE_ID")])->fetchColumn()!==0)exit(4);
+$latest=sql("SELECT storage_name FROM phonehub_releases WHERE id=?",[(int)getenv("LATEST_CORE_ID")])->fetch();
+if(!$latest || !hash_equals(getenv("EXPECTED_HASH"),hash_file("sha256",release_store()."/".$latest["storage_name"])))exit(5);
+if((int)sql("SELECT COUNT(*) FROM phonehub_admin_audit WHERE action=?",["release_delete"])->fetchColumn()<1)exit(6);
+'
+echo 'CI HTTP smoke: obsolete core deletion protected active latest and signed archive'
+rm -f "$coreOwnerCookies" "$coreOwnerHtml"
 rm -f /tmp/phonehub-ci-update.zip /tmp/phonehub-ci-range.bin
 # New blacklist action uses only phone fingerprint, not IMEI/SIM number.
 php -r '
