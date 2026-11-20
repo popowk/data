@@ -978,6 +978,41 @@ rangeCode=$(curl -sS -w '%{http_code}' -X POST "$BASE""update_download" \
   -H "Authorization: Bearer $TOKEN" -o /tmp/phonehub-ci-range.bin \
   --data "{\"device_id\":\"$DEVICE\",\"release_id\":$releaseId}")
 [ "$rangeCode" = 206 ] && [ "$(wc -c </tmp/phonehub-ci-range.bin)" = 10 ]
+# Owner can delete only disabled old core whose channel still has a newer
+# enabled version; verified ZIP and latest signed release remain untouched.
+legacyCoreInfo=$(php -r '
+require "app/core.php";require "app/releases.php";
+$filename=bin2hex(random_bytes(20)).".zip";
+$path=release_store()."/".$filename;
+file_put_contents($path,"ci-obsolete-core-archive");
+sql("INSERT INTO phonehub_releases
+ (platform,channel,version,min_client,notes,filename,storage_name,size_bytes,sha256,manifest,signature,enabled)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,0)",
+ ["core","stable","0.7.0","0.7.0","ci obsolete","ci-old-core.zip",
+  $filename,filesize($path),hash_file("sha256",$path),"{}",base64_encode(random_bytes(64))]);
+echo db()->lastInsertId()."|".$path;
+')
+oldCoreId="${legacyCoreInfo%%|*}"
+oldCorePath="${legacyCoreInfo#*|}"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases&release_q=0.7.0' -o "$adminHtml"
+grep -q 'data-action="release-delete"' "$adminHtml"
+newestDelete=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$CSRF" --data-urlencode 'action=release_delete' \
+ --data-urlencode "id=$releaseId")
+TEST_RESPONSE="$newestDelete" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+removedCore=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$CSRF" --data-urlencode 'action=release_delete' \
+ --data-urlencode "id=$oldCoreId")
+TEST_RESPONSE="$removedCore" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["deleted"] and not j["file_cleanup_pending"],j'
+test ! -f "$oldCorePath"
+OLD_CORE_ID="$oldCoreId" LATEST_CORE_ID="$releaseId" EXPECTED_HASH="$releaseHash" php -r '
+require "app/core.php";require "app/releases.php";
+if((int)sql("SELECT COUNT(*) FROM phonehub_releases WHERE id=?",[(int)getenv("OLD_CORE_ID")])->fetchColumn()!==0)exit(4);
+$latest=sql("SELECT storage_name FROM phonehub_releases WHERE id=?",[(int)getenv("LATEST_CORE_ID")])->fetch();
+if(!$latest || !hash_equals(getenv("EXPECTED_HASH"),hash_file("sha256",release_store()."/".$latest["storage_name"])))exit(5);
+if((int)sql("SELECT COUNT(*) FROM phonehub_admin_audit WHERE action=?",["release_delete"])->fetchColumn()<1)exit(6);
+'
+echo 'CI HTTP smoke: obsolete core deletion protected active latest and signed archive'
 rm -f /tmp/phonehub-ci-update.zip /tmp/phonehub-ci-range.bin
 # New blacklist action uses only phone fingerprint, not IMEI/SIM number.
 php -r '
