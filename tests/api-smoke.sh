@@ -791,10 +791,18 @@ notificationDownload=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"
 TEST_RESPONSE="$notificationDownload" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["envelope"] and j["content_key"],j'
 notificationBatch=$(api client_heartbeat "{\"device_id\":\"$DEVICE\",\"batch\":{\"phones\":[{\"phone_id\":\"$PHONE\"}],\"package_versions\":{\"douyin\":0,\"douyin-notification\":0}}}")
 TEST_RESPONSE="$notificationBatch" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);packs={x["package_id"]:x for x in j["batch"]["packages"]};assert j["ok"] and "douyin-notification" in packs and packs["douyin-notification"]["update_available"] and packs["douyin-notification"]["download_allowed"] and "douyin-other" not in packs,j'
-curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases&pkg_q=douyin' -o "$adminHtml"
-grep -q '抖音' "$adminHtml"
-grep -q 'douyin-notification' "$adminHtml"
-grep -q '通知操作包' "$adminHtml"
+# Earlier scenarios intentionally remove the owner cookie. Re-authenticate
+# for this late UI check rather than accidentally testing the login page.
+groupingCookies=$(mktemp);groupingHtml=$(mktemp)
+curl -fsS -c "$groupingCookies" 'http://127.0.0.1:18765/index.php' -o "$groupingHtml"
+groupingCsrf=$(python3 -c 'import re,sys;s=open(sys.argv[1]).read();m=re.search(r"name=.csrf. content=.([0-9a-f]{64}).",s);assert m;print(m.group(1))' "$groupingHtml")
+groupingLogin=$(curl -sS -b "$groupingCookies" -c "$groupingCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$groupingCsrf" --data-urlencode 'action=login' --data-urlencode 'username=ci_ai_owner' --data-urlencode 'password=ci-owner-test-123456')
+TEST_RESPONSE="$groupingLogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+curl -fsS -b "$groupingCookies" 'http://127.0.0.1:18765/index.php?view=releases&pkg_q=douyin' -o "$groupingHtml"
+grep -q '抖音' "$groupingHtml"
+grep -q 'douyin-notification' "$groupingHtml"
+grep -q '通知操作包' "$groupingHtml"
+rm -f "$groupingCookies" "$groupingHtml"
 # New binding and repeated legacy heartbeat must ignore sensitive fields.
 php -r '
 $cfg=require "storage/config.php";
