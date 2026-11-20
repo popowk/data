@@ -70,11 +70,11 @@ function phonehub_history_cleanup_action(string $action): never {
     $policy=$targets[$kind];
     if ($days===false || $days===null || $days<$policy['min'] || $days>3650)
         throw new RuntimeException('保留天数不符合该类型的安全下限（'.$policy['min'].'–3650 天）');
-    $cutoff=gmdate('Y-m-d H:i:s',time()-$days*86400);
+    $created=time();
+    $cutoff=gmdate('Y-m-d H:i:s',$created-$days*86400);
     $table=$policy['table'];$date=$policy['date'];
     if ($action==='history_cleanup_preview') {
         $count=(int)sql("SELECT COUNT(*) FROM $table WHERE $date < ?",[$cutoff])->fetchColumn();
-        $created=time();
         $secret=hash_hmac('sha256',"$kind|$days|$cutoff|$count|$created",csrf());
         json_response(['ok'=>true,'kind'=>$kind,'label'=>$policy['label'],'days'=>$days,
             'eligible'=>$count,'batch_limit'=>500,'preview_at'=>$created,'preview_count'=>$count,
@@ -88,9 +88,7 @@ function phonehub_history_cleanup_action(string $action): never {
         if (!is_int($issued) || $issued>time()+30 || $issued<time()-300 ||
             !is_int($count) || $count<0 || !preg_match('/^[a-f0-9]{64}$/D',$token))
             throw new RuntimeException('历史清理预览已失效，请重新预览');
-        $expected=hash_hmac('sha256',"$kind|$days|$cutoff|$count|$issued",csrf());
-        // Cutoff can shift by seconds. Reconstruct it from the snapshot
-        // timestamp and fixed duration for exact confirmation semantics.
+        // Reconstruct the same UTC cutoff from the verified snapshot time.
         $confirmedCutoff=gmdate('Y-m-d H:i:s',$issued-$days*86400);
         $expected=hash_hmac('sha256',"$kind|$days|$confirmedCutoff|$count|$issued",csrf());
         if (!hash_equals($expected,$token)) throw new RuntimeException('历史清理预览校验失败');
