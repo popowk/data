@@ -390,6 +390,65 @@ if (str_contains($packageHtml,$operationSecret) ||
     str_contains($packageHtml,$operationEnvelope['ciphertext']))
     throw new RuntimeException('operation package management leaked encrypted payload or key');
 
+// Explicit Douyin package family: distinct IDs/versions, shared entitlement,
+// no prefix-based wildcard permission for other unrelated package IDs.
+if (phonehub_operation_package_scope('douyin-notification')!=='douyin' ||
+    phonehub_operation_package_scope('douyin')!=='douyin' ||
+    phonehub_operation_package_category('douyin-notification')!=='抖音' ||
+    !phonehub_operation_package_allowed('douyin-notification',['douyin']) ||
+    !phonehub_operation_package_allowed('douyin',['douyin']) ||
+    phonehub_operation_package_allowed('douyin-unrelated',['douyin']) ||
+    phonehub_operation_package_allowed('douyin-notification',['xiaohongshu']))
+    throw new RuntimeException('Douyin notification family mapping or scope isolation failed');
+// Build client ZIP fixtures in a separate beta channel, without altering
+// stable release availability or touching the self-updater trust chain.
+$store=release_store();
+$testRelease=static function(string $platform,string $channel,string $version,bool $enabled)
+    use ($store): array {
+    $storage=bin2hex(random_bytes(20)).'.zip';
+    $path=$store.'/'.$storage;
+    file_put_contents($path,'test-core-release-'.$platform.'-'.$version);
+    sql('INSERT INTO phonehub_releases
+        (platform,channel,version,min_client,notes,filename,storage_name,size_bytes,sha256,manifest,signature,enabled)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',[
+            $platform,$channel,$version,'0.1.0','CI obsolete core cleanup',
+            $version.'.zip',$storage,filesize($path),hash_file('sha256',$path),
+            '{}',base64_encode(random_bytes(64)),$enabled?1:0
+        ]);
+    return [(int)db()->lastInsertId(),$path];
+};
+[$oldCoreId,$oldCorePath]=$testRelease('core','beta','3.1.0',false);
+[$currentCoreId,$currentCorePath]=$testRelease('core','beta','4.0.0',true);
+[$otherPackageId,$otherPackagePath]=$testRelease('douyin','beta','1.0.0',false);
+foreach ([$currentCoreId,$otherPackageId] as $forbiddenId) {
+    try {
+        release_delete_obsolete_core($forbiddenId);
+        throw new RuntimeException('protected core deletion wrongly accepted');
+    } catch(RuntimeException $e) {
+        if ($e->getMessage()==='protected core deletion wrongly accepted')throw $e;
+    }
+}
+$deletedCore=release_delete_obsolete_core($oldCoreId);
+if (!$deletedCore['deleted'] || $deletedCore['file_cleanup_pending'] ||
+    is_file($oldCorePath) || !is_file($currentCorePath) ||
+    !is_file($otherPackagePath) ||
+    (int)sql('SELECT COUNT(*) FROM phonehub_releases WHERE id=?',[$oldCoreId])->fetchColumn()!==0 ||
+    (int)sql('SELECT COUNT(*) FROM phonehub_releases WHERE id=?',[$currentCoreId])->fetchColumn()!==1)
+    throw new RuntimeException('old core deletion did not preserve current release or its ZIP');
+try {
+    release_delete_obsolete_core($currentCoreId);
+    throw new RuntimeException('newest active core wrongly allowed for deletion');
+} catch(RuntimeException $e) {
+    if ($e->getMessage()==='newest active core wrongly allowed for deletion')throw $e;
+}
+if ((int)sql("SELECT COUNT(*) FROM phonehub_admin_audit WHERE action='release_delete'")->fetchColumn()<1)
+    throw new RuntimeException('deleted core was not audited');
+ob_start();release_package_overview();$groupedHtml=ob_get_clean();
+if (!str_contains($groupedHtml,'douyin-notification') ||
+    !str_contains($groupedHtml,'抖音') ||
+    !str_contains($groupedHtml,'通知操作包'))
+    throw new RuntimeException('Douyin notification package grouping UI missing');
+
 $diagnostics=update_diagnostics();
 if (($diagnostics['summary']['errors']??-1)!==0)
     throw new RuntimeException('runtime diagnostics returned errors in CI environment: '.json_encode($diagnostics,JSON_UNESCAPED_UNICODE));
