@@ -233,6 +233,50 @@ function release_package_overview(): void {
     </section>
     <?php
 }
+/** Global-admin-only legacy encrypted operation-package download history. */
+function release_download_history_view(): void {
+    require_global_admin();
+    $keyword=trim((string)($_GET['download_q']??''));
+    if (utf8_length($keyword)>64) $keyword=utf8_limit($keyword,64);
+    $pattern='%'.str_replace(['\\','%','_'],['\\\\','\\%','\\_'],$keyword).'%';
+    $from=' FROM phonehub_package_downloads d
+      LEFT JOIN phonehub_users u ON u.id=d.user_id
+      WHERE d.package_id LIKE ? OR u.username LIKE ?';
+    $params=[$pattern,$pattern];
+    $total=(int)sql('SELECT COUNT(*)'.$from,$params)->fetchColumn();
+    $pages=max(1,(int)ceil($total/50));
+    $page=min($pages,max(1,(int)($_GET['download_page']??1)));
+    $offset=($page-1)*50;
+    $rows=sql('SELECT d.id,d.package_id,d.downloaded_at,u.username'.$from.
+        ' ORDER BY d.id DESC LIMIT 50 OFFSET '.$offset,$params)->fetchAll();
+    $pageLink=static fn(int $n): string=>'index.php?'.http_build_query([
+        'view'=>'releases','download_q'=>$keyword,'download_page'=>$n]).'#operation-download-history';
+    ?>
+    <section class="card" id="operation-download-history">
+      <div class="card-head"><h2>操作包下载记录</h2><span class="count">共 <?=$total?> 条 · 每页 50 条</span></div>
+      <p class="muted">仅统计客户端通过旧操作包接口获取加密操作包的请求，不包括独立的核心 ZIP 文件下载。历史数据只有包 ID，没有具体包版本；这里不展示设备指纹、解密密钥或文件内容。</p>
+      <form class="device-search-form" method="get" action="index.php">
+        <input type="hidden" name="view" value="releases">
+        <label for="operation-download-q">客户账号 / 操作包 ID</label>
+        <input id="operation-download-q" name="download_q" maxlength="64"
+          value="<?=h($keyword)?>" placeholder="搜索客户或包 ID">
+        <button class="btn" type="submit">查询</button>
+        <span class="muted">第 <?=$page?> / <?=$pages?> 页</span>
+      </form>
+      <div class="table-scroll"><table><thead><tr><th>下载时间（UTC）</th><th>客户账号</th><th>操作包 ID</th></tr></thead><tbody>
+        <?php foreach($rows as $row): ?>
+        <tr><td><?=h($row['downloaded_at'])?></td><td><?=h($row['username']??'账号已删除')?></td><td><?=h($row['package_id'])?></td></tr>
+        <?php endforeach ?>
+        <?php if(!$rows): ?><tr><td colspan="3">没有符合条件的下载记录</td></tr><?php endif ?>
+      </tbody></table></div>
+      <?php if($pages>1): ?><nav class="device-pager" aria-label="操作包下载记录分页">
+        <?php if($page>1): ?><a class="btn" href="<?=h($pageLink($page-1))?>">上一页</a><?php endif ?>
+        <span>第 <?=$page?> / <?=$pages?> 页</span>
+        <?php if($page<$pages): ?><a class="btn" href="<?=h($pageLink($page+1))?>">下一页</a><?php endif ?>
+      </nav><?php endif ?>
+    </section>
+    <?php
+}
 function release_admin_view(): void {
     require_global_admin();
     $urls=sql("SELECT resource,download_url FROM phonehub_download_settings
@@ -321,7 +365,7 @@ function release_admin_view(): void {
         <?php if($releasePage<$releasePages): ?><a class="btn" href="<?=h($releasePageLink($releasePage+1))?>">下一页</a><?php endif ?>
       </nav><?php endif ?>
     </div>
-    <?php release_package_overview(); ?>
+    <?php release_package_overview();release_download_history_view(); ?>
     <?php
     if (is_file(__DIR__.'/automation.php')) {
         require_once __DIR__.'/automation.php';
