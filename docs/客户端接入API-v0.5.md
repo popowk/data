@@ -527,3 +527,48 @@ HTTP 200 返回示例：
 - 同样支持 `ETag`、`If-None-Match` / HTTP 304 和 `Cache-Control: public, max-age=300, must-revalidate`。客户端可缓存 300 秒。每个资源有独立的 ETag，后台保存的新地址会在新的 GET 请求中立即返回。
 - 官网主程序地址接受 HTTPS 公开域名的 `.zip` / `.exe` / `.msi` 文件 URL，禁止用户名、密码、fragment、IP、本地域名和非标准端口；接口只返回字符串，不重定向或代理下载，下载与文件验签由客户端自行完成。
 - 数据库迁移 13 在 `phonehub_download_settings` 表中添加 `main_program` 项，使用 `INSERT IGNORE`，不会修改既有 scrcpy 配置。
+
+
+## v0.5.27 · 授权安全、自动换机审计、设备筛选与采样
+
+### 客户密码变更的唯一入口
+管理端 `account_save` 创建客户时随机生成密码；任何通过该动作提交非空 `password` 字段的请求都会在服务器拒绝（即使管理员拥有全局权限）。编辑客户授权不会更改客户密码。需更换密码时通过后台 `account_password` 专用动作随机重置，并撤销该账号全部电脑会话。禁止让客户端或第三方管理脚本通过 `account_save` 自定义客户密码。
+
+### 电脑会话完全撤销
+后台「设备管理 → 电脑设备」每个电脑行可使用“撤销该电脑全部会话”。服务端以 `user_id + device_id` 一次撤销该电脑所有会话 Token，其他电脑和其他客户的会话保持不变；操作依然采用管理员 Cookie + CSRF 和服务器角色校验。老接口动作 `revoke_session` 沿用原来的会话 `id` 参数，响应新增 `revoked_sessions`（已撤销 Token 数量）。
+
+### 自动换机事件与异常提示
+`login` 保留 `replaced_devices`，新增 `frequent_replacement` 布尔字段：当前客户在过去 15 分钟内累计自动换机事件达到 5 次时为 true，仅提示，不会自动禁止登录。只有成功撤销其他电脑并建立新会话时才写入 `phonehub_computer_replacement_events`；只记录客户内部 ID、被撤销的电脑数量和 UTC 时间，不保存设备标识/Token/IP。后台「设备管理 → 电脑设备」显示命中阈值的客户概览。
+
+### 设备列表
+`GET /license/index.php?view=devices&device_tab=computers&device_q=查询内容&device_page=1`
+支持 computers（电脑）、mobiles（安卓手机）、blacklist（禁止访问）三类；每类独立查询、30 条每页。根据所在类别匹配账号、设备指纹、手机号之外的型号/备注或拉黑原因。所有筛选条件使用参数化查询，分页数字有上限。管理界面仍需已登录、有 devices 页面权限的后台管理员。
+
+### 授权请求性能采样与 P50/P95
+PHP-FPM 中可临时设置 `PHONEHUB_PERF_SAMPLE_PERCENT=10`（取值 0–100；默认 0），对 `client_heartbeat`、`license_status`、`capabilities`、`client_config` 以统一比例抽样记录。示例行包含：
+
+```text
+PhoneHub heartbeat_perf status=200 action=license_status total_ms=... connect_ms=... auth_ms=... db_ms=... package_ms=... response_ms=... queries=...
+```
+
+日志不记录客户账号、手机标识、IP、URL、令牌或请求正文。可在有权限读取 PHP-FPM 日志的服务器本地执行如下汇总（将 `/path/to/php-fpm.log` 换成真实路径）：
+
+```bash
+PH_LOG=/path/to/php-fpm.log python3 - <<'PY'
+import os,re,math,collections
+data=collections.defaultdict(list)
+pattern=re.compile(r'PhoneHub heartbeat_perf status=200 action=(\w+) total_ms=([\d.]+)')
+with open(os.environ['PH_LOG'],encoding='utf-8',errors='replace') as source:
+    for line in source:
+        match=pattern.search(line)
+        if match:
+            data[match[1]].append(float(match[2]))
+for action,values in sorted(data.items()):
+    values.sort()
+    n=len(values)
+    p=lambda frac: values[min(n-1,max(0,math.ceil(n*frac)-1))]
+    print(f'{action}: samples={n} PHP_P50={p(.5):.1f}ms PHP_P95={p(.95):.1f}ms')
+PY
+```
+
+请同时检查 `connect_ms`、`db_ms` 和 `queries`。以上测得的 **PHP 服务端时间不包含客户端 DNS/TLS、代理网络以及 ZIP 下载**；不要直接把单次客户端 2198ms 与服务端总耗时对比。样本量少时 P95 不稳定，尽量收集足够多的请求后对比上线前后数据。请不要将完整生产日志上传公共问题讨论区。
