@@ -157,27 +157,34 @@ function release_admin_action(string $action): never {
  * Read-only roles can view metadata without receiving any envelope/key bytes.
  */
 function release_package_overview(): void {
+    $pkgQ=trim((string)($_GET['pkg_q']??''));
+    if (!preg_match('/^[a-z0-9-]{0,32}$/D',$pkgQ)) $pkgQ='';
+    $pattern='%'.$pkgQ.'%';
+    $pkgTotal=(int)sql('SELECT COUNT(*) FROM phonehub_packages WHERE package_id LIKE ?',[$pattern])->fetchColumn();
+    $pkgPages=max(1,(int)ceil($pkgTotal/50));
+    $pkgPage=min($pkgPages,max(1,(int)($_GET['pkg_page']??1)));
+    $pkgOffset=($pkgPage-1)*50;
     $rows=sql('SELECT id,package_id,version,enabled,created_at FROM phonehub_packages
-        ORDER BY package_id ASC,version DESC,id DESC LIMIT 200')->fetchAll();
+        WHERE package_id LIKE ? ORDER BY package_id ASC,version DESC,id DESC LIMIT 50 OFFSET '.$pkgOffset,
+        [$pattern])->fetchAll();
     $counts=sql('SELECT package_id,COUNT(*) AS total,
         SUM(downloaded_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 30 DAY)) AS last30,
         MAX(downloaded_at) AS latest
         FROM phonehub_package_downloads GROUP BY package_id')->fetchAll();
     $stats=[];foreach ($counts as $c) $stats[$c['package_id']]=$c;
+    // Summary always counts all versions, not just 50 visible history rows.
+    $summaryRows=sql('SELECT package_id,COUNT(*) AS versions,MAX(version) AS latest_version,
+        MAX(CASE WHEN enabled=1 THEN version ELSE NULL END) AS latest_enabled
+        FROM phonehub_packages WHERE package_id LIKE ? GROUP BY package_id ORDER BY package_id',
+        [$pattern])->fetchAll();
     $groups=[];
-    foreach ($rows as $p) {
-        $id=(string)$p['package_id'];
-        if (!isset($groups[$id]))
-            $groups[$id]=['versions'=>0,'latest_enabled'=>null,'latest_version'=>null];
-        $groups[$id]['versions']++;
-        $groups[$id]['latest_version']??=(int)$p['version'];
-        if ((int)$p['enabled'] && $groups[$id]['latest_enabled']===null)
-            $groups[$id]['latest_enabled']=(int)$p['version'];
-    }
+    foreach ($summaryRows as $entry) $groups[(string)$entry['package_id']]=$entry;
+    $packagePageLink=static fn(int $page): string =>
+        'index.php?'.http_build_query(['view'=>'releases','pkg_q'=>$pkgQ,'pkg_page'=>$page]).'#legacy-operation-packages';
     $canEdit=phonehub_role_can_action(admin_role(),'package_publish');
     ?>
     <section class="card" id="legacy-operation-packages">
-      <div class="card-head"><h2>操作包管理中心</h2><span class="count"><?=count($groups)?> 类 · 最近 200 个版本</span></div>
+      <div class="card-head"><h2>操作包管理中心</h2><span class="count"><?=count($groups)?> 类 · 共 <?=$pkgTotal?> 个版本</span></div>
       <p class="muted">这里管理客户端旧协议的<strong>加密操作包</strong>（envelope + content_key），与上方上传的 Ed25519 签名 ZIP 更新包互相独立。下载次数按包 ID 汇总，历史日志不含单个版本号；后台永不显示解密密钥。</p>
       <?php if($canEdit): ?>
       <form data-ajax="package_publish" enctype="multipart/form-data" class="package-publish-form">
@@ -193,13 +200,21 @@ function release_package_overview(): void {
       <p class="footnote">仅接受加密工具生成的 JSON：<code>{"envelope":{"manifest":"Base64","signature":"Base64","nonce":"Base64","ciphertext":"Base64"},"content_key":"Base64"}</code>。服务端进行字段、Base64 和大小检查，但不能替代客户端签名验真与解密联调。版本不可覆盖；新版本发布后会成为该包默认下载版本。</p>
       <?php endif ?>
       <div class="card-head package-subsection-head"><h2>操作包概览</h2><span class="count">按包 ID 汇总</span></div>
-      <div class="table-scroll package-summary-table"><table><thead><tr><th>包 ID</th><th>最新版本</th><th>当前可下载版本</th><th>版本数（本页）</th><th>累计下载</th><th>近 30 天</th><th>最后下载</th></tr></thead><tbody>
+      <form class="device-search-form" method="get" action="index.php">
+        <input type="hidden" name="view" value="releases">
+        <label for="pkg-history-filter">操作包 ID</label>
+        <input id="pkg-history-filter" name="pkg_q" maxlength="32" pattern="[a-z0-9-]*"
+          value="<?=h($pkgQ)?>" placeholder="筛选操作包 ID">
+        <button type="submit" class="btn">筛选历史</button>
+        <span class="muted">共 <?=$pkgTotal?> 个版本；第 <?=$pkgPage?> / <?=$pkgPages?> 页</span>
+      </form>
+      <div class="table-scroll package-summary-table"><table><thead><tr><th>包 ID</th><th>最新版本</th><th>当前可下载版本</th><th>版本总数</th><th>累计下载</th><th>近 30 天</th><th>最后下载</th></tr></thead><tbody>
         <?php foreach ($groups as $id=>$g): $c=$stats[$id]??[]; ?>
         <tr><td><b><?=h($id)?></b></td><td>v<?=(int)$g['latest_version']?></td><td><?= $g['latest_enabled']===null?'<span class="pill off">全部停用</span>':'v'.(int)$g['latest_enabled']?></td><td><?=(int)$g['versions']?></td><td><?=(int)($c['total']??0)?></td><td><?=(int)($c['last30']??0)?></td><td><?=h($c['latest']??'—')?></td></tr>
         <?php endforeach ?>
         <?php if (!$groups): ?><tr><td colspan="7" class="empty-result">尚无操作包，可以上传第一份加密封装 JSON</td></tr><?php endif ?>
       </tbody></table></div>
-      <div class="card-head package-subsection-head package-history-head"><h2>历史版本与上下架</h2><span class="count">最近 200 条</span></div>
+      <div class="card-head package-subsection-head package-history-head"><h2>历史版本与上下架</h2><span class="count">每页 50 条</span></div>
       <div class="table-scroll package-history-table"><table><thead><tr><th>操作包</th><th>版本</th><th>状态</th><th>发布时间（UTC）</th><th>操作</th></tr></thead><tbody>
         <?php foreach ($rows as $p): ?>
         <tr><td><?=h($p['package_id'])?></td><td>v<?=(int)$p['version']?></td><td><span class="pill <?=(int)$p['enabled']?'ok':'off'?>"><?=(int)$p['enabled']?'已启用':'已停用'?></span></td><td><?=h($p['created_at'])?></td><td>
@@ -209,6 +224,11 @@ function release_package_overview(): void {
         <?php endforeach ?>
         <?php if (!$rows): ?><tr><td colspan="5" class="empty-result">暂无已发布的操作包版本</td></tr><?php endif ?>
       </tbody></table></div>
+      <?php if($pkgPages>1): ?><nav class="device-pager" aria-label="操作包历史分页">
+        <?php if($pkgPage>1): ?><a class="btn" href="<?=h($packagePageLink($pkgPage-1))?>">上一页</a><?php endif ?>
+        <span>第 <?=$pkgPage?> / <?=$pkgPages?> 页</span>
+        <?php if($pkgPage<$pkgPages): ?><a class="btn" href="<?=h($packagePageLink($pkgPage+1))?>">下一页</a><?php endif ?>
+      </nav><?php endif ?>
       <p class="footnote package-bottom-note">停用某版本后，客户端只会获取同一包中最高的其他启用版本；如果所有版本停用则不可下载。变更保留管理员审计记录，不删除历史数据。</p>
     </section>
     <?php
@@ -219,7 +239,21 @@ function release_admin_view(): void {
         WHERE resource IN ('scrcpy','main_program')")->fetchAll(PDO::FETCH_KEY_PAIR);
     $scrcpyUrl=(string)($urls['scrcpy']??SCRCPY_DEFAULT_DOWNLOAD_URL);
     $mainProgramUrl=(string)($urls['main_program']??MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL);
-    $list=sql('SELECT id,platform,channel,version,min_client,size_bytes,sha256,signature,enabled,created_at FROM phonehub_releases ORDER BY id DESC LIMIT 200')->fetchAll();
+    $releaseQ=trim((string)($_GET['release_q']??''));
+    if (utf8_length($releaseQ)>48) $releaseQ=utf8_limit($releaseQ,48);
+    $releaseLike='%'.str_replace(['\\','%','_'],['\\\\','\\%','\\_'],$releaseQ).'%';
+    $releaseCount=(int)sql('SELECT COUNT(*) FROM phonehub_releases
+        WHERE platform LIKE ? OR channel LIKE ? OR version LIKE ?',
+        [$releaseLike,$releaseLike,$releaseLike])->fetchColumn();
+    $releasePages=max(1,(int)ceil($releaseCount/50));
+    $releasePage=min($releasePages,max(1,(int)($_GET['release_page']??1)));
+    $releaseOffset=($releasePage-1)*50;
+    $list=sql('SELECT id,platform,channel,version,min_client,size_bytes,sha256,signature,enabled,created_at
+        FROM phonehub_releases WHERE platform LIKE ? OR channel LIKE ? OR version LIKE ?
+        ORDER BY id DESC LIMIT 50 OFFSET '.$releaseOffset,
+        [$releaseLike,$releaseLike,$releaseLike])->fetchAll();
+    $releasePageLink=static fn(int $page): string =>
+        'index.php?'.http_build_query(['view'=>'releases','release_q'=>$releaseQ,'release_page'=>$page]).'#release-history';
     ?>
     <div class="page-title"><div><h1>版本发布与操作包</h1><p>分别管理客户端签名 ZIP 更新和加密操作包，支持加密操作包发布、上下架及下载统计</p></div></div>
     <div class="card" id="scrcpy-download-settings">
@@ -270,10 +304,22 @@ function release_admin_view(): void {
         <code class="public-key"><?=h($pub)?></code>
       <?php else: ?><p class="muted">首次上传签名版本后将生成长期签名密钥对，公钥显示在这里。</p><?php endif ?>
     </div>
-    <div class="card"><div class="card-head"><h2>已发布版本</h2><span class="count">最近 200 条</span></div>
+    <div class="card" id="release-history"><div class="card-head"><h2>已发布版本</h2><span class="count"><?=$releaseCount?> 个版本；每页 50 条</span></div>
+      <form class="device-search-form" method="get" action="index.php">
+        <input type="hidden" name="view" value="releases">
+        <label for="release-history-filter">目标、渠道或版本号</label>
+        <input id="release-history-filter" name="release_q" maxlength="48" value="<?=h($releaseQ)?>" placeholder="core / stable / 1.0.0">
+        <button type="submit" class="btn">筛选版本</button>
+        <span class="muted">第 <?=$releasePage?> / <?=$releasePages?> 页</span>
+      </form>
       <div class="table-scroll"><table><thead><tr><th>更新目标</th><th>渠道</th><th>版本</th><th>最低客户端</th><th>大小</th><th>状态</th><th>操作</th></tr></thead><tbody>
         <?php foreach($list as $x): ?><tr><td><?=h($x['platform'])?></td><td><?=h($x['channel'])?></td><td><b><?=h($x['version'])?></b></td><td><?=h($x['min_client'])?></td><td><?=number_format((int)$x['size_bytes']/1024/1024,2)?> MB</td><td><span class="pill <?=(int)$x['enabled']?'ok':'off'?>"><?=(int)$x['enabled']?'已发布':'已停用'?></span></td><td><button class="small-link" data-action="release-toggle" data-id="<?=(int)$x['id']?>"><?=(int)$x['enabled']?'暂停下载':'恢复下载'?></button></td></tr><?php endforeach ?>
       </tbody></table></div>
+      <?php if($releasePages>1): ?><nav class="device-pager" aria-label="签名版本分页">
+        <?php if($releasePage>1): ?><a class="btn" href="<?=h($releasePageLink($releasePage-1))?>">上一页</a><?php endif ?>
+        <span>第 <?=$releasePage?> / <?=$releasePages?> 页</span>
+        <?php if($releasePage<$releasePages): ?><a class="btn" href="<?=h($releasePageLink($releasePage+1))?>">下一页</a><?php endif ?>
+      </nav><?php endif ?>
     </div>
     <?php release_package_overview(); ?>
     <?php
