@@ -590,3 +590,10 @@ PY
 「设备管理 → 安卓手机」的管理员手动绑定增加 GET 参数 `mobile_customer_q`，至少输入两个字符，后台通过 SQL 参数化查询支持全量客户搜索（每次最多展示 25 个匹配项）。`mobile_add` 继续由服务器根据客户 ID、额度和设备黑名单进行校验，绝不信任下拉框状态。
 
 「版本发布与操作包」现支持 `pkg_q`、`pkg_page` 筛选加密操作包历史，以及 `release_q`、`release_page` 筛选签名更新版本历史；均为只读 GET、每页 50 条。原有 `package_publish`、`package_toggle`、`release_publish`、`release_toggle` 权限与路径保持不变。
+
+
+## v0.5.29 · 性能采样后台
+
+新增全局管理员可访问的「接口性能监控」菜单（普通管理员与历史只读角色无权访问）。数据来源为数据库表 `phonehub_api_perf_samples`，采样仍由 PHP-FPM 环境变量 `PHONEHUB_PERF_SAMPLE_PERCENT` 控制，默认 **0（关闭）**，可设为 1–100。启用后，被采样的 `license_status` / `capabilities` / `client_config` / `client_heartbeat` 请求会在响应生成后尝试写入一条脱敏指标，写入失败不改变正常授权 API 的返回状态。
+
+只记录请求动作、HTTP 状态、PHP 总耗时（毫秒）、数据库耗时、SQL 次数和 UTC 时间。**绝不保存客户 ID、IP、设备指纹、Token、请求正文、AI 消息或密钥**。页面展示过去 7 天最新最多 3000 个采样的 P50/P95、失败计数、数据库 P95、平均 SQL 查询数及每日采样量；这是基于样本的近似统计，不等于全量请求指标，也不包括客户端 DNS/TLS、代理或公网网络传输。采样率较高可能增加数据库写入成本，应在生产流量下逐步调节。新增数据库迁移 15；可在「系统维护 → 历史记录保留与分批清理」清理超过 7 天的旧采样，默认建议保留 30 天。
