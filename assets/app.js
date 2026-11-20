@@ -304,6 +304,18 @@
       finally {trigger.disabled=false;}
       return;
     }
+    if (action==='release-delete') {
+      const label=trigger.dataset.label||'该旧版 core';
+      if(!confirm('确认永久删除【'+label+'】？\n将删除版本记录及服务器中的旧 ZIP 文件，无法从后台恢复。仅可删除已停用且有更新版本仍启用的 core。'))return;
+      trigger.disabled=true;
+      try {
+        const result=await request('release_delete',{id});
+        toast(result.message||'旧版已删除',!!result.file_cleanup_pending);
+        await refreshAfterSuccess();
+      }catch(err){toast(err.message,true);}
+      finally{trigger.disabled=false;}
+      return;
+    }
     const map={
       'logout':['logout',{},false],
       'signing-activate':['signing_activate',{},true],
