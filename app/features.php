@@ -246,6 +246,7 @@ function feature_action(string $action): never {
             if (!$memberIds) throw new RuntimeException('该分组没有客户');
             if (!hash_equals($preview,phonehub_group_member_snapshot($memberIds)))
                 throw new RuntimeException('预览后分组成员发生变化，未执行修改；请重新预览确认');
+            $beforeSnapshots=phonehub_account_history_snapshots($memberIds);
             $placeholders=implode(',',array_fill(0,count($memberIds),'?'));
             // Target only the previewed members even if another request joins
             // the group while this transaction is in progress.
@@ -253,6 +254,12 @@ function feature_action(string $action): never {
             sql('UPDATE phonehub_users u INNER JOIN phonehub_user_meta m ON m.user_id=u.id
               SET '.implode(',',$set).' WHERE m.group_id=? AND u.id IN ('.$placeholders.')',$updateParams);
             if ($revoke) sql('DELETE FROM phonehub_sessions WHERE user_id IN ('.$placeholders.')',$memberIds);
+            $afterSnapshots=phonehub_account_history_snapshots($memberIds);
+            foreach ($memberIds as $memberId) {
+                $memberId=(int)$memberId;
+                phonehub_account_history_record($memberId,'group_bulk',
+                    $beforeSnapshots[$memberId]??[],$afterSnapshots[$memberId]??[]);
+            }
             audit('group_bulk','group='.$group.' members='.count($memberIds).' fields='.implode(',',$fields));
             db()->commit();
         } catch (Throwable $e) {
