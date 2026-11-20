@@ -402,11 +402,22 @@ ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false ||
     strpos($bulkHtml,'先由服务器预检')===false)
     throw new RuntimeException('redesigned group bulk form render failed');
+// Device lists now load only the selected category; check each page separately.
+$_GET['device_tab']='computers';
+ob_start();feature_view('mobiles');$computerHtml=ob_get_clean();
+$_GET['device_tab']='mobiles';
 ob_start();feature_view('mobiles');$mobileHtml=ob_get_clean();
-if (strpos($mobileHtml,'设备管理')===false || strpos($mobileHtml,'电脑设备')===false ||
-    strpos($mobileHtml,'安卓手机')===false || strpos($mobileHtml,'禁止访问')===false ||
-    strpos($mobileHtml,'<th>状态</th>')===false)
-    throw new RuntimeException('unified device management page render failed');
+$_GET['device_tab']='blacklist';
+ob_start();feature_view('mobiles');$blacklistHtml=ob_get_clean();
+unset($_GET['device_tab']);
+if (strpos($computerHtml,'设备管理')===false || strpos($computerHtml,'电脑设备')===false ||
+    strpos($computerHtml,'安卓手机')===false || strpos($computerHtml,'禁止访问')===false ||
+    strpos($computerHtml,'device-search-form')===false ||
+    strpos($computerHtml,'撤销该电脑全部会话')===false ||
+    strpos($mobileHtml,'<th>状态</th>')===false ||
+    strpos($mobileHtml,'手机指纹')===false ||
+    strpos($blacklistHtml,'有效禁止访问记录')===false)
+    throw new RuntimeException('paginated device management category render failed');
 if (strpos($mobileHtml,'<th>IMEI</th>')!==false || strpos($mobileHtml,'<th>手机号</th>')!==false ||
     strpos($mobileHtml,'name="imei"')!==false || strpos($mobileHtml,'name="phone_number"')!==false ||
     strpos($mobileHtml,'device-reveal')!==false || strpos($mobileHtml,'value="imei_hash"')!==false)
