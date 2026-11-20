@@ -765,6 +765,30 @@ if (!$r || array_filter(array_values($r),static fn($v)=>$v!==null)) exit(4);
 after=$(api package "{\"device_id\":\"$DEVICE\",\"package_id\":\"douyin\"}")
 TEST_RESPONSE="$after" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and "envelope" in j,j'
 TEST_RESPONSE="$after" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and len(j["envelope"]["nonce"])>12 and len(j["content_key"])>=43,j'
+# Download record filters: show records for the matching customer/package
+# without revealing device identity; pagination loads beyond the first 50.
+php -r '
+require "app/core.php";
+$id=sql("SELECT id FROM phonehub_users WHERE username=?",["phonehub_ci_user"])->fetchColumn();
+$ins=db()->prepare("INSERT INTO phonehub_package_downloads(user_id,package_id,device_id,downloaded_at) VALUES(?,?,?,UTC_TIMESTAMP())");
+for($i=0;$i<51;$i++)$ins->execute([$id,"ci-download-history",str_repeat("a",64)]);
+'
+historyCookies=$(mktemp);historyHtml=$(mktemp)
+curl -fsS -c "$historyCookies" 'http://127.0.0.1:18765/index.php' -o "$historyHtml"
+historyCsrf=$(python3 -c 'import re,sys;m=re.search(r"name=.csrf. content=.([0-9a-f]{64}).",open(sys.argv[1]).read());assert m;print(m.group(1))' "$historyHtml")
+historyLogin=$(curl -fsS -b "$historyCookies" -c "$historyCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$historyCsrf" --data-urlencode 'action=login' --data-urlencode 'username=ci_ai_owner' --data-urlencode 'password=ci-owner-test-123456')
+TEST_RESPONSE="$historyLogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+curl -fsS -b "$historyCookies" 'http://127.0.0.1:18765/index.php?view=releases&download_q=ci-download-history&download_page=2' -o "$historyHtml"
+grep -q '操作包下载记录' "$historyHtml"
+grep -q '共 51 条' "$historyHtml"
+grep -q '第 2 / 2 页' "$historyHtml"
+if grep -q 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$historyHtml"; then
+  echo 'Downloads page displayed device fingerprint' >&2;exit 1
+fi
+curl -fsS -b "$historyCookies" 'http://127.0.0.1:18765/index.php?view=audit&audit_q=ci_open_plan_user' -o "$historyHtml"
+grep -q '查询审计记录' "$historyHtml"
+grep -q 'account_plan_change' "$historyHtml"
+rm -f "$historyCookies" "$historyHtml"
 # The download audit is keyed by package ID; older records do not identify version.
 php -r '
 $cfg=require "storage/config.php";
@@ -882,6 +906,14 @@ TEST_RESPONSE="$logs" python3 -c 'import os,json; j=json.loads(os.environ["TEST_
 update=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\"}")
 TEST_RESPONSE="$update" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and not j["available"],j'
 read -r releaseId releaseHash <<< "$(php tests/seed-release.php | tr '|' ' ')"
+compatOld=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\",\"client_version\":\"0.6.0\"}")
+TEST_RESPONSE="$compatOld" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["available"] and j["client_upgrade_required"] and j["minimum_client_version"]=="0.7.1" and j["server_protocol_version"]==1,j'
+compatNew=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\",\"client_version\":\"0.7.1\"}")
+TEST_RESPONSE="$compatNew" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and not j["client_upgrade_required"],j'
+invalidVersion=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\",\"client_version\":\"not-a-version\"}")
+TEST_RESPONSE="$invalidVersion" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and j["error_code"]=="INVALID_CLIENT_VERSION",j'
+blockedDownload=$(curl -sS -w '\n%{http_code}' -X POST "$BASE""update_download" -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" --data "{\"device_id\":\"$DEVICE\",\"release_id\":$releaseId,\"client_version\":\"0.6.0\"}")
+TEST_RESPONSE="$blockedDownload" python3 -c 'import os,json;s=os.environ["TEST_RESPONSE"].splitlines();j=json.loads(s[0]);assert s[-1]=="409" and not j["ok"] and j["error_code"]=="CLIENT_UPGRADE_REQUIRED",s'
 newer=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\"}")
 TEST_RESPONSE="$newer" php -r '$j=json_decode(getenv("TEST_RESPONSE"),true);if(!$j["ok"]||!$j["available"])exit(1);$r=$j["release"];$pub=base64_decode($r["public_key"],true);$raw=base64_decode($r["manifest"],true);$signature=base64_decode($r["signature"],true);if(!sodium_crypto_sign_verify_detached($signature,$raw,$pub))exit(2);'
 curl -fsS -X POST "$BASE""update_download" -H 'Content-Type: application/json' \
