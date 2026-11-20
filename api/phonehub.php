@@ -34,6 +34,25 @@ function api_perf_report(int $status): void {
         $status,(string)($p['action']??''),$total,$p['connect_ms'],$p['auth_ms'],$p['db_ms'],
         $p['package_ms'],$p['response_ms'],$p['queries']
     ));
+    // Only when explicitly sampled. Never affect license/heartbeat response
+    // on telemetry storage failure, and do not insert identity or tokens.
+    global $pdo;
+    if ($pdo instanceof PDO) {
+        try {
+            $stmt=$pdo->prepare('INSERT INTO phonehub_api_perf_samples
+                (action,http_status,total_ms,db_ms,query_count,created_at)
+                VALUES(?,?,?,?,?,UTC_TIMESTAMP())');
+            $stmt->execute([
+                (string)$p['action'],$status,
+                min(4294967295,(int)round($total)),
+                min(4294967295,(int)round((float)$p['db_ms'])),
+                min(65535,(int)$p['queries'])
+            ]);
+        } catch (Throwable $e) {
+            // Log only the error class; do not add request contents or IDs.
+            error_log('PhoneHub performance sample persistence: '.get_class($e));
+        }
+    }
 }
 function api_out(array $data,int $status=200): never {
     $started=hrtime(true);
@@ -82,8 +101,9 @@ try {
     }
     if ($action==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true]);
     $sampleRate=max(0,min(100,(int)(getenv('PHONEHUB_PERF_SAMPLE_PERCENT')?:0)));
-    // Same sanitized PHP-phase sampling for all authorization-check variants.
-    // Do not add per-request writes to the heartbeat path.
+    // Sanitized performance telemetry for authorization checks. When an
+    // operator opts in, one optional low-cost sample insert is performed
+    // after the response has been constructed; disabled by default.
     if (in_array($action,['client_heartbeat','license_status','capabilities','client_config'],true)
         && $sampleRate>0 && random_int(1,100)<=$sampleRate) {
         $GLOBALS['phonehub_perf']['sample']=true;
