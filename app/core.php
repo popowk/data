@@ -578,6 +578,29 @@ function phonehub_plan_label(?string $code): string {
     if ($code==='custom') return '自定义';
     return phonehub_opening_plans(false)[$code]['label']??'已停用或未知套餐';
 }
+/**
+ * Legacy encrypted packages retain exact IDs and independent versions while
+ * sharing the parent Douyin product entitlement. Never grant a wildcard:
+ * only the explicit notification sub-package maps to douyin.
+ */
+function phonehub_operation_package_scope(string $packageId): string {
+    return $packageId==='douyin-notification'?'douyin':$packageId;
+}
+function phonehub_operation_package_allowed(string $packageId,array $entitlements): bool {
+    return in_array($packageId,$entitlements,true)
+        || in_array(phonehub_operation_package_scope($packageId),$entitlements,true);
+}
+function phonehub_operation_package_category(string $packageId): string {
+    return match(phonehub_operation_package_scope($packageId)) {
+        'douyin'=>'抖音',
+        'xiaohongshu'=>'小红书',
+        'mcp'=>'MCP',
+        'mcp-codex'=>'Codex MCP',
+        'mcp-harness'=>'DeepSeek Harness MCP',
+        'skill'=>'Skill',
+        default=>'其他操作包'
+    };
+}
 function random_password(int $length=20): string {
     $characters='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#%+-';
     $out='';
