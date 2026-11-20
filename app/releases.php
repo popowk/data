@@ -173,6 +173,71 @@ function release_toggle(int $id): array {
     audit('release_toggle',$row['platform'].' v'.$row['version'].' enabled='.$next);
     return ['message'=>$next?'版本已启用':'版本已停用','enabled'=>$next];
 }
+/**
+ * Permanently remove an obsolete, disabled *client* core ZIP and its release
+ * metadata. Never touches self-updater files, signatures, or active releases.
+ * Only the protected owner may delete, with newer enabled core in the same
+ * channel as a mandatory rollback-safe replacement.
+ */
+function release_delete_obsolete_core(int $id): array {
+    require_owner();
+    if ($id<1) throw new RuntimeException('旧版本 ID 不正确');
+    $pdo=db();
+    $pdo->beginTransaction();
+    $quarantine=null;$original=null;
+    try {
+        $record=sql('SELECT id,platform,channel,version,enabled,storage_name
+            FROM phonehub_releases WHERE id=? FOR UPDATE',[$id])->fetch();
+        if (!$record) throw new RuntimeException('该更新版本不存在，请刷新页面');
+        if ($record['platform']!=='core')
+            throw new RuntimeException('仅允许删除旧版 core 客户端更新包');
+        if ((int)$record['enabled']!==0)
+            throw new RuntimeException('请先停用旧版 core，再进行永久删除');
+        $others=sql("SELECT version,enabled FROM phonehub_releases
+            WHERE platform='core' AND channel=? FOR UPDATE",[$record['channel']])->fetchAll();
+        $hasNewerEnabled=false;
+        foreach ($others as $candidate) {
+            if ((int)$candidate['enabled']===1 &&
+                version_compare((string)$candidate['version'],(string)$record['version'],'>')) {
+                $hasNewerEnabled=true;break;
+            }
+        }
+        if (!$hasNewerEnabled)
+            throw new RuntimeException('同一渠道没有仍启用的更新版 core；禁止删除唯一可用或最新版本');
+        $file=(string)$record['storage_name'];
+        if (!preg_match('/^[0-9a-f]{40}\\.zip$/D',$file))
+            throw new RuntimeException('旧版 core 的更新文件路径异常，禁止删除');
+        if ((int)sql('SELECT COUNT(*) FROM phonehub_releases
+            WHERE storage_name=? AND id<>?',[$file,$id])->fetchColumn()>0)
+            throw new RuntimeException('该 ZIP 仍被其他版本引用，不允许删除');
+        $original=release_store().'/'.$file;
+        if (is_link($original) || (file_exists($original) && !is_file($original)))
+            throw new RuntimeException('旧版更新文件不是普通 ZIP 文件，禁止删除');
+        if (is_file($original)) {
+            // Move out of the published path *before* committing the database
+            // mutation. Restore the original if SQL or audit fails.
+            $quarantine=$original.'.retired-'.bin2hex(random_bytes(12));
+            if (!@rename($original,$quarantine))
+                throw new RuntimeException('更新文件无法移入临时回收位置，未删除数据库记录');
+        }
+        $deleted=sql('DELETE FROM phonehub_releases WHERE id=?',[$id])->rowCount();
+        if ($deleted!==1) throw new RuntimeException('旧版本数据库删除失败');
+        audit('release_delete','core/'.$record['channel'].' v'.$record['version'].' #'.$id);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction())$pdo->rollBack();
+        if ($quarantine!==null && is_file($quarantine) && $original!==null)
+            @rename($quarantine,$original);
+        throw $e;
+    }
+    $cleanupPending=$quarantine!==null && !@unlink($quarantine);
+    if ($cleanupPending)
+        error_log('PhoneHub retired core ZIP cleanup pending: '.basename((string)$quarantine));
+    return ['deleted'=>true,'file_cleanup_pending'=>$cleanupPending,
+        'message'=>$cleanupPending
+            ? '旧版 core 已从发布列表移除；回收文件尚未能删除，请检查服务器更新目录'
+            : '旧版 core 已永久删除（版本记录及其 ZIP）'];
+}
 function latest_release(string $platform,string $channel): ?array {
     // Version strings are semantic rather than lexical. Filter in PHP after DB access.
     $rows=sql('SELECT * FROM phonehub_releases WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC LIMIT 500',
