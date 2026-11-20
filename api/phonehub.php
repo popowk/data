@@ -16,7 +16,7 @@ date_default_timezone_set('UTC');
 $GLOBALS['phonehub_perf']=[
     'sample'=>false,'started_ns'=>hrtime(true),'connect_ms'=>0.0,
     'auth_ms'=>0.0,'db_ms'=>0.0,'package_ms'=>0.0,
-    'response_ms'=>0.0,'queries'=>0
+    'response_ms'=>0.0,'queries'=>0,'action'=>''
 ];
 function api_perf_phase(string $phase,int $startedNs): void {
     if (empty($GLOBALS['phonehub_perf']['sample'])) return;
@@ -30,8 +30,8 @@ function api_perf_report(int $status): void {
     $total=(hrtime(true)-$p['started_ns'])/1000000;
     // No account names, phone IDs, IPs, URLs, payload, tokens or secrets.
     error_log(sprintf(
-        'PhoneHub heartbeat_perf status=%d total_ms=%.2f connect_ms=%.2f auth_ms=%.2f db_ms=%.2f package_ms=%.2f response_ms=%.2f queries=%d',
-        $status,$total,$p['connect_ms'],$p['auth_ms'],$p['db_ms'],
+        'PhoneHub heartbeat_perf status=%d action=%s total_ms=%.2f connect_ms=%.2f auth_ms=%.2f db_ms=%.2f package_ms=%.2f response_ms=%.2f queries=%d',
+        $status,(string)($p['action']??''),$total,$p['connect_ms'],$p['auth_ms'],$p['db_ms'],
         $p['package_ms'],$p['response_ms'],$p['queries']
     ));
 }
@@ -82,8 +82,13 @@ try {
     }
     if ($action==='health') api_out(['ok'=>true,'service'=>'phonehub','api'=>1,'mobile_binding'=>true]);
     $sampleRate=max(0,min(100,(int)(getenv('PHONEHUB_PERF_SAMPLE_PERCENT')?:0)));
-    if ($action==='client_heartbeat' && $sampleRate>0 && random_int(1,100)<=$sampleRate)
+    // Same sanitized PHP-phase sampling for all authorization-check variants.
+    // Do not add per-request writes to the heartbeat path.
+    if (in_array($action,['client_heartbeat','license_status','capabilities','client_config'],true)
+        && $sampleRate>0 && random_int(1,100)<=$sampleRate) {
         $GLOBALS['phonehub_perf']['sample']=true;
+        $GLOBALS['phonehub_perf']['action']=$action;
+    }
     if (($_SERVER['REQUEST_METHOD']??'GET')!=='POST') api_error('仅支持 POST',405);
     if (isset($_SERVER['HTTP_ORIGIN'])) api_error('请通过 PhoneHub 客户端操作',403);
     $maxBody=$action==='ai_chat'?262144:65536;
@@ -200,11 +205,23 @@ try {
         $token=bin2hex(random_bytes(32));$expires=time()+28800;
         client_sql('INSERT INTO phonehub_sessions(user_id,device_id,token_hash,expires_at) VALUES(?,?,?,?)',
             [$account['id'],$device,hash('sha256',$token),gmdate('Y-m-d H:i:s',$expires)]);
+        $frequentReplacement=false;
+        if ($replacedDevices>0) {
+            // One audit entry for this successful replacement transaction;
+            // do not persist old device identifiers or bearer tokens.
+            client_sql('INSERT INTO phonehub_computer_replacement_events(user_id,replaced_count,created_at)
+                VALUES(?,?,UTC_TIMESTAMP())',[$account['id'],$replacedDevices]);
+            $recentReplacements=(int)client_sql('SELECT COUNT(*) FROM phonehub_computer_replacement_events
+                WHERE user_id=? AND created_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 15 MINUTE)',
+                [$account['id']])->fetchColumn();
+            $frequentReplacement=$recentReplacements>=5;
+        }
         $pdo->commit();
         client_sql('DELETE FROM phonehub_login_attempts WHERE bucket=?',[$bucket]);
         api_out(['ok'=>true,'token'=>$token,'expires_at'=>$expires,'username'=>$account['username'],
             'license_until'=>$locked['license_until'],'entitlements'=>json_decode($account['entitlements'],true),
-            'replaced_devices'=>$replacedDevices]);
+            'replaced_devices'=>$replacedDevices,
+            'frequent_replacement'=>$frequentReplacement]);
     }
     $authStarted=hrtime(true);
     $header=$_SERVER['HTTP_AUTHORIZATION']??'';

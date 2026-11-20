@@ -7,7 +7,7 @@ cat >storage/config.php <<'EOF'
 EOF
 PHONEHUB_PERF_SAMPLE_PERCENT=100 PHONEHUB_AUTOMATION_TEST_ALLOW_HTTP=1 php -S 127.0.0.1:18765 -t . >/tmp/phonehub-ci-server.log 2>&1 &
 server_pid=$!
-trap 'kill "$server_pid" 2>/dev/null || true; rm -f storage/config.php' EXIT
+trap 'kill "$server_pid" ${server2_pid:-} 2>/dev/null || true; rm -f storage/config.php' EXIT
 for i in $(seq 1 40); do
   if curl -fsS 'http://127.0.0.1:18765/api/phonehub.php?action=health' >/dev/null 2>&1; then break; fi
   sleep 0.5
@@ -491,6 +491,61 @@ echo 'CI HTTP smoke: entering automation scenarios'
 source tests/automation-smoke.sh
 echo 'CI HTTP smoke: client log filters and 50-record pagination'
 source tests/client-log-smoke.sh
+echo 'CI HTTP smoke: hidden password POST, grouped device revoke and searchable pagination'
+clientAccountId=$(php -r 'require "app/core.php";echo sql("SELECT id FROM phonehub_users WHERE username=?",["phonehub_ci_user"])->fetchColumn();')
+beforeHash=$(CLIENT_ACCOUNT_ID="$clientAccountId" php -r 'require "app/core.php";echo sql("SELECT password_hash FROM phonehub_users WHERE id=?",[(int)getenv("CLIENT_ACCOUNT_ID")])->fetchColumn();')
+passwordOverride=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=account_save' \
+  --data-urlencode "id=$clientAccountId" --data-urlencode 'username=phonehub_ci_user' \
+  --data-urlencode 'device_limit=3' --data-urlencode 'mobile_limit=1' \
+  --data-urlencode 'password=attacker-injected-password-123')
+TEST_RESPONSE="$passwordOverride" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and "密码重置" in j["error"],j'
+afterHash=$(CLIENT_ACCOUNT_ID="$clientAccountId" php -r 'require "app/core.php";echo sql("SELECT password_hash FROM phonehub_users WHERE id=?",[(int)getenv("CLIENT_ACCOUNT_ID")])->fetchColumn();')
+test "$beforeHash" = "$afterHash"
+# Grouped device cards must revoke every token for the selected computer.
+CLIENT_ACCOUNT_ID="$clientAccountId" php -r '
+require "app/core.php";
+$uid=(int)getenv("CLIENT_ACCOUNT_ID");
+for($i=0;$i<2;$i++)
+    sql("INSERT INTO phonehub_sessions(user_id,device_id,token_hash,expires_at) VALUES(?,?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR))",
+      [$uid,str_repeat("9",64),hash("sha256","ci-multiple-session-".$i)]);
+sql("INSERT INTO phonehub_sessions(user_id,device_id,token_hash,expires_at) VALUES(?,?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR))",
+  [$uid,str_repeat("8",64),hash("sha256","ci-other-computer")]);
+'
+revokeId=$(CLIENT_ACCOUNT_ID="$clientAccountId" php -r 'require "app/core.php";echo sql("SELECT MIN(id) FROM phonehub_sessions WHERE user_id=? AND device_id=?",
+  [(int)getenv("CLIENT_ACCOUNT_ID"),str_repeat("9",64)])->fetchColumn();')
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=devices&device_tab=computers&device_q=phonehub_ci_user' -o "$adminHtml"
+grep -q '撤销该电脑全部会话' "$adminHtml"
+revokeComputer=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=revoke_session' --data-urlencode "id=$revokeId")
+TEST_RESPONSE="$revokeComputer" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["revoked_sessions"]==2,j'
+CLIENT_ACCOUNT_ID="$clientAccountId" php -r '
+require "app/core.php";$uid=(int)getenv("CLIENT_ACCOUNT_ID");
+$a=(int)sql("SELECT COUNT(*) FROM phonehub_sessions WHERE user_id=? AND device_id=?",[$uid,str_repeat("9",64)])->fetchColumn();
+$b=(int)sql("SELECT COUNT(*) FROM phonehub_sessions WHERE user_id=? AND device_id=?",[$uid,str_repeat("8",64)])->fetchColumn();
+if($a!==0 || $b!==1)exit(9);
+'
+# Device pages must use filtered server-side pagination rather than first N records.
+php -r '
+require "app/core.php";
+sql("INSERT INTO phonehub_users(username,password_hash,enabled,device_limit,license_until,entitlements) VALUES(?,?,1,99,NULL,?)",
+  ["ci_device_pages",password_hash_safe("ci-device-page-123456"),"[]"]);
+$id=(int)db()->lastInsertId();
+for($i=1;$i<=35;$i++)
+  sql("INSERT INTO phonehub_sessions(user_id,device_id,token_hash,expires_at) VALUES(?,?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR))",
+    [$id,str_pad(dechex($i),64,"0",STR_PAD_LEFT),hash("sha256","ci-device-page-".$i)]);
+'
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=devices&device_tab=computers&device_q=ci_device_pages&device_page=1' -o "$adminHtml"
+grep -q '匹配 35 条' "$adminHtml"
+grep -q '第 1 / 2 页' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=devices&device_tab=computers&device_q=ci_device_pages&device_page=2' -o "$adminHtml"
+grep -q '第 2 / 2 页' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=devices&device_tab=computers&device_q=ci_device_pages&device_page=999' -o "$adminHtml"
+grep -q '第 2 / 2 页' "$adminHtml"
+for tab in mobiles blacklist; do
+  curl -fsS -b "$adminCookies" "http://127.0.0.1:18765/index.php?view=devices&device_tab=$tab&device_q=ci_device_pages" -o "$adminHtml"
+  grep -q 'device-search-form' "$adminHtml"
+done
 rm -f "$adminCookies" "$adminHtml"
 BASE='http://127.0.0.1:18765/api/phonehub.php?action='
 # Automatic computer replacement: oldest distinct computer is evicted by default,
@@ -566,7 +621,68 @@ php -r 'require "app/core.php";sql("UPDATE phonehub_users SET device_limit=0 WHE
 zeroQuota=$(quota_login "$PC_A")
 TEST_RESPONSE="$zeroQuota" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and "名额" in j["error"],j'
 TEST_RESPONSE="$(quota_session "$PC_E" "$TOKEN_E")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
-echo 'CI HTTP smoke: automatic computer session replacement passed'
+# Count replacement events without logging device identity, and detect
+# repeated replacements within a 15-minute period without auto-banning.
+php -r 'require "app/core.php";sql("UPDATE phonehub_users SET device_limit=1 WHERE username=?",["ci_autoreplace_user"]);'
+quotaFifth=$(quota_login "$PC_A")
+TEST_RESPONSE="$quotaFifth" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["replaced_devices"]==1,j'
+quotaSixth=$(quota_login "$PC_B")
+TEST_RESPONSE="$quotaSixth" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["frequent_replacement"],j'
+php -r '
+require "app/core.php";
+$user=sql("SELECT id FROM phonehub_users WHERE username=?",["ci_autoreplace_user"])->fetchColumn();
+$events=sql("SELECT COUNT(*) FROM phonehub_computer_replacement_events WHERE user_id=?",[$user])->fetchColumn();
+if((int)$events!==5)exit(3);
+'
+# Exercise concurrent logins on two different PHP processes against one MySQL
+# user row, with an admin quota reduction while the row is locked.
+php -r '
+require "app/core.php";
+sql("INSERT INTO phonehub_users(username,password_hash,enabled,device_limit,license_until,entitlements) VALUES(?,?,1,2,NULL,?)",
+ ["ci_parallel_user",password_hash_safe("ci-parallel-test-123456"),"[]"]);
+'
+PHONEHUB_AUTOMATION_TEST_ALLOW_HTTP=1 php -S 127.0.0.1:18766 -t . >/tmp/phonehub-ci-server2.log 2>&1 &
+server2_pid=$!
+for i in $(seq 1 30); do
+  if curl -fsS 'http://127.0.0.1:18766/api/phonehub.php?action=health' >/dev/null 2>&1; then break; fi
+  sleep 0.2
+done
+lockMarker=$(mktemp);rm -f "$lockMarker"
+LOCK_MARKER="$lockMarker" php -r '
+require "app/core.php";
+$p=db();$p->beginTransaction();
+$u=sql("SELECT id FROM phonehub_users WHERE username=? FOR UPDATE",["ci_parallel_user"])->fetch();
+if(!$u)exit(7);
+file_put_contents(getenv("LOCK_MARKER"),"1");
+usleep(350000);
+sql("UPDATE phonehub_users SET device_limit=1 WHERE id=?",[$u["id"]]);
+$p->commit();
+' &
+quotaChangePid=$!
+for i in $(seq 1 40); do test -f "$lockMarker" && break;sleep 0.05;done
+test -f "$lockMarker"
+parallelOne=$(mktemp);parallelTwo=$(mktemp)
+curl -sS -X POST 'http://127.0.0.1:18765/api/phonehub.php?action=login' -H 'Content-Type: application/json' \
+  --data '{"username":"ci_parallel_user","password":"ci-parallel-test-123456","device_id":"7777777777777777777777777777777777777777777777777777777777777777"}' >"$parallelOne" &
+loginPid1=$!
+curl -sS -X POST 'http://127.0.0.1:18766/api/phonehub.php?action=login' -H 'Content-Type: application/json' \
+  --data '{"username":"ci_parallel_user","password":"ci-parallel-test-123456","device_id":"8888888888888888888888888888888888888888888888888888888888888888"}' >"$parallelTwo" &
+loginPid2=$!
+wait "$loginPid1";wait "$loginPid2";wait "$quotaChangePid"
+PARALLEL_ONE="$parallelOne" PARALLEL_TWO="$parallelTwo" php -r '
+require "app/core.php";
+foreach([getenv("PARALLEL_ONE"),getenv("PARALLEL_TWO")] as $file){
+ $j=json_decode(file_get_contents($file),true);
+ if(!is_array($j) || !$j["ok"] || strlen((string)($j["token"]??""))!==64)exit(8);
+}
+$u=sql("SELECT id,device_limit FROM phonehub_users WHERE username=?",["ci_parallel_user"])->fetch();
+$count=(int)sql("SELECT COUNT(DISTINCT device_id) FROM phonehub_sessions WHERE user_id=? AND expires_at>UTC_TIMESTAMP()",[$u["id"]])->fetchColumn();
+if((int)$u["device_limit"]!==1 || $count!==1)exit(9);
+'
+rm -f "$lockMarker" "$parallelOne" "$parallelTwo"
+kill "$server2_pid" 2>/dev/null || true;wait "$server2_pid" 2>/dev/null || true
+server2_pid=''
+echo 'CI HTTP smoke: replacement audit, anomaly detection and concurrent quota enforcement passed'
 DEVICE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 PHONE='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 login=$(curl -fsS -X POST "$BASE""login" -H 'Content-Type: application/json' \
@@ -767,5 +883,7 @@ TEST_RESPONSE="$loginBlocked" python3 -c 'import os,json; j=json.loads(os.enviro
 # PHP timing telemetry must be opt-in, structured and free of client secrets.
 grep -q 'PhoneHub heartbeat_perf status=200 ' /tmp/phonehub-ci-server.log
 grep -q 'connect_ms=.*auth_ms=.*db_ms=.*package_ms=.*response_ms=' /tmp/phonehub-ci-server.log
+grep -q 'PhoneHub heartbeat_perf status=200 action=license_status ' /tmp/phonehub-ci-server.log
+grep -q 'PhoneHub heartbeat_perf status=200 action=client_heartbeat ' /tmp/phonehub-ci-server.log
 if grep -Fq "$TOKEN" /tmp/phonehub-ci-server.log; then echo 'Bearer leaked to timing logs' >&2; exit 10; fi
 echo 'PASS: authenticated mobile/model/IMEI/phone ciphertext, phone and computer blacklist, authorization, logs and signed updates + automation'

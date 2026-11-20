@@ -41,7 +41,7 @@ if (!in_array('opening_plan_code',$metaColumns,true))
     throw new RuntimeException('opening plan migration missing');
 $planTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_plan_templates'")->fetchColumn();
 if($planTable!==1) throw new RuntimeException('plan migration table missing');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==13)
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==14)
     throw new RuntimeException('main program download migration version incorrect');
 $defaultScrcpy=$pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn();
 if($defaultScrcpy!==SCRCPY_DEFAULT_DOWNLOAD_URL)
@@ -50,7 +50,7 @@ $defaultMain=$pdo->query("SELECT download_url FROM phonehub_download_settings WH
 if($defaultMain!==MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL)
     throw new RuntimeException('main program URL placeholder is missing');
 $pdo->exec("UPDATE phonehub_download_settings SET download_url='https://example.com/custom-scrcpy.zip' WHERE resource='scrcpy'");
-$pdo->exec("DELETE FROM phonehub_admin_migrations WHERE version=13");
+$pdo->exec("DELETE FROM phonehub_admin_migrations WHERE version>=13");
 migrate($pdo);
 if($pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn()!=='https://example.com/custom-scrcpy.zip')
     throw new RuntimeException('main program migration overwrote administrator scrcpy URL');
@@ -60,6 +60,18 @@ if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resou
     throw new RuntimeException('scrcpy migration seeded duplicate rows');
 if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resource='main_program'")->fetchColumn()!==1)
     throw new RuntimeException('main program migration seeded duplicate rows');
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==14)
+    throw new RuntimeException('computer replacement audit migration failed');
+$replacementColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_computer_replacement_events'")->fetchAll(PDO::FETCH_COLUMN);
+foreach (['id','user_id','replaced_count','created_at'] as $needed)
+    if(!in_array($needed,$replacementColumns,true))
+        throw new RuntimeException('missing replacement audit field '.$needed);
+if(array_intersect($replacementColumns,['device_id','token_hash','ip_address','source_ip']))
+    throw new RuntimeException('replacement event table contains private device or token fields');
+migrate($pdo);
+if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_admin_migrations WHERE version=14")->fetchColumn()!==1)
+    throw new RuntimeException('computer replacement audit migration is not idempotent');
 foreach (['https://example.com/PhoneHub.exe','https://example.com/PhoneHub.msi',
           MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL] as $validMain) {
     if(main_program_validate_download_url($validMain)!==$validMain)
@@ -390,11 +402,22 @@ ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false ||
     strpos($bulkHtml,'先由服务器预检')===false)
     throw new RuntimeException('redesigned group bulk form render failed');
+// Device lists now load only the selected category; check each page separately.
+$_GET['device_tab']='computers';
+ob_start();feature_view('mobiles');$computerHtml=ob_get_clean();
+$_GET['device_tab']='mobiles';
 ob_start();feature_view('mobiles');$mobileHtml=ob_get_clean();
-if (strpos($mobileHtml,'设备管理')===false || strpos($mobileHtml,'电脑设备')===false ||
-    strpos($mobileHtml,'安卓手机')===false || strpos($mobileHtml,'禁止访问')===false ||
-    strpos($mobileHtml,'<th>状态</th>')===false)
-    throw new RuntimeException('unified device management page render failed');
+$_GET['device_tab']='blacklist';
+ob_start();feature_view('mobiles');$blacklistHtml=ob_get_clean();
+unset($_GET['device_tab']);
+if (strpos($computerHtml,'设备管理')===false || strpos($computerHtml,'电脑设备')===false ||
+    strpos($computerHtml,'安卓手机')===false || strpos($computerHtml,'禁止访问')===false ||
+    strpos($computerHtml,'device-search-form')===false ||
+    strpos($computerHtml,'电脑设备与会话')===false ||
+    strpos($mobileHtml,'<th>状态</th>')===false ||
+    strpos($mobileHtml,'手机指纹')===false ||
+    strpos($blacklistHtml,'有效禁止访问记录')===false)
+    throw new RuntimeException('paginated device management category render failed');
 if (strpos($mobileHtml,'<th>IMEI</th>')!==false || strpos($mobileHtml,'<th>手机号</th>')!==false ||
     strpos($mobileHtml,'name="imei"')!==false || strpos($mobileHtml,'name="phone_number"')!==false ||
     strpos($mobileHtml,'device-reveal')!==false || strpos($mobileHtml,'value="imei_hash"')!==false)
