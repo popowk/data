@@ -597,3 +597,24 @@ PY
 新增全局管理员可访问的「接口性能监控」菜单（普通管理员与历史只读角色无权访问）。数据来源为数据库表 `phonehub_api_perf_samples`，采样仍由 PHP-FPM 环境变量 `PHONEHUB_PERF_SAMPLE_PERCENT` 控制，默认 **0（关闭）**，可设为 1–100。启用后，被采样的 `license_status` / `capabilities` / `client_config` / `client_heartbeat` 请求会在响应生成后尝试写入一条脱敏指标，写入失败不改变正常授权 API 的返回状态。
 
 只记录请求动作、HTTP 状态、PHP 总耗时（毫秒）、数据库耗时、SQL 次数和 UTC 时间。**绝不保存客户 ID、IP、设备指纹、Token、请求正文、AI 消息或密钥**。页面展示过去 7 天最新最多 3000 个采样的 P50/P95、失败计数、数据库 P95、平均 SQL 查询数及每日采样量；这是基于样本的近似统计，不等于全量请求指标，也不包括客户端 DNS/TLS、代理或公网网络传输。采样率较高可能增加数据库写入成本，应在生产流量下逐步调节。新增数据库迁移 15；可在「系统维护 → 历史记录保留与分批清理」清理超过 7 天的旧采样，默认建议保留 30 天。
+
+
+## v0.5.30 · 客户端版本兼容提示、下载审计与审计检索
+
+此版本不改变 Windows 客户端登录授权规则，也不会默认强制旧客户端下线。已有客户端可继续不传新字段，兼容原接口。
+
+### 可选的客户端版本上报
+`update_check`、`update_manifest`、`update_list`、`update_download` 支持可选参数 `client_version`（应用程序核心版本，与目标更新模块的 `current_version` 分开）。若提供则必须符合当前服务端 `valid_version()` 的版本格式。服务端将版本号与已发布 ZIP 元数据中的 `min_client` 比较：
+
+- `update_check` / `update_manifest`：在原字段基础上追加 `server_protocol_version: 1`，若目标更新包存在且传了 `client_version`，再追加 `client_version`、`minimum_client_version`、`client_upgrade_required` 布尔值。`available` 表示目标版本有更新，不代表当前客户端满足安装要求。
+- `update_list`：若客户端提供 `client_version`，每条已发布记录追加同样的兼容性元数据。
+- `update_download`：若客户端主动上报低于该包 `min_client` 的版本，返回 HTTP 409、`error_code=CLIENT_UPGRADE_REQUIRED`；先升级 PhoneHub 核心，再下载该扩展。未上报版本的旧客户端仍保持历史行为，不自动封禁。
+- 非法 `client_version` 返回 `INVALID_CLIENT_VERSION`。客户端应当显示清晰的升级提示，不应把 409 当成网络或密码错误。正式客户端仍必须自行验签 ZIP，兼容提示不能代替签名。
+
+这里实现的是**兼容提示与已知客户端版本的下载约束**，不是全局强制升级、机器证明或支持多个客户端协议的迁移方案。强制阻断所有未知版本必须等待独立客户端兼容性确认。
+
+### 操作包下载记录检索
+全局管理员进入「版本发布与操作包 → 操作包下载记录」，可按客户账号、包 ID 查询并分页（50 条/页）。历史记录仅存包 ID，不能还原真实下载的具体版本；下载设备完整指纹不显示。这一页仅统计旧操作包 `package` 接口，不包含客户端签名 ZIP 的 `update_download`。
+
+### 管理员审计检索
+「操作记录」新增 `audit_q` 查询参数，可搜索历史审计的动作名称、审计目标文本，分页时保留过滤。全局管理员从「客户授权」可跳转相应账号的目标文本记录。旧记录可能仅保存 ID 或简略目标，不等同于全字段的历史差异或可还原的授权快照；不伪造未记录的信息。
