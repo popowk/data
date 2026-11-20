@@ -257,7 +257,7 @@ globalCookies=$(mktemp);globalHtml=$(mktemp)
 globalCsrf=$(login_operator ci_global_operator "$globalPassword" "$globalCookies" "$globalHtml")
 normalCookies=$(mktemp);normalHtml=$(mktemp)
 normalCsrf=$(login_operator ci_normal_operator "$normalPassword" "$normalCookies" "$normalHtml")
-for page in releases cloud_features admins audit update groups; do
+for page in releases cloud_features admins audit update groups performance; do
   status=$(curl -sS -b "$globalCookies" -o "$globalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 200 || { echo "global GET denied $page ($status)" >&2; exit 1; }
 done
@@ -275,7 +275,7 @@ for page in accounts devices plans client_logs; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 200 || { echo "ordinary GET denied $page ($status)" >&2; exit 1; }
 done
-for page in dashboard groups group_bulk packages releases cloud_features update admins audit; do
+for page in dashboard groups group_bulk packages releases cloud_features update admins audit performance; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 403 || { echo "ordinary GET allowed $page ($status)" >&2; exit 1; }
 done
@@ -930,5 +930,23 @@ grep -q 'PhoneHub heartbeat_perf status=200 ' /tmp/phonehub-ci-server.log
 grep -q 'connect_ms=.*auth_ms=.*db_ms=.*package_ms=.*response_ms=' /tmp/phonehub-ci-server.log
 grep -q 'PhoneHub heartbeat_perf status=200 action=license_status ' /tmp/phonehub-ci-server.log
 grep -q 'PhoneHub heartbeat_perf status=200 action=client_heartbeat ' /tmp/phonehub-ci-server.log
+echo 'CI HTTP smoke: stored anonymized telemetry and global performance dashboard'
+php -r '
+require "app/core.php";
+$rows=sql("SELECT action,http_status,total_ms,db_ms,query_count FROM phonehub_api_perf_samples")->fetchAll();
+$types=array_column($rows,"action");
+if(count($rows)<2 || !in_array("license_status",$types,true) || !in_array("client_heartbeat",$types,true))exit(10);
+'
+perfCookies=$(mktemp);perfHtml=$(mktemp)
+curl -fsS -c "$perfCookies" 'http://127.0.0.1:18765/index.php' -o "$perfHtml"
+perfCsrf=$(python3 -c 'import re,sys;m=re.search(r"name=.csrf. content=.([0-9a-f]{64}).",open(sys.argv[1]).read());assert m;print(m.group(1))' "$perfHtml")
+perfLogin=$(curl -fsS -b "$perfCookies" -c "$perfCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$perfCsrf" --data-urlencode 'action=login' --data-urlencode 'username=ci_ai_owner' --data-urlencode 'password=ci-owner-test-123456')
+TEST_RESPONSE="$perfLogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
+curl -fsS -b "$perfCookies" 'http://127.0.0.1:18765/index.php?view=performance' -o "$perfHtml"
+grep -q '接口性能监控' "$perfHtml"
+grep -q '数据库 P95' "$perfHtml"
+grep -q 'client_heartbeat' "$perfHtml"
+grep -q 'license_status' "$perfHtml"
+rm -f "$perfCookies" "$perfHtml"
 if grep -Fq "$TOKEN" /tmp/phonehub-ci-server.log; then echo 'Bearer leaked to timing logs' >&2; exit 10; fi
 echo 'PASS: authenticated mobile/model/IMEI/phone ciphertext, phone and computer blacklist, authorization, logs and signed updates + automation'
