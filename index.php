@@ -119,11 +119,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 : '';
             $newPasswordHash=$creating?password_hash_safe($newPassword):'';
             db()->beginTransaction();
+            $historyBefore=[];
             if ($id) {
                 $old=sql('SELECT username,enabled,device_limit FROM phonehub_users WHERE id=? FOR UPDATE',[$id])->fetch();
                 if (!$old) throw new RuntimeException('账号不存在');
                 $oldMeta=sql('SELECT opening_plan_code FROM phonehub_user_meta WHERE user_id=? FOR UPDATE',[$id])->fetch();
                 $previousPlan=$oldMeta?($oldMeta['opening_plan_code']??null):null;
+                // Fetch after acquiring the customer lock to avoid stale
+                // before/after comparisons with concurrent admin changes.
+                $historyBefore=phonehub_account_history_snapshots([$id])[$id]??[];
                 if ($requestedPlan!=='' && $requestedPlan!==$previousPlan) {
                     if ($requestedPlan!=='custom') {
                         // Lock the currently enabled preset; never trust a
@@ -149,6 +153,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             sql('INSERT INTO phonehub_user_meta(user_id,group_id,mobile_limit,notes,opening_plan_code) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE group_id=VALUES(group_id),mobile_limit=VALUES(mobile_limit),notes=VALUES(notes),opening_plan_code=COALESCE(VALUES(opening_plan_code),opening_plan_code)',
                 [$id,$group?:null,$mobile,$notes,$openingPlan]);
+            $historyAfter=phonehub_account_history_snapshots([$id])[$id]??[];
+            phonehub_account_history_record($id,$creating?'create':'update',$historyBefore,$historyAfter);
             audit('account_save',$name);
             if ($planChanged)
                 audit('account_plan_change',$name.' '.($previousPlan??'legacy').' -> '.$openingPlan);
