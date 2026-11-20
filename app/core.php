@@ -695,6 +695,23 @@ function phonehub_account_history_record(int $userId,string $source,array $befor
         [$userId,$actorId,$actors[$actorId],$source,$encoded]);
     return true;
 }
+function phonehub_account_history_value(string $field,mixed $value): string {
+    if ($value===null) return $field==='license_until'?'永久':'—';
+    if ($field==='license_until')return utc_to_cn((string)$value);
+    if ($field==='group_id')return '分组 #'.(int)$value;
+    if ($field==='entitlements') {
+        if (!is_array($value) || !$value)return '无';
+        $labels=['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP',
+            'mcp-codex'=>'Codex MCP','mcp-harness'=>'DeepSeek Harness MCP',
+            'skill'=>'Skill'];
+        return implode('、',array_map(static fn($entry)=>$labels[(string)$entry]??(string)$entry,$value));
+    }
+    if (in_array($field,['enabled','ai_enabled','allow_client_ai_key'],true))
+        return (int)$value===1?'开启':'关闭';
+    if ($field==='opening_plan_code')
+        return $value===''?'历史套餐（未指定）':(string)$value;
+    return (string)$value;
+}
 function json_response(array $data, int $status=200): never {
     http_response_code($status); header('Content-Type: application/json; charset=utf-8');
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); exit;
