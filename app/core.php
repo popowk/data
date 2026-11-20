@@ -450,6 +450,7 @@ function phonehub_role_can_action(string $role,string $action): bool {
         'group_create','group_delete','group_bulk','group_bulk_preview',
         'release_publish','release_toggle','package_publish','package_toggle',
         'scrcpy_url_save','main_program_url_save','ai_settings_save','cloud_features_save','logs_purge',
+        'history_cleanup_preview','history_cleanup_apply',
         'update_check','update_diagnostics'
     ]);
     // Only the protected original owner may change trust, runtime installation,

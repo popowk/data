@@ -189,6 +189,20 @@ TEST_RESPONSE="$operationEnabled" python3 -c 'import os,json;j=json.loads(os.env
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases' -o "$adminHtml"
 grep -q 'v2' "$adminHtml"
 grep -q '停用' "$adminHtml"
+php -r '
+require "app/core.php";
+$insert=db()->prepare("INSERT INTO phonehub_packages(package_id,version,envelope,content_key,enabled) VALUES(?,?,?,?,1)");
+for($i=1001;$i<=1055;$i++)$insert->execute(["ci-history",$i,"{}","ci-placeholder"]);
+'
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases&pkg_q=ci-history&pkg_page=1' -o "$adminHtml"
+grep -q '共 55 个版本' "$adminHtml"
+grep -q '第 1 / 2 页' "$adminHtml"
+grep -q '版本总数' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases&pkg_q=ci-history&pkg_page=2' -o "$adminHtml"
+grep -q '第 2 / 2 页' "$adminHtml"
+grep -q 'v1001' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=releases&release_q=ci-nonexistent-release' -o "$adminHtml"
+grep -q '0 个版本' "$adminHtml"
 if grep -q 'name="content_key"\|name="envelope"' "$adminHtml"; then
   echo 'Encrypted secrets must not be editable or visible in admin HTML' >&2; exit 1
 fi
@@ -265,7 +279,7 @@ for page in dashboard groups group_bulk packages releases cloud_features update 
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 403 || { echo "ordinary GET allowed $page ($status)" >&2; exit 1; }
 done
-for action in group_create group_bulk_preview release_publish package_publish scrcpy_url_save main_program_url_save admin_create backup_key_generate update_apply cloud_features_save; do
+for action in group_create group_bulk_preview release_publish package_publish scrcpy_url_save main_program_url_save history_cleanup_preview history_cleanup_apply admin_create backup_key_generate update_apply cloud_features_save; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=$action")
   test "$status" = 403 || { echo "ordinary POST allowed $action ($status)" >&2; exit 1; }
 done
@@ -491,6 +505,32 @@ echo 'CI HTTP smoke: entering automation scenarios'
 source tests/automation-smoke.sh
 echo 'CI HTTP smoke: client log filters and 50-record pagination'
 source tests/client-log-smoke.sh
+echo 'CI HTTP smoke: explicit retention preview, bounded cleanup and preservation'
+php -r '
+require "app/core.php";
+$user=sql("SELECT id FROM phonehub_users WHERE username=?",["phonehub_ci_user"])->fetchColumn();
+$stmt=db()->prepare("INSERT INTO phonehub_computer_replacement_events(user_id,replaced_count,created_at) VALUES(?,1,?)");
+for($i=0;$i<505;$i++)$stmt->execute([$user,"2020-01-01 00:00:00"]);
+$stmt->execute([$user,gmdate("Y-m-d H:i:s")]);
+'
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
+grep -q '历史记录保留与分批清理' "$adminHtml"
+invalidRetention=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$CSRF" --data-urlencode 'action=history_cleanup_preview' --data-urlencode 'kind=admin_audit' --data-urlencode 'days=30')
+TEST_RESPONSE="$invalidRetention" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
+preview=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$CSRF" --data-urlencode 'action=history_cleanup_preview' --data-urlencode 'kind=replacement_events' --data-urlencode 'days=180')
+TEST_RESPONSE="$preview" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["eligible"]>=505 and j["batch_limit"]==500,j'
+p_at=$(TEST_RESPONSE="$preview" python3 -c 'import os,json;print(json.loads(os.environ["TEST_RESPONSE"])["preview_at"])')
+p_count=$(TEST_RESPONSE="$preview" python3 -c 'import os,json;print(json.loads(os.environ["TEST_RESPONSE"])["preview_count"])')
+p_token=$(TEST_RESPONSE="$preview" python3 -c 'import os,json;print(json.loads(os.environ["TEST_RESPONSE"])["preview_token"])')
+applied=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$CSRF" --data-urlencode 'action=history_cleanup_apply' --data-urlencode 'kind=replacement_events' --data-urlencode 'days=180' --data-urlencode "preview_at=$p_at" --data-urlencode "preview_count=$p_count" --data-urlencode "preview_token=$p_token")
+TEST_RESPONSE="$applied" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["removed"]==500 and j["remaining"]>=5,j'
+php -r '
+require "app/core.php";
+$old=(int)sql("SELECT COUNT(*) FROM phonehub_computer_replacement_events WHERE created_at=?",["2020-01-01 00:00:00"])->fetchColumn();
+$new=(int)sql("SELECT COUNT(*) FROM phonehub_computer_replacement_events WHERE created_at>DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 DAY)")->fetchColumn();
+$users=(int)sql("SELECT COUNT(*) FROM phonehub_users WHERE username=?",["phonehub_ci_user"])->fetchColumn();
+if($old!==5 || $new<1 || $users!==1)exit(8);
+'
 echo 'CI HTTP smoke: hidden password POST, grouped device revoke and searchable pagination'
 clientAccountId=$(php -r 'require "app/core.php";echo sql("SELECT id FROM phonehub_users WHERE username=?",["phonehub_ci_user"])->fetchColumn();')
 beforeHash=$(CLIENT_ACCOUNT_ID="$clientAccountId" php -r 'require "app/core.php";echo sql("SELECT password_hash FROM phonehub_users WHERE id=?",[(int)getenv("CLIENT_ACCOUNT_ID")])->fetchColumn();')
@@ -542,6 +582,11 @@ curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=devices&devi
 grep -q '第 2 / 2 页' "$adminHtml"
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=devices&device_tab=computers&device_q=ci_device_pages&device_page=999' -o "$adminHtml"
 grep -q '第 2 / 2 页' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=devices&device_tab=mobiles&mobile_customer_q=ci_device_pages' -o "$adminHtml"
+grep -q '输入至少两个字符' "$adminHtml"
+grep -q 'ci_device_pages（' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=devices&device_tab=mobiles&mobile_customer_q=zzz-no-match' -o "$adminHtml"
+grep -q '未找到匹配客户' "$adminHtml"
 for tab in mobiles blacklist; do
   curl -fsS -b "$adminCookies" "http://127.0.0.1:18765/index.php?view=devices&device_tab=$tab&device_q=ci_device_pages" -o "$adminHtml"
   grep -q 'device-search-form' "$adminHtml"

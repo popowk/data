@@ -68,6 +68,10 @@ function device_admin_view(): void {
         }
     }
     $computers=[];$phones=[];$blacklist=[];$users=[];$replacementWarnings=[];
+    // Always search customers server-side. A fixed 1000-user dropdown silently
+    // hid valid customers on large deployments.
+    $mobileCustomerQ=trim((string)($_GET['mobile_customer_q']??''));
+    if (utf8_length($mobileCustomerQ)>64) $mobileCustomerQ=utf8_limit($mobileCustomerQ,64);
     $computerCount=(int)sql("SELECT COUNT(*) FROM (
         SELECT s.user_id,s.device_id FROM phonehub_sessions s WHERE s.expires_at>UTC_TIMESTAMP()
         GROUP BY s.user_id,s.device_id) c")->fetchColumn();
@@ -105,9 +109,13 @@ function device_admin_view(): void {
                  (b.identifier_type='imei_hash' AND d.imei_hash IS NOT NULL AND b.identifier_hash=d.imei_hash) OR
                  (b.identifier_type='phone_hash' AND d.phone_number_hash IS NOT NULL AND b.identifier_hash=d.phone_number_hash))) AS blacklisted
             ".$from." ORDER BY d.id DESC LIMIT ".$size." OFFSET ".$offset,$params)->fetchAll();
-        $users=sql("SELECT u.id,u.username,COALESCE(m.mobile_limit,0) AS mobile_limit
-            FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id
-            ORDER BY u.username LIMIT 1000")->fetchAll();
+        if (utf8_length($mobileCustomerQ)>=2) {
+            $customerLike='%'.str_replace(['\\','%','_'],['\\\\','\\%','\\_'],$mobileCustomerQ).'%';
+            $users=sql("SELECT u.id,u.username,COALESCE(m.mobile_limit,0) AS mobile_limit
+              FROM phonehub_users u LEFT JOIN phonehub_user_meta m ON m.user_id=u.id
+              WHERE u.username LIKE ? ORDER BY (u.username=?) DESC,u.username ASC LIMIT 25",
+              [$customerLike,$mobileCustomerQ])->fetchAll();
+        }
     } else {
         $from=" FROM phonehub_mobile_blacklist b WHERE b.enabled=1
             AND b.identifier_type IN ('computer_id','phone_id')".$where;
@@ -185,9 +193,17 @@ function device_admin_view(): void {
         <p class="footnote">新版只使用手机指纹进行设备授权及操作包下载限制；历史设备的敏感资料不再在此页面显示，也不再从客户端采集。</p>
       </div>
       <div class="card"><div class="card-head"><h2>管理员手动绑定手机</h2></div>
+        <form class="device-search-form" method="get" action="index.php">
+          <input type="hidden" name="view" value="devices"><input type="hidden" name="device_tab" value="mobiles">
+          <label for="mobile-customer-q">先查找客户</label>
+          <input id="mobile-customer-q" name="mobile_customer_q" minlength="2" maxlength="64"
+            value="<?=h($mobileCustomerQ)?>" placeholder="输入至少两个字符，支持所有客户账号" required>
+          <button class="btn" type="submit">查找客户</button>
+          <span class="muted">最多显示 25 个匹配项，可继续缩小关键词</span>
+        </form>
         <form data-ajax="mobile_add"><input type="hidden" name="action" value="mobile_add">
           <div class="form-grid">
-            <div class="field"><label>客户账号</label><select required name="user_id"><option value="">选择客户</option><?php foreach($users as $u): ?><option value="<?=(int)$u['id']?>"><?=h($u['username'])?>（<?=(int)$u['mobile_limit']?> 台）</option><?php endforeach ?></select></div>
+            <div class="field"><label>客户账号</label><select required name="user_id"><option value=""><?=utf8_length($mobileCustomerQ)>=2?'选择匹配的客户':'请先查询客户'?></option><?php foreach($users as $u): ?><option value="<?=(int)$u['id']?>"><?=h($u['username'])?>（<?=(int)$u['mobile_limit']?> 台）</option><?php endforeach ?></select><?php if(utf8_length($mobileCustomerQ)>=2 && !$users): ?><small class="footnote">未找到匹配客户，请更换关键词</small><?php endif ?></div>
             <div class="field"><label>手机名称</label><input name="display_name" maxlength="120" placeholder="客户手机"></div>
             <div class="field"><label>手机型号</label><input name="phone_model" maxlength="120" placeholder="例如 Samsung Galaxy S24"></div>
             <div class="field"><label>手机指纹（SHA-256）</label><input name="phone_id" pattern="[a-fA-F0-9]{64}" maxlength="64" required placeholder="64 位设备指纹"></div>

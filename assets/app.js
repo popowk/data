@@ -93,6 +93,18 @@
     if(submit)submit.disabled=true;
     try {
       const fields=new FormData(form);
+      if(action==='history_cleanup_apply'){
+        const preview=await request('history_cleanup_preview',fields);
+        if(!Number.isInteger(preview.eligible)) throw new Error('服务器未返回有效的清理预览');
+        const confirmText='确认清理【'+preview.label+'】中早于 '+preview.days+
+          ' 天的历史记录？共有 '+preview.eligible+' 条符合条件，本次最多删除 '+
+          Math.min(500,preview.eligible)+' 条。此操作无法撤销；授权与设备数据不会删除。';
+        if(!preview.eligible){toast('没有符合保留策略的旧记录');return;}
+        if(!confirm(confirmText))return;
+        fields.set('preview_at',String(preview.preview_at));
+        fields.set('preview_count',String(preview.preview_count));
+        fields.set('preview_token',preview.preview_token);
+      }
       if(action==='group_bulk'){
         const preview=await request('group_bulk_preview',fields);
         if(!preview.snapshot || !Array.isArray(preview.fields) || !Number.isInteger(preview.members))
@@ -335,6 +347,12 @@
     if(event.target.id==='opening-plan') {
       const editor=$('#account-editor form');
       if(editor) applyOpeningPlan(editor,true);
+      return;
+    }
+    if(event.target.id==='history-cleanup-kind'){
+      const chosen=event.target.selectedOptions[0];
+      const days=$('#history-cleanup-days');
+      if(days&&chosen){days.min=chosen.dataset.min||'7';days.value=chosen.dataset.default||'30';}
       return;
     }
     const toggle=event.target.closest('.bulk-option-toggle');
