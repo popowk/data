@@ -41,8 +41,8 @@ if (!in_array('opening_plan_code',$metaColumns,true))
     throw new RuntimeException('opening plan migration missing');
 $planTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_plan_templates'")->fetchColumn();
 if($planTable!==1) throw new RuntimeException('plan migration table missing');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==14)
-    throw new RuntimeException('main program download migration version incorrect');
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==15)
+    throw new RuntimeException('performance sample migration version incorrect');
 $defaultScrcpy=$pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn();
 if($defaultScrcpy!==SCRCPY_DEFAULT_DOWNLOAD_URL)
     throw new RuntimeException('scrcpy download default is missing');
@@ -60,8 +60,8 @@ if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resou
     throw new RuntimeException('scrcpy migration seeded duplicate rows');
 if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resource='main_program'")->fetchColumn()!==1)
     throw new RuntimeException('main program migration seeded duplicate rows');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==14)
-    throw new RuntimeException('computer replacement audit migration failed');
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==15)
+    throw new RuntimeException('performance sample migration failed');
 $replacementColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_computer_replacement_events'")->fetchAll(PDO::FETCH_COLUMN);
 foreach (['id','user_id','replaced_count','created_at'] as $needed)
@@ -72,6 +72,16 @@ if(array_intersect($replacementColumns,['device_id','token_hash','ip_address','s
 migrate($pdo);
 if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_admin_migrations WHERE version=14")->fetchColumn()!==1)
     throw new RuntimeException('computer replacement audit migration is not idempotent');
+$perfColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_api_perf_samples'")->fetchAll(PDO::FETCH_COLUMN);
+foreach (['id','action','http_status','total_ms','db_ms','query_count','created_at'] as $field)
+    if(!in_array($field,$perfColumns,true))
+        throw new RuntimeException('performance telemetry field missing: '.$field);
+if(array_intersect($perfColumns,['device_id','user_id','ip','token','request_body']))
+    throw new RuntimeException('performance telemetry table contains forbidden personal fields');
+migrate($pdo);
+if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_admin_migrations WHERE version=15")->fetchColumn()!==1)
+    throw new RuntimeException('performance telemetry migration is not idempotent');
 foreach (['https://example.com/PhoneHub.exe','https://example.com/PhoneHub.msi',
           MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL] as $validMain) {
     if(main_program_validate_download_url($validMain)!==$validMain)
