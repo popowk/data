@@ -57,7 +57,8 @@ function phonehub_history_cleanup_targets(): array {
       'ai_usage'=>['label'=>'AI 请求统计','table'=>'phonehub_ai_usage','date'=>'created_at','min'=>30,'default'=>180],
       'replacement_events'=>['label'=>'自动换机统计','table'=>'phonehub_computer_replacement_events','date'=>'created_at','min'=>30,'default'=>180],
       'package_downloads'=>['label'=>'操作包下载历史','table'=>'phonehub_package_downloads','date'=>'downloaded_at','min'=>90,'default'=>365],
-      'admin_audit'=>['label'=>'管理员操作审计（仅主账号）','table'=>'phonehub_admin_audit','date'=>'created_at','min'=>365,'default'=>730]
+      'admin_audit'=>['label'=>'管理员操作审计（仅主账号）','table'=>'phonehub_admin_audit','date'=>'created_at','min'=>365,'default'=>730],
+      'api_perf'=>['label'=>'接口性能采样','table'=>'phonehub_api_perf_samples','date'=>'created_at','min'=>7,'default'=>30]
     ];
 }
 function phonehub_history_cleanup_action(string $action): never {
@@ -351,8 +352,72 @@ function feature_action(string $action): never {
     throw new RuntimeException('未知管理操作');
 }
 
+/**
+ * In-admin read-only performance telemetry. Approximate percentiles over the
+ * latest at most 3000 sampled requests from the past 7 days, no identities.
+ */
+function phonehub_performance_view(): void {
+    require_global_admin();
+    $rows=sql("SELECT action,http_status,total_ms,db_ms,query_count,created_at
+        FROM phonehub_api_perf_samples
+        WHERE created_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 7 DAY)
+        ORDER BY id DESC LIMIT 3000")->fetchAll();
+    $stats=[];$days=[];
+    foreach ($rows as $sample) {
+        $action=(string)$sample['action'];
+        if (!isset($stats[$action])) $stats[$action]=['count'=>0,'failed'=>0,'latency'=>[],'db'=>[],'queries'=>0];
+        $stats[$action]['count']++;
+        if ((int)$sample['http_status']>=400) $stats[$action]['failed']++;
+        $stats[$action]['latency'][]=(int)$sample['total_ms'];
+        $stats[$action]['db'][]=(int)$sample['db_ms'];
+        $stats[$action]['queries']+=(int)$sample['query_count'];
+        $day=substr((string)$sample['created_at'],0,10);
+        if (!isset($days[$day]))$days[$day]=['count'=>0,'errors'=>0];
+        $days[$day]['count']++;
+        if ((int)$sample['http_status']>=400)$days[$day]['errors']++;
+    }
+    ksort($stats);ksort($days);
+    $percentile=static function(array $values,float $p): int {
+        if (!$values)return 0;
+        sort($values,SORT_NUMERIC);
+        return $values[max(0,min(count($values)-1,(int)ceil(count($values)*$p)-1))];
+    };
+    $sampleCount=count($rows);
+    $failed=count(array_filter($rows,static fn(array $row)=>(int)$row['http_status']>=400));
+    $sampling=(int)(getenv('PHONEHUB_PERF_SAMPLE_PERCENT')?:0);
+    ?>
+    <div class="page-title"><div><h1>接口性能监控</h1><p>授权查询的脱敏 PHP 服务端耗时，采样关闭时不会产生新记录</p></div></div>
+    <div class="device-summary">
+      <div class="device-summary-card"><span>近 7 天已加载采样</span><strong><?=$sampleCount?></strong><small>只展示最近最多 3000 条</small></div>
+      <div class="device-summary-card"><span>采样中 4xx/5xx 比例</span><strong><?=$sampleCount?number_format($failed/$sampleCount*100,1).'%' : '—'?></strong><small>非全量请求成功率</small></div>
+      <div class="device-summary-card"><span>PHP 总耗时 P95</span><strong><?=$sampleCount?$percentile(array_column($rows,'total_ms'),0.95).' ms':'—'?></strong><small>不包括 DNS、TLS 与代理耗时</small></div>
+    </div>
+    <div class="card"><div class="card-head"><h2>授权接口性能</h2><span class="count">最近 7 天，最多 3000 条</span></div>
+      <p class="muted">启动采样：PHP-FPM 设置环境变量 <code>PHONEHUB_PERF_SAMPLE_PERCENT=10</code>，重启服务后生效；默认 0 为关闭。实际采样配置由 PHP-FPM 环境决定，后台页面不自动修改服务器配置。</p>
+      <?php if(!$sampleCount): ?><p class="footnote">尚无采样数据。启用采样后请求授权接口，即可显示 P50/P95 与数据库耗时。</p><?php endif ?>
+      <div class="table-scroll"><table><thead><tr><th>接口</th><th>采样数</th><th>4xx/5xx</th><th>PHP P50</th><th>PHP P95</th><th>数据库 P95</th><th>平均 SQL 次数</th></tr></thead><tbody>
+        <?php foreach($stats as $action=>$entry): ?>
+        <tr><td><?=h($action)?></td><td><?=(int)$entry['count']?></td><td><?=(int)$entry['failed']?></td>
+          <td><?=$percentile($entry['latency'],0.50)?> ms</td><td><?=$percentile($entry['latency'],0.95)?> ms</td>
+          <td><?=$percentile($entry['db'],0.95)?> ms</td>
+          <td><?=number_format($entry['queries']/max(1,$entry['count']),1)?></td></tr>
+        <?php endforeach ?>
+      </tbody></table></div>
+      <p class="footnote">采样仅包含 action、状态码、PHP 总耗时、数据库耗时、SQL 数和 UTC 时间；不记录客户账号、电脑 ID、Token、IP、请求正文。P95 是本页最近样本的近似分位数，低采样量或 3000 条截断时不等同于全站真实 P95。</p>
+    </div>
+    <div class="card"><div class="card-head"><h2>每日采样趋势（UTC）</h2></div>
+      <div class="table-scroll"><table><thead><tr><th>日期</th><th>采样数</th><th>4xx/5xx</th><th>错误占比</th></tr></thead><tbody>
+        <?php foreach($days as $day=>$entry): ?>
+        <tr><td><?=h($day)?></td><td><?=(int)$entry['count']?></td><td><?=(int)$entry['errors']?></td>
+        <td><?=number_format($entry['errors']/max(1,$entry['count'])*100,1)?>%</td></tr>
+        <?php endforeach ?>
+      </tbody></table></div>
+    </div>
+    <?php
+}
 function feature_view(string $view,bool $embedded=false): void {
     phonehub_require_view($view==='mobiles'?'devices':$view);
+    if ($view==='performance') { phonehub_performance_view(); return; }
     if ($view==='admins') {
         require_global_admin();
         $canManageAdmins=admin_role()==='owner';
