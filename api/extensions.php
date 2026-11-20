@@ -113,6 +113,20 @@ function api_require_release_permission(array $release,array $session): void {
     if ($release['platform']!=='core' && !in_array($release['platform'],is_array($allowed)?$allowed:[],true))
         api_problem('NOT_ENTITLED','当前客户没有此更新包的权限',403);
 }
+/** Optional application version, separate from a module's current_version. */
+function api_reported_client_version(array $input): ?string {
+    if (!array_key_exists('client_version',$input)) return null;
+    $version=$input['client_version'];
+    if (!is_string($version) || !valid_version($version))
+        api_problem('INVALID_CLIENT_VERSION','Windows 客户端版本号无效');
+    return $version;
+}
+function api_release_client_compatibility(array $release,?string $clientVersion): array {
+    if ($clientVersion===null) return [];
+    $required=(string)$release['min_client'];
+    return ['client_version'=>$clientVersion,'minimum_client_version'=>$required,
+        'client_upgrade_required'=>version_compare($clientVersion,$required,'<')];
+}
 function api_latest_release(string $platform,string $channel): ?array {
     $rows=client_sql('SELECT * FROM phonehub_releases WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC LIMIT 500',[$platform,$channel])->fetchAll();
     usort($rows,static fn($a,$b)=>version_compare($b['version'],$a['version']));
@@ -382,7 +396,11 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         if ($platform!=='core' && !in_array($platform,$allowed,true)) api_problem('NOT_ENTITLED','未授权此更新目标',403);
         $rows=client_sql('SELECT * FROM phonehub_releases WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC LIMIT 30',[$platform,$channel])->fetchAll();
         usort($rows,static fn($a,$b)=>version_compare($b['version'],$a['version']));
-        api_out(['ok'=>true,'releases'=>array_map('public_release',$rows)]);
+        $clientVersion=api_reported_client_version($input);
+        $public=array_map(static function($row) use ($clientVersion): array {
+            return public_release($row)+api_release_client_compatibility($row,$clientVersion);
+        },$rows);
+        api_out(['ok'=>true,'releases'=>$public]);
     }
         if ($action==='update_check' || $action==='update_manifest') {
         try {
@@ -394,18 +412,23 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         $allowed=json_decode((string)$session['entitlements'],true)?:[];
         if (in_array($platform,['mcp','skill','mcp-codex','mcp-harness'],true)) api_require_cloud_feature($platform,$session);
         if ($platform!=='core' && !in_array($platform,$allowed,true)) api_problem('NOT_ENTITLED','未授权此更新目标',403);
+        $clientVersion=api_reported_client_version($input);
         $release=api_latest_release($platform,$channel);
         $available=$release && version_compare($release['version'],$current,'>');
+        $compatibility=$release ? api_release_client_compatibility($release,$clientVersion):[];
         api_out(['ok'=>true,'available'=>(bool)$available,'current_version'=>$current,
             'latest_version'=>$release['version']??null,
             'release'=>$release?public_release($release):null,
-            'download_action'=>'update_download']);
+            'download_action'=>'update_download','server_protocol_version'=>1]+$compatibility);
     }
     if ($action==='update_download') {
         $id=api_int($input['release_id']??null);
         $release=client_sql('SELECT * FROM phonehub_releases WHERE id=? AND enabled=1',[$id])->fetch();
         if (!$release) api_problem('RELEASE_NOT_FOUND','更新包不存在或已停用',404);
         api_require_release_permission($release,$session);
+        $clientVersion=api_reported_client_version($input);
+        if ($clientVersion!==null && version_compare($clientVersion,(string)$release['min_client'],'<'))
+            api_problem('CLIENT_UPGRADE_REQUIRED','当前客户端版本低于此更新包的最低安装要求，请先升级客户端核心',409);
         $path=release_store().'/'.$release['storage_name'];
         if (!preg_match('/^[0-9a-f]{40}\.zip$/D',(string)$release['storage_name']) || is_link($path) || !is_file($path)
             || (int)filesize($path)!==(int)$release['size_bytes'])
