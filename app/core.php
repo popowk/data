@@ -475,7 +475,7 @@ function phonehub_role_can_action(string $role,string $action): bool {
         'automation_token_create','automation_token_revoke','automation_token_rotate',
         'automation_release_approve','automation_release_reject',
         'admin_create','admin_role_change','admin_toggle','admin_reset',
-        'admin_delete','owner_password'
+        'admin_delete','owner_password','release_delete'
     ]);
     return match($role) {
         'owner'=>in_array($action,$owner,true),
