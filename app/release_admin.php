@@ -177,26 +177,40 @@ function release_package_overview(): void {
         MAX(CASE WHEN enabled=1 THEN version ELSE NULL END) AS latest_enabled
         FROM phonehub_packages WHERE package_id LIKE ? GROUP BY package_id ORDER BY package_id',
         [$pattern])->fetchAll();
-    $groups=[];
-    foreach ($summaryRows as $entry) $groups[(string)$entry['package_id']]=$entry;
+    $groups=[];$categories=[];
+    foreach ($summaryRows as $entry) {
+        $id=(string)$entry['package_id'];
+        $groups[$id]=$entry;
+        $category=phonehub_operation_package_category($id);
+        $categories[$category][$id]=$entry;
+    }
     $packagePageLink=static fn(int $page): string =>
         'index.php?'.http_build_query(['view'=>'releases','pkg_q'=>$pkgQ,'pkg_page'=>$page]).'#legacy-operation-packages';
     $canEdit=phonehub_role_can_action(admin_role(),'package_publish');
     ?>
     <section class="card" id="legacy-operation-packages">
-      <div class="card-head"><h2>操作包管理中心</h2><span class="count"><?=count($groups)?> 类 · 共 <?=$pkgTotal?> 个版本</span></div>
+      <div class="card-head"><h2>操作包管理中心</h2><span class="count"><?=count($categories)?> 个分类 · <?=count($groups)?> 个独立包 · 共 <?=$pkgTotal?> 个版本</span></div>
       <p class="muted">这里管理客户端旧协议的<strong>加密操作包</strong>（envelope + content_key），与上方上传的 Ed25519 签名 ZIP 更新包互相独立。下载次数按包 ID 汇总，历史日志不含单个版本号；后台永不显示解密密钥。</p>
       <?php if($canEdit): ?>
       <form data-ajax="package_publish" enctype="multipart/form-data" class="package-publish-form">
         <input type="hidden" name="action" value="package_publish">
         <div class="form-grid">
           <div class="field"><label>操作包 ID</label><input name="package_id" list="operation-package-targets" pattern="[a-z0-9-]{1,32}" maxlength="32" placeholder="douyin" required>
-            <datalist id="operation-package-targets"><option value="douyin"><option value="xiaohongshu"><option value="mcp"><option value="skill"><option value="mcp-codex"><option value="mcp-harness"></datalist></div>
+            <datalist id="operation-package-targets">
+              <option value="douyin" label="抖音 · 主操作包"></option>
+              <option value="douyin-notification" label="抖音 · 通知操作包"></option>
+              <option value="xiaohongshu" label="小红书"></option>
+              <option value="mcp" label="MCP"></option>
+              <option value="skill" label="Skill"></option>
+              <option value="mcp-codex" label="Codex MCP"></option>
+              <option value="mcp-harness" label="DeepSeek Harness MCP"></option>
+            </datalist></div>
           <div class="field"><label>新版本号（整数）</label><input name="version" type="number" min="1" max="2147483647" step="1" required placeholder="2"></div>
           <div class="field span2"><label>加密封装 JSON（最多 12 MiB）</label><input name="file" type="file" accept=".json,application/json" required></div>
         </div>
         <div class="editor-actions"><button class="btn primary" data-confirm-submit="确认上传并立即启用此加密操作包版本？现有客户可能开始下载新版本。">上传并发布加密操作包</button></div>
       </form>
+      <p class="footnote">抖音分类下的 <code>douyin</code>（主操作包）和 <code>douyin-notification</code>（通知操作包）各自独立发布、上下架和维护版本；客户只需授权「抖音」，客户端仍须按原始包 ID 获取对应文件。</p>
       <p class="footnote">仅接受加密工具生成的 JSON：<code>{"envelope":{"manifest":"Base64","signature":"Base64","nonce":"Base64","ciphertext":"Base64"},"content_key":"Base64"}</code>。服务端进行字段、Base64 和大小检查，但不能替代客户端签名验真与解密联调。版本不可覆盖；新版本发布后会成为该包默认下载版本。</p>
       <?php endif ?>
       <div class="card-head package-subsection-head"><h2>操作包概览</h2><span class="count">按包 ID 汇总</span></div>
@@ -209,15 +223,18 @@ function release_package_overview(): void {
         <span class="muted">共 <?=$pkgTotal?> 个版本；第 <?=$pkgPage?> / <?=$pkgPages?> 页</span>
       </form>
       <div class="table-scroll package-summary-table"><table><thead><tr><th>包 ID</th><th>最新版本</th><th>当前可下载版本</th><th>版本总数</th><th>累计下载</th><th>近 30 天</th><th>最后下载</th></tr></thead><tbody>
-        <?php foreach ($groups as $id=>$g): $c=$stats[$id]??[]; ?>
-        <tr><td><b><?=h($id)?></b></td><td>v<?=(int)$g['latest_version']?></td><td><?= $g['latest_enabled']===null?'<span class="pill off">全部停用</span>':'v'.(int)$g['latest_enabled']?></td><td><?=(int)$g['versions']?></td><td><?=(int)($c['total']??0)?></td><td><?=(int)($c['last30']??0)?></td><td><?=h($c['latest']??'—')?></td></tr>
+        <?php foreach ($categories as $category=>$packages): ?>
+        <tr class="package-category-row"><td colspan="7"><strong><?=h($category)?></strong> <small class="muted">· <?=count($packages)?> 个独立操作包</small></td></tr>
+        <?php foreach ($packages as $id=>$g): $c=$stats[$id]??[]; ?>
+        <tr><td><b><?=h($id)?></b><?php if($id==='douyin'): ?> <small class="muted">主操作包</small><?php elseif($id==='douyin-notification'): ?> <small class="muted">通知操作包</small><?php endif ?></td><td>v<?=(int)$g['latest_version']?></td><td><?= $g['latest_enabled']===null?'<span class="pill off">全部停用</span>':'v'.(int)$g['latest_enabled']?></td><td><?=(int)$g['versions']?></td><td><?=(int)($c['total']??0)?></td><td><?=(int)($c['last30']??0)?></td><td><?=h($c['latest']??'—')?></td></tr>
+        <?php endforeach ?>
         <?php endforeach ?>
         <?php if (!$groups): ?><tr><td colspan="7" class="empty-result">尚无操作包，可以上传第一份加密封装 JSON</td></tr><?php endif ?>
       </tbody></table></div>
       <div class="card-head package-subsection-head package-history-head"><h2>历史版本与上下架</h2><span class="count">每页 50 条</span></div>
       <div class="table-scroll package-history-table"><table><thead><tr><th>操作包</th><th>版本</th><th>状态</th><th>发布时间（UTC）</th><th>操作</th></tr></thead><tbody>
         <?php foreach ($rows as $p): ?>
-        <tr><td><?=h($p['package_id'])?></td><td>v<?=(int)$p['version']?></td><td><span class="pill <?=(int)$p['enabled']?'ok':'off'?>"><?=(int)$p['enabled']?'已启用':'已停用'?></span></td><td><?=h($p['created_at'])?></td><td>
+        <tr><td><small class="muted"><?=h(phonehub_operation_package_category((string)$p['package_id']))?></small> · <?=h($p['package_id'])?></td><td>v<?=(int)$p['version']?></td><td><span class="pill <?=(int)$p['enabled']?'ok':'off'?>"><?=(int)$p['enabled']?'已启用':'已停用'?></span></td><td><?=h($p['created_at'])?></td><td>
           <?php if ($canEdit): ?><button class="small-link" data-action="package-toggle" data-id="<?=(int)$p['id']?>"><?=(int)$p['enabled']?'停用':'恢复'?></button>
           <?php else: ?><span class="muted">只读</span><?php endif ?>
         </td></tr>
