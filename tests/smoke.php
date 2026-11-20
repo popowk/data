@@ -135,10 +135,10 @@ if (count($openingPlans)!==3 || $openingPlans['personal']['device_limit']!==1 ||
 $allowedViews=[
     'owner'=>['dashboard','accounts','groups','group_bulk','devices','packages',
       'plans','backup_keys','client_logs','releases','ai','update',
-      'admins','audit','cloud_features'],
+      'admins','audit','cloud_features','account_history'],
     'global'=>['dashboard','accounts','groups','group_bulk','devices','packages',
       'plans','backup_keys','client_logs','releases','ai','update',
-      'admins','audit','cloud_features'],
+      'admins','audit','cloud_features','account_history'],
     'admin'=>['accounts','devices','plans','client_logs'],
     'viewer'=>['dashboard','accounts','groups','packages']
 ];
