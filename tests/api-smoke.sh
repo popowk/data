@@ -623,6 +623,7 @@ TEST_RESPONSE="$zeroQuota" python3 -c 'import os,json;j=json.loads(os.environ["T
 TEST_RESPONSE="$(quota_session "$PC_E" "$TOKEN_E")" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"],j'
 # Count replacement events without logging device identity, and detect
 # repeated replacements within a 15-minute period without auto-banning.
+php -r 'require "app/core.php";sql("UPDATE phonehub_users SET device_limit=1 WHERE username=?",["ci_autoreplace_user"]);'
 quotaFifth=$(quota_login "$PC_A")
 TEST_RESPONSE="$quotaFifth" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["replaced_devices"]==1,j'
 quotaSixth=$(quota_login "$PC_B")
