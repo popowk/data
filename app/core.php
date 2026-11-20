@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=13) return;
+        if ($ready>=14) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -364,6 +364,19 @@ function migrate(PDO $conn): void {
         $conn->exec("INSERT IGNORE INTO phonehub_download_settings(resource,download_url)
           VALUES ('main_program','https://down.tmd.pet/scrcpy/scrcpy-win64-v5.0.1.zip')");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(13,UTC_TIMESTAMP())");
+    }
+    if ($version < 14) {
+        // Only anonymized replacement counts; never store device hashes, tokens
+        // or IP addresses as part of the automatic computer replacement audit.
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_computer_replacement_events (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          user_id BIGINT UNSIGNED NOT NULL,
+          replaced_count SMALLINT UNSIGNED NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_replacement_user_time(user_id,created_at),
+          INDEX idx_replacement_time(created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(14,UTC_TIMESTAMP())");
     }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
