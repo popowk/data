@@ -261,6 +261,26 @@ if(!$hash || $hash===getenv("INITIAL_PASSWORD") || !password_verify(getenv("INIT
 customLogin=$(curl -sS -X POST 'http://127.0.0.1:18765/api/phonehub.php?action=login' -H 'Content-Type: application/json' \
  --data '{"username":"ci_custom_password","password":"CI-chosen-Password-2026!","device_id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}')
 TEST_RESPONSE="$customLogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["username"]=="ci_custom_password",j'
+# Dashboard alerts and exact database-backed 80% quota filters. Fixtures
+# are isolated to the ephemeral CI database, never production accounts.
+php -r '
+require "app/core.php";
+$id=(int)sql("SELECT id FROM phonehub_users WHERE username=?",["ci_open_plan_user"])->fetchColumn();
+sql("UPDATE phonehub_users SET license_until=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 6 DAY) WHERE id=?",[$id]);
+sql("INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,enabled,last_seen) VALUES(?,?,?,1,UTC_TIMESTAMP())",
+ [$id,str_repeat("e",64),"CI quota alert"]);
+'
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=dashboard' -o "$adminHtml"
+grep -q '授权到期与额度预警' "$adminHtml"
+grep -q '未来 7 天到期' "$adminHtml"
+grep -q '电脑名额使用率' "$adminHtml"
+grep -q '手机名额使用率' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&expiry=due7' -o "$adminHtml"
+grep -q 'ci_open_plan_user' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&usage=pc80' -o "$adminHtml"
+grep -q 'ci_custom_password' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&usage=mobile80' -o "$adminHtml"
+grep -q 'ci_open_plan_user' "$adminHtml"
 weakCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=account_save' \
  --data-urlencode 'username=ci_weak_pw' --data-urlencode 'opening_plan=personal' \
@@ -419,6 +439,20 @@ grep -q '客户授权变更明细' "$adminHtml"
 grep -q '开户套餐' "$adminHtml"
 grep -q 'ci_ai_owner' "$adminHtml"
 grep -q '变更明细' "$adminHtml"
+grep -q '导出 CSV' "$adminHtml"
+historyCsv=$(mktemp);historyCsvHeaders=$(mktemp)
+curl -fsS -b "$adminCookies" -D "$historyCsvHeaders"  "http://127.0.0.1:18765/index.php?view=account_history&user_id=$planSwitchId&export=csv" -o "$historyCsv"
+grep -qi '^content-type: text/csv' "$historyCsvHeaders"
+grep -qi '^cache-control: private, no-store' "$historyCsvHeaders"
+grep -q '开户套餐' "$historyCsv"
+grep -q 'ci_ai_owner' "$historyCsv"
+grep -q 'standard' "$historyCsv"
+if grep -q 'CI-chosen-Password-2026!' "$historyCsv"; then
+ echo 'CSV leaked password' >&2;exit 1
+fi
+noCsv=$(curl -sS -b "$adminCookies" -o "$historyCsv" -w '%{http_code}'  'http://127.0.0.1:18765/index.php?view=account_history&user_id=0&export=csv')
+test "$noCsv" = 404
+rm -f "$historyCsv" "$historyCsvHeaders"
 # Stable customer IDs, not usernames or untrusted query strings, bind history.
 missingHistory=$(curl -sS -b "$adminCookies" -o "$adminHtml" -w '%{http_code}' 'http://127.0.0.1:18765/index.php?view=account_history&user_id=0')
 test "$missingHistory" = 404
