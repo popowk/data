@@ -198,11 +198,12 @@ function phonehub_bulk_job_start(int $group,array $targets,string $preview): arr
 function phonehub_bulk_job_step(int $id): array {
     require_global_admin();
     if($id<1)throw new RuntimeException('批量任务 ID 无效');
-    $pdo=db();$pdo->beginTransaction();
+    $pdo=db();$pdo->beginTransaction();$authorized=false;
     try {
         $job=sql('SELECT * FROM phonehub_bulk_jobs WHERE id=? FOR UPDATE',[$id])->fetch();
         if(!$job)throw new RuntimeException('批量任务不存在');
         phonehub_bulk_job_authorize($job);
+        $authorized=true;
         if(in_array($job['status'],['completed','partial','cancelled'],true)) {
             $pdo->commit();
             return phonehub_bulk_job_status_data($job);
@@ -294,10 +295,12 @@ function phonehub_bulk_job_step(int $id): array {
         if($pdo->inTransaction())$pdo->rollBack();
         // A failed HTTP request never marks a batch done. The next click
         // retries the same 40 pending items without duplicating updates.
-        try {
-            sql("UPDATE phonehub_bulk_jobs SET last_error='最近一批执行失败，可重试',
-                updated_at=UTC_TIMESTAMP() WHERE id=? AND status IN ('pending','running')",[$id]);
-        } catch(Throwable $ignored) {}
+        if($authorized) {
+            try {
+                sql("UPDATE phonehub_bulk_jobs SET last_error='最近一批执行失败，可重试',
+                    updated_at=UTC_TIMESTAMP() WHERE id=? AND status IN ('pending','running')",[$id]);
+            } catch(Throwable $ignored) {}
+        }
         throw $e;
     }
 }
