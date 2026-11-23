@@ -54,6 +54,9 @@ TEST_RESPONSE="$adminLogin" python3 -c 'import os,json; j=json.loads(os.environ[
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
 grep -q '系统维护' "$adminHtml"
 grep -q '运行环境自检' "$adminHtml"
+grep -q 'href="?view=performance"' "$adminHtml"
+grep -q 'href="?view=audit"' "$adminHtml"
+grep -q '更新与回滚说明' "$adminHtml"
 grep -q 'Curve25519 备份密钥' "$adminHtml"
 if grep -q 'href="?view=gateway"\|href="?view=backup_keys"\|href="?view=group_bulk"' "$adminHtml"; then
   echo 'obsolete duplicate or gateway menu still visible' >&2; exit 1
@@ -271,10 +274,10 @@ sql("INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,enabled,l
  [$id,str_repeat("e",64),"CI quota alert"]);
 '
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=dashboard' -o "$adminHtml"
-grep -q '授权到期与额度预警' "$adminHtml"
-grep -q '未来 7 天到期' "$adminHtml"
-grep -q '电脑名额使用率' "$adminHtml"
-grep -q '手机名额使用率' "$adminHtml"
+grep -q '到期与名额提醒' "$adminHtml"
+grep -q '7 天内到期' "$adminHtml"
+grep -q '电脑名额 ≥ 80%' "$adminHtml"
+grep -q '手机名额 ≥ 80%' "$adminHtml"
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&expiry=due7' -o "$adminHtml"
 grep -q 'ci_open_plan_user' "$adminHtml"
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&usage=pc80' -o "$adminHtml"
@@ -692,7 +695,7 @@ rm -f "$foreignCookies" "$foreignHtml"
 firstStep=$(bulkRequest group_bulk_job_step --data-urlencode "job_id=$largeJobId")
 TEST_RESPONSE="$firstStep" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and not j["terminal"] and j["processed"]==40 and j["changed"]==40 and j["remaining"]==65,j'
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=groups' -o "$adminHtml"
-grep -q '分批任务进度与中断恢复' "$adminHtml"
+grep -q '分批任务' "$adminHtml"
 grep -q '继续执行' "$adminHtml"
 # Closing the browser is simulated by using later independent POSTs.
 stalledStatus=$(bulkRequest group_bulk_job_status --data-urlencode "job_id=$largeJobId")
