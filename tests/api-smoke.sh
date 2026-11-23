@@ -62,7 +62,7 @@ if grep -q 'href="?view=gateway"\|href="?view=backup_keys"\|href="?view=group_bu
   echo 'obsolete duplicate or gateway menu still visible' >&2; exit 1
 fi
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=groups' -o "$adminHtml"
-grep -q '客户分组与批量配置' "$adminHtml"
+grep -q '<h1>客户分组</h1>' "$adminHtml"
 grep -q 'id="group-bulk-form"' "$adminHtml"
 grep -q 'id="group-list"' "$adminHtml"
 for retired_alias in 'group_bulk|groups#group-bulk' 'backup_keys|update#maintenance-backup'; do
