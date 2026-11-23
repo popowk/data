@@ -680,11 +680,15 @@ doubleStart=$(bulkRequest group_bulk --data-urlencode "group_id=$largeGroupId" \
   --data-urlencode 'apply_device_limit=on' --data-urlencode 'device_limit=5' \
   --data-urlencode "preview_snapshot=$largeSnapshot")
 TEST_RESPONSE="$doubleStart" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and "未完成" in j["error"],j'
-# Another global operator may view group management, but cannot hijack this job.
-foreignCode=$(curl -sS -b "$globalCookies" -o "$globalHtml" -w '%{http_code}' -X POST \
- 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$globalCsrf" \
+# Re-authenticate a separate global operator; older scenarios may have
+# removed/replaced the original test cookie.
+foreignCookies=$(mktemp);foreignHtml=$(mktemp)
+foreignCsrf=$(login_operator ci_global_operator "$globalPassword" "$foreignCookies" "$foreignHtml")
+foreignCode=$(curl -sS -b "$foreignCookies" -o "$foreignHtml" -w '%{http_code}' -X POST \
+ 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$foreignCsrf" \
  --data-urlencode 'action=group_bulk_job_step' --data-urlencode "job_id=$largeJobId")
-test "$foreignCode" = 403
+test "$foreignCode" = 403 || { echo "foreign operator got $foreignCode (expected 403)" >&2; cat "$foreignHtml" >&2; exit 1; }
+rm -f "$foreignCookies" "$foreignHtml"
 firstStep=$(bulkRequest group_bulk_job_step --data-urlencode "job_id=$largeJobId")
 TEST_RESPONSE="$firstStep" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and not j["terminal"] and j["processed"]==40 and j["changed"]==40 and j["remaining"]==65,j'
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=groups' -o "$adminHtml"
