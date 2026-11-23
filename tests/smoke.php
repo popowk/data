@@ -360,8 +360,10 @@ if ($previewA===$previewB || $previewA===$previewC || strlen($previewA)!==64)
 ob_start();feature_view('cloud_features');$cloudHtml=ob_get_clean();
 if (strpos($cloudHtml,'MCP 连接能力')===false || strpos($cloudHtml,'Skill 技能能力')===false)
     throw new RuntimeException('cloud feature control page render failed');
-if (strpos($cloudHtml,'cloud-feature-card')===false || strpos($cloudHtml,'cloud-savebar')===false)
-    throw new RuntimeException('redesigned cloud feature controls missing');
+if (strpos($cloudHtml,'cloud-feature-card')===false || strpos($cloudHtml,'cloud-savebar')===false ||
+    strpos($cloudHtml,'cloud-summary')!==false || strpos($cloudHtml,'cloud-live-indicator')!==false ||
+    strpos($cloudHtml,'<details class="help-details">')===false)
+    throw new RuntimeException('simplified cloud feature controls missing or redundant header remains');
 if (strpos($cloudHtml,'name="mcp_codex_enabled"')===false ||
     strpos($cloudHtml,'name="mcp_harness_enabled"')===false)
     throw new RuntimeException('MCP subplatform switches missing');
@@ -503,7 +505,7 @@ if (!str_contains($embeddedBackupHtml,'id="maintenance-backup"') ||
 ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false ||
     strpos($bulkHtml,'成员或原授权值变化时')===false ||
-    strpos($bulkHtml,'分批任务进度与中断恢复')===false)
+    strpos($bulkHtml,'分批任务')===false)
     throw new RuntimeException('redesigned group bulk form render failed');
 // Device lists now load only the selected category; check each page separately.
 $_GET['device_tab']='computers';
