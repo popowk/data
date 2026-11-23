@@ -340,7 +340,7 @@ for page in dashboard groups group_bulk packages releases cloud_features update 
 done
 ordinaryExport=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}'  'http://127.0.0.1:18765/index.php?view=account_history&user_id=1&export=csv')
 test "$ordinaryExport" = 403
-for action in group_create group_bulk_preview release_publish release_delete package_publish scrcpy_url_save main_program_url_save history_cleanup_preview history_cleanup_apply admin_create backup_key_generate update_apply cloud_features_save; do
+for action in group_create group_bulk_preview group_bulk_job_status group_bulk_job_step group_bulk_job_cancel release_publish release_delete package_publish scrcpy_url_save main_program_url_save history_cleanup_preview history_cleanup_apply admin_create backup_key_generate update_apply cloud_features_save; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=$action")
   test "$status" = 403 || { echo "ordinary POST allowed $action ($status)" >&2; exit 1; }
 done
@@ -644,6 +644,113 @@ require "app/core.php";
 $rows=sql("SELECT u.id,COUNT(s.id) AS sessions FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id LEFT JOIN phonehub_sessions s ON s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP() WHERE m.group_id=? GROUP BY u.id ORDER BY u.id",[(int)getenv("GROUP_ID")])->fetchAll();
 if(count($rows)!==2 || (int)$rows[0]["sessions"]!==0 || (int)$rows[1]["sessions"]!==1)exit(23);
 '
+# Durable 105-person group job: 40-at-a-time commits, browser interruption,
+# stale customer conflicts, cross-operator denial, safe resume and cancel.
+echo 'CI HTTP smoke: durable group bulk progress, conflict isolation and resume'
+largeGroupId=$(php -r '
+require "app/core.php";
+sql("INSERT INTO phonehub_groups(name) VALUES(?)",["CI durable batch 105"]);
+$group=(int)db()->lastInsertId();
+$hash=(string)sql("SELECT password_hash FROM phonehub_users WHERE username=?",["ci_open_plan_user"])->fetchColumn();
+for($i=1;$i<=105;$i++){
+ $name=sprintf("ci_batch_%03d",$i);
+ sql("INSERT INTO phonehub_users(username,password_hash,enabled,device_limit,license_until,entitlements)
+      VALUES(?,?,1,1,NULL,?)",[$name,$hash,"[\"douyin\"]"]);
+ $id=(int)db()->lastInsertId();
+ sql("INSERT INTO phonehub_user_meta(user_id,group_id,mobile_limit,notes,opening_plan_code)
+      VALUES(?,?,1,\"\",\"personal\")",[$id,$group]);
+}
+echo $group;
+')
+bulkRequest(){
+  local action="$1"
+  shift
+  curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+    --data-urlencode "csrf=$CSRF" --data-urlencode "action=$action" "$@"
+}
+largePreview=$(bulkRequest group_bulk_preview \
+  --data-urlencode "group_id=$largeGroupId" --data-urlencode 'apply_device_limit=on' --data-urlencode 'device_limit=5')
+largeSnapshot=$(TEST_RESPONSE="$largePreview" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["members"]==105 and j["changed"]==105 and len(j["snapshot"])==64,j;print(j["snapshot"])')
+largeStart=$(bulkRequest group_bulk --data-urlencode "group_id=$largeGroupId" \
+  --data-urlencode 'apply_device_limit=on' --data-urlencode 'device_limit=5' \
+  --data-urlencode "preview_snapshot=$largeSnapshot")
+largeJobId=$(TEST_RESPONSE="$largeStart" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["job_created"] and j["total"]==105,j;print(j["job_id"])')
+# UNIQUE live-group constraint rejects an accidental second click.
+doubleStart=$(bulkRequest group_bulk --data-urlencode "group_id=$largeGroupId" \
+  --data-urlencode 'apply_device_limit=on' --data-urlencode 'device_limit=5' \
+  --data-urlencode "preview_snapshot=$largeSnapshot")
+TEST_RESPONSE="$doubleStart" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and "未完成" in j["error"],j'
+# Re-authenticate a separate global operator; older scenarios may have
+# removed/replaced the original test cookie.
+foreignCookies=$(mktemp);foreignHtml=$(mktemp)
+foreignCsrf=$(login_operator ci_global_operator "$globalPassword" "$foreignCookies" "$foreignHtml")
+foreignCode=$(curl -sS -b "$foreignCookies" -o "$foreignHtml" -w '%{http_code}' -X POST \
+ 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$foreignCsrf" \
+ --data-urlencode 'action=group_bulk_job_step' --data-urlencode "job_id=$largeJobId")
+test "$foreignCode" = 403 || { echo "foreign operator got $foreignCode (expected 403)" >&2; cat "$foreignHtml" >&2; exit 1; }
+rm -f "$foreignCookies" "$foreignHtml"
+firstStep=$(bulkRequest group_bulk_job_step --data-urlencode "job_id=$largeJobId")
+TEST_RESPONSE="$firstStep" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and not j["terminal"] and j["processed"]==40 and j["changed"]==40 and j["remaining"]==65,j'
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=groups' -o "$adminHtml"
+grep -q '分批任务进度与中断恢复' "$adminHtml"
+grep -q '继续执行' "$adminHtml"
+# Closing the browser is simulated by using later independent POSTs.
+stalledStatus=$(bulkRequest group_bulk_job_status --data-urlencode "job_id=$largeJobId")
+TEST_RESPONSE="$stalledStatus" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["processed"]==40 and j["status"]=="running",j'
+# Two unprocessed customers now diverge: one gets a direct quota edit, one
+# leaves the group. Neither must be overwritten by stale job expectations.
+LARGE_GROUP_ID="$largeGroupId" php -r '
+require "app/core.php";
+$ids=sql("SELECT u.id FROM phonehub_users u
+ JOIN phonehub_user_meta m ON m.user_id=u.id
+ WHERE m.group_id=? ORDER BY u.id DESC LIMIT 2",[(int)getenv("LARGE_GROUP_ID")])->fetchAll(PDO::FETCH_COLUMN);
+sql("UPDATE phonehub_users SET device_limit=7 WHERE id=?",[(int)$ids[1]]);
+sql("UPDATE phonehub_user_meta SET group_id=NULL WHERE user_id=?",[(int)$ids[0]]);
+'
+secondStep=$(bulkRequest group_bulk_job_step --data-urlencode "job_id=$largeJobId")
+TEST_RESPONSE="$secondStep" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["processed"]==80 and j["remaining"]==25,j'
+thirdStep=$(bulkRequest group_bulk_job_step --data-urlencode "job_id=$largeJobId")
+TEST_RESPONSE="$thirdStep" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["terminal"] and j["status"]=="partial" and j["processed"]==103 and j["changed"]==103 and j["conflicts"]==2 and j["remaining"]==0,j'
+replayedStep=$(bulkRequest group_bulk_job_step --data-urlencode "job_id=$largeJobId")
+TEST_RESPONSE="$replayedStep" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["processed"]==103 and j["conflicts"]==2 and j["terminal"],j'
+LARGE_GROUP_ID="$largeGroupId" JOB_ID="$largeJobId" php -r '
+require "app/core.php";
+$group=(int)getenv("LARGE_GROUP_ID");$job=(int)getenv("JOB_ID");
+$byLimit=sql("SELECT u.device_limit,COUNT(*) AS n FROM phonehub_users u
+ JOIN phonehub_bulk_job_items i ON i.user_id=u.id WHERE i.job_id=?
+ GROUP BY u.device_limit",[$job])->fetchAll(PDO::FETCH_KEY_PAIR);
+if((int)($byLimit[5]??0)!==103 || (int)($byLimit[7]??0)!==1 ||
+  (int)($byLimit[1]??0)!==1)exit(21);
+$conflicts=sql("SELECT reason_code FROM phonehub_bulk_job_items
+ WHERE job_id=? AND state=? ORDER BY reason_code",[$job,"conflict"])->fetchAll(PDO::FETCH_COLUMN);
+sort($conflicts);
+if($conflicts!==["authorization_changed","left_group_or_missing"])exit(22);
+$count=(int)sql("SELECT COUNT(*) FROM phonehub_account_change_events e
+ JOIN phonehub_bulk_job_items i ON i.user_id=e.user_id
+ WHERE i.job_id=? AND e.source=?",[$job,"group_bulk"])->fetchColumn();
+if($count!==103)exit(23);
+'
+# After a partial job, a fresh preview starts a new task; cancelling it
+# preserves the prior 103 committed changes and releases the active group key.
+retryPreview=$(bulkRequest group_bulk_preview \
+  --data-urlencode "group_id=$largeGroupId" --data-urlencode 'apply_device_limit=on' --data-urlencode 'device_limit=6')
+retrySnapshot=$(TEST_RESPONSE="$retryPreview" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["members"]==104 and j["changed"]==104,j;print(j["snapshot"])')
+retryStarted=$(bulkRequest group_bulk --data-urlencode "group_id=$largeGroupId" \
+  --data-urlencode 'apply_device_limit=on' --data-urlencode 'device_limit=6' \
+  --data-urlencode "preview_snapshot=$retrySnapshot")
+retryJobId=$(TEST_RESPONSE="$retryStarted" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["job_created"],j;print(j["job_id"])')
+cancelled=$(bulkRequest group_bulk_job_cancel --data-urlencode "job_id=$retryJobId")
+TEST_RESPONSE="$cancelled" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["status"]=="cancelled" and j["processed"]==0 and j["remaining"]==104,j'
+postCancel=$(bulkRequest group_bulk_job_step --data-urlencode "job_id=$retryJobId")
+TEST_RESPONSE="$postCancel" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["status"]=="cancelled" and j["terminal"],j'
+LARGE_GROUP_ID="$largeGroupId" php -r '
+require "app/core.php";
+$n=(int)sql("SELECT COUNT(*) FROM phonehub_users u
+ JOIN phonehub_user_meta m ON m.user_id=u.id
+ WHERE m.group_id=? AND u.device_limit=6",[(int)getenv("LARGE_GROUP_ID")])->fetchColumn();
+if($n!==0)exit(25);
+'
+echo 'CI HTTP smoke: durable bulk 105 users, resume, stale conflicts, idempotence, cancellation passed'
 # A backup decryption key can be downloaded only once by the owner.
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
 grep -q 'Curve25519' "$adminHtml"

@@ -116,6 +116,230 @@ function phonehub_bulk_impact(array $ids,array $before,array $targets): array {
 }
 
 /**
+ * v0.5.35 durable bulk runner: no background daemon is assumed. Every HTTP
+ * step commits at most 40 customers and their audit+session changes in one
+ * transaction; a closed browser can resume the remaining rows later.
+ */
+function phonehub_bulk_job_expected(array $row): array {
+    $out=[];
+    foreach(array_keys(phonehub_account_history_fields()) as $field)
+        $out[$field]=$row[$field]??null;
+    return $out;
+}
+function phonehub_bulk_job_authorize(array $job): void {
+    require_global_admin();
+    if (admin_role()!=='owner' && (int)$job['actor_id']!==admin_id())
+        throw new PhoneHubPermissionException('只能继续自己创建的批量任务；主账号可以接管');
+}
+function phonehub_bulk_job_status_data(array $job): array {
+    $completed=(int)$job['processed_count']+(int)$job['conflict_count'];
+    return [
+        'job_id'=>(int)$job['id'],'group_id'=>(int)$job['group_id'],
+        'actor_name'=>(string)$job['actor_name'],
+        'status'=>(string)$job['status'],'total'=>(int)$job['total_count'],
+        'processed'=>(int)$job['processed_count'],'changed'=>(int)$job['changed_count'],
+        'conflicts'=>(int)$job['conflict_count'],'revoked_users'=>(int)$job['revoked_users'],
+        'revoked_sessions'=>(int)$job['revoked_sessions'],
+        'remaining'=>max(0,(int)$job['total_count']-$completed),
+        'last_error'=>(string)$job['last_error'],
+        'terminal'=>in_array((string)$job['status'],['completed','partial','cancelled'],true)
+    ];
+}
+function phonehub_bulk_job_start(int $group,array $targets,string $preview): array {
+    require_global_admin();
+    $ids=sql('SELECT u.id FROM phonehub_users u
+        JOIN phonehub_user_meta m ON m.user_id=u.id
+        WHERE m.group_id=? ORDER BY u.id',[$group])->fetchAll(PDO::FETCH_COLUMN);
+    if(count($ids)<=100)throw new RuntimeException('少于或等于 100 位客户，请使用常规批量保存');
+    if(count($ids)>5000)throw new RuntimeException('当前分组超过 5000 位客户，为防止建单超时，请先拆分分组');
+    $before=phonehub_account_history_snapshots($ids);
+    if(count($before)!==count($ids) ||
+       !hash_equals($preview,phonehub_bulk_snapshot($ids,$before,$targets)))
+        throw new RuntimeException('预览后分组成员或授权配置发生变化，未创建批量任务；请重新预览');
+    ksort($targets);
+    $targetJson=json_encode($targets,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+    $actorName=(string)sql('SELECT username FROM phonehub_admins WHERE id=?',[admin_id()])->fetchColumn();
+    if($actorName==='')throw new RuntimeException('当前管理员身份无效');
+    $pdo=db();$pdo->beginTransaction();
+    try {
+        // UNIQUE(active_group_id) rejects concurrent open jobs for one group.
+        try {
+            sql('INSERT INTO phonehub_bulk_jobs
+                (group_id,active_group_id,actor_id,actor_name,targets_json,snapshot_hash,status,total_count)
+                VALUES(?,?,?,?,?,?,"pending",?)',
+                [$group,$group,admin_id(),$actorName,$targetJson,$preview,count($ids)]);
+        } catch(PDOException $e) {
+            if($e->getCode()==='23000')
+                throw new RuntimeException('该分组已有未完成的批量任务，请先继续或取消原任务');
+            throw $e;
+        }
+        $jobId=(int)$pdo->lastInsertId();
+        foreach(array_chunk($ids,100) as $part) {
+            $values=[];$params=[];
+            foreach($part as $userId) {
+                $userId=(int)$userId;
+                $expected=phonehub_bulk_job_expected($before[$userId]);
+                $values[]='(?,?,?,"pending")';
+                array_push($params,$jobId,$userId,
+                    json_encode($expected,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR));
+            }
+            sql('INSERT INTO phonehub_bulk_job_items(job_id,user_id,expected_json,state)
+                VALUES '.implode(',',$values),$params);
+        }
+        audit('group_bulk_job_start','job='.$jobId.' group='.$group.' count='.count($ids));
+        $pdo->commit();
+        return ['job_created'=>true,'job_id'=>$jobId,'status'=>'pending',
+            'total'=>count($ids),'message'=>'已创建分批任务 #'.$jobId.'，每次至多处理 40 位客户'];
+    } catch(Throwable $e) {
+        if($pdo->inTransaction())$pdo->rollBack();
+        throw $e;
+    }
+}
+function phonehub_bulk_job_step(int $id): array {
+    require_global_admin();
+    if($id<1)throw new RuntimeException('批量任务 ID 无效');
+    $pdo=db();$pdo->beginTransaction();$authorized=false;
+    try {
+        $job=sql('SELECT * FROM phonehub_bulk_jobs WHERE id=? FOR UPDATE',[$id])->fetch();
+        if(!$job)throw new RuntimeException('批量任务不存在');
+        phonehub_bulk_job_authorize($job);
+        $authorized=true;
+        if(in_array($job['status'],['completed','partial','cancelled'],true)) {
+            $pdo->commit();
+            return phonehub_bulk_job_status_data($job);
+        }
+        $items=sql("SELECT user_id,expected_json FROM phonehub_bulk_job_items
+            WHERE job_id=? AND state='pending' ORDER BY user_id LIMIT 40 FOR UPDATE",[$id])->fetchAll();
+        if(!$items) {
+            $status=(int)$job['conflict_count']>0?'partial':'completed';
+            sql('UPDATE phonehub_bulk_jobs SET status=?,active_group_id=NULL,
+                completed_at=UTC_TIMESTAMP(),updated_at=UTC_TIMESTAMP(),last_error="" WHERE id=?',[$status,$id]);
+            audit('group_bulk_job_finish','job='.$id.' status='.$status);
+            $pdo->commit();
+            $job['status']=$status;$job['last_error']='';
+            return phonehub_bulk_job_status_data($job);
+        }
+        $memberIds=array_map(static fn($row)=>(int)$row['user_id'],$items);
+        $slots=implode(',',array_fill(0,count($memberIds),'?'));
+        $locked=sql('SELECT u.id FROM phonehub_users u
+            JOIN phonehub_user_meta m ON m.user_id=u.id
+            WHERE m.group_id=? AND u.id IN ('.$slots.') ORDER BY u.id FOR UPDATE',
+            array_merge([(int)$job['group_id']],$memberIds))->fetchAll(PDO::FETCH_COLUMN);
+        $states=phonehub_account_history_snapshots($locked);
+        $okIds=[];$goodStates=[];$conflicts=0;
+        foreach($items as $item) {
+            $userId=(int)$item['user_id'];
+            $expected=json_decode((string)$item['expected_json'],true);
+            if(!is_array($expected))throw new RuntimeException('持久化任务快照无法解码');
+            $current=$states[$userId]??null;
+            $reason=$current===null?'left_group_or_missing':
+                (phonehub_bulk_job_expected($current)===$expected?'':'authorization_changed');
+            if($reason!=='') {
+                sql("UPDATE phonehub_bulk_job_items SET state='conflict',reason_code=?
+                     WHERE job_id=? AND user_id=?",[$reason,$id,$userId]);
+                $conflicts++;continue;
+            }
+            $okIds[]=$userId;$goodStates[$userId]=$current;
+        }
+        $targets=json_decode((string)$job['targets_json'],true);
+        if(!is_array($targets) || !$targets || array_diff(array_keys($targets),
+            ['device_limit','mobile_limit','enabled','license_until','entitlements']))
+            throw new RuntimeException('批量任务目标配置异常');
+        $impact=phonehub_bulk_impact($okIds,$goodStates,$targets);
+        $set=[];$values=[];
+        foreach($targets as $key=>$value) {
+            $column=match($key) {
+                'device_limit'=>'u.device_limit','mobile_limit'=>'m.mobile_limit',
+                'enabled'=>'u.enabled','license_until'=>'u.license_until',
+                'entitlements'=>'u.entitlements',
+                default=>throw new RuntimeException('批量任务包含未授权字段')
+            };
+            $set[]=$column.'=?';
+            $values[]=$key==='entitlements'
+                ?json_encode($value,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR):$value;
+        }
+        $revokeLookup=array_fill_keys($impact['revoke_ids'],true);
+        foreach($okIds as $userId) {
+            sql('UPDATE phonehub_users u INNER JOIN phonehub_user_meta m ON m.user_id=u.id
+                SET '.implode(',',$set).' WHERE u.id=? AND m.group_id=?',
+                array_merge($values,[$userId,(int)$job['group_id']]));
+            if(isset($revokeLookup[$userId]))
+                sql('DELETE FROM phonehub_sessions WHERE user_id=?',[$userId]);
+            $after=phonehub_account_history_snapshots([$userId])[$userId]??[];
+            phonehub_account_history_record($userId,'group_bulk',$goodStates[$userId],$after);
+            sql("UPDATE phonehub_bulk_job_items SET state='done' WHERE job_id=? AND user_id=?",
+                [$id,$userId]);
+        }
+        $processed=count($okIds);
+        $doneTotal=(int)$job['processed_count']+$processed+(int)$job['conflict_count']+$conflicts;
+        $final=$doneTotal>=(int)$job['total_count'];
+        $status=$final?((int)$job['conflict_count']+$conflicts>0?'partial':'completed'):'running';
+        sql('UPDATE phonehub_bulk_jobs SET
+            processed_count=processed_count+?, changed_count=changed_count+?,
+            conflict_count=conflict_count+?,revoked_users=revoked_users+?,
+            revoked_sessions=revoked_sessions+?,status=?,last_error="",
+            active_group_id='.($final?'NULL':'active_group_id').',
+            completed_at='.($final?'UTC_TIMESTAMP()':'completed_at').',
+            updated_at=UTC_TIMESTAMP() WHERE id=?',
+            [$processed,$impact['changed'],$conflicts,$impact['revoke_users'],$impact['revoke_sessions'],$status,$id]);
+        if($final) audit('group_bulk_job_finish','job='.$id.' status='.$status);
+        $pdo->commit();
+        $job['processed_count']=(int)$job['processed_count']+$processed;
+        $job['changed_count']=(int)$job['changed_count']+$impact['changed'];
+        $job['conflict_count']=(int)$job['conflict_count']+$conflicts;
+        $job['revoked_users']=(int)$job['revoked_users']+$impact['revoke_users'];
+        $job['revoked_sessions']=(int)$job['revoked_sessions']+$impact['revoke_sessions'];
+        $job['status']=$status;$job['last_error']='';
+        return phonehub_bulk_job_status_data($job);
+    } catch(Throwable $e) {
+        if($pdo->inTransaction())$pdo->rollBack();
+        // A failed HTTP request never marks a batch done. The next click
+        // retries the same 40 pending items without duplicating updates.
+        if($authorized) {
+            try {
+                sql("UPDATE phonehub_bulk_jobs SET last_error='最近一批执行失败，可重试',
+                    updated_at=UTC_TIMESTAMP() WHERE id=? AND status IN ('pending','running')",[$id]);
+            } catch(Throwable $ignored) {}
+        }
+        throw $e;
+    }
+}
+function phonehub_bulk_job_action(string $action): never {
+    require_global_admin();
+    $id=filter_var($_POST['job_id']??null,FILTER_VALIDATE_INT);
+    if(!is_int($id) || $id<1) throw new RuntimeException('请选择有效的批量任务');
+    if($action==='group_bulk_job_step')
+        json_response(['ok'=>true]+phonehub_bulk_job_step($id));
+    $pdo=db();
+    if($action==='group_bulk_job_status') {
+        $job=sql('SELECT * FROM phonehub_bulk_jobs WHERE id=?',[$id])->fetch();
+        if(!$job)throw new RuntimeException('批量任务不存在');
+        phonehub_bulk_job_authorize($job);
+        json_response(['ok'=>true]+phonehub_bulk_job_status_data($job));
+    }
+    if($action==='group_bulk_job_cancel') {
+        $pdo->beginTransaction();
+        try {
+            $job=sql('SELECT * FROM phonehub_bulk_jobs WHERE id=? FOR UPDATE',[$id])->fetch();
+            if(!$job)throw new RuntimeException('批量任务不存在');
+            phonehub_bulk_job_authorize($job);
+            if(!in_array($job['status'],['completed','partial','cancelled'],true)) {
+                sql("UPDATE phonehub_bulk_jobs SET status='cancelled',active_group_id=NULL,
+                    completed_at=UTC_TIMESTAMP(),updated_at=UTC_TIMESTAMP()
+                    WHERE id=?",[$id]);
+                audit('group_bulk_job_cancel','job='.$id.' processed='.$job['processed_count']);
+                $job['status']='cancelled';
+            }
+            $pdo->commit();
+            json_response(['ok'=>true]+phonehub_bulk_job_status_data($job));
+        } catch(Throwable $e) {
+            if($pdo->inTransaction())$pdo->rollBack();
+            throw $e;
+        }
+    }
+    throw new RuntimeException('未知分批任务操作');
+}
+/**
  * Bounded, explicit history cleanup. Core license/device/keys are never
  * eligible for deletion. MySQL table and date-column names are static code,
  * while durations are range checked and passed as bound values.
@@ -202,6 +426,8 @@ function feature_action(string $action): never {
     phonehub_require_action($action);
     if (in_array($action,['history_cleanup_preview','history_cleanup_apply'],true))
         phonehub_history_cleanup_action($action);
+    if(in_array($action,['group_bulk_job_status','group_bulk_job_step','group_bulk_job_cancel'],true))
+        phonehub_bulk_job_action($action);
     $id=(int)($_POST['id'] ?? 0);
     if ($action==='admin_create') {
         require_owner();
@@ -325,6 +551,13 @@ function feature_action(string $action): never {
         $preview=(string)($_POST['preview_snapshot']??'');
         if (!preg_match('/^[a-f0-9]{64}$/D',$preview))
             throw new RuntimeException('批量修改需要先在当前页面完成服务端预览');
+        // Large groups never take a whole-group write transaction.
+        // Persist a per-customer preview baseline, then apply 40 per step.
+        $memberCount=(int)sql('SELECT COUNT(*) FROM phonehub_user_meta WHERE group_id=?',[$group])->fetchColumn();
+        if($memberCount>100)
+            json_response(['ok'=>true]+phonehub_bulk_job_start($group,$targets,$preview));
+        if((int)sql('SELECT COUNT(*) FROM phonehub_bulk_jobs WHERE active_group_id=?',[$group])->fetchColumn()>0)
+            throw new RuntimeException('该分组有正在执行的分批任务，请先完成或取消，避免操作交叉');
         db()->beginTransaction();
         try {
             $memberIds=sql('SELECT u.id FROM phonehub_users u
@@ -599,6 +832,43 @@ function feature_view(string $view,bool $embedded=false): void {
         <div class="bulk-submit"><div><strong id="bulk-summary">尚未选择修改项</strong><small>提交前预览字段差异和下线人数；成员或原授权值变化时，要求重新预览</small></div><button class="btn primary" type="submit" data-confirm-submit="此操作将批量修改所选分组的指定授权字段，确认继续？">应用批量配置</button></div>
         </form>
         <?php
+        $jobSql="SELECT j.id,j.group_id,j.actor_name,j.status,j.total_count,
+            j.processed_count,j.changed_count,j.conflict_count,j.revoked_sessions,
+            j.last_error,j.created_at,g.name AS group_name
+            FROM phonehub_bulk_jobs j LEFT JOIN phonehub_groups g ON g.id=j.group_id";
+        $jobParams=[];
+        if(admin_role()!=='owner') {
+            $jobSql.=" WHERE j.actor_id=?";
+            $jobParams[] = admin_id();
+        }
+        $jobs=sql($jobSql." ORDER BY j.id DESC LIMIT 12",$jobParams)->fetchAll();
+        $jobStates=['pending'=>'等待执行','running'=>'进行中（可恢复）',
+            'completed'=>'全部完成','partial'=>'完成（存在冲突）','cancelled'=>'已取消'];
+        ?>
+        <section class="card" id="bulk-job-history">
+          <div class="card-head"><h2>分批任务进度与中断恢复</h2><span class="count">最近 12 条</span></div>
+          <p class="footnote">超过 100 位客户时自动创建持久化任务，每次最多处理 40 人。关闭浏览器不会继续执行；再次进入可点击「继续执行」。已提交批次不会重复执行；冲突客户会跳过，需重新预览后创建新任务。取消不会回滚已经成功的批次。每个分组同时只允许一个未结束任务。</p>
+          <p id="bulk-job-live" class="muted" role="status" aria-live="polite"></p>
+          <div class="table-scroll"><table><thead><tr><th>任务 / 分组</th><th>创建人</th><th>处理进度</th><th>状态</th><th>操作</th></tr></thead><tbody>
+          <?php foreach($jobs as $job):
+            $finished=(int)$job['processed_count']+(int)$job['conflict_count'];
+            $active=in_array($job['status'],['pending','running'],true); ?>
+            <tr><td>#<?=(int)$job['id']?> · <?=h($job['group_name']??('已删除分组 #'.$job['group_id']))?>
+              <small class="muted"><?=h(utc_to_cn($job['created_at']))?></small></td>
+              <td><?=h($job['actor_name'])?></td>
+              <td><?=$finished?> / <?=(int)$job['total_count']?>（实际变化 <?=(int)$job['changed_count']?>，冲突 <?=(int)$job['conflict_count']?>，撤销会话 <?=(int)$job['revoked_sessions']?>）</td>
+              <td><?=h($jobStates[$job['status']]??$job['status'])?>
+              <?php if($job['last_error']!==''): ?><div class="muted"><?=h($job['last_error'])?></div><?php endif ?></td>
+              <td><?php if($active): ?>
+                <button type="button" class="small-link" data-action="bulk-job-resume" data-job-id="<?=(int)$job['id']?>">继续执行</button>
+                <button type="button" class="small-link" data-action="bulk-job-cancel" data-job-id="<?=(int)$job['id']?>">取消任务</button>
+              <?php elseif($job['status']==='partial'): ?><span class="muted">冲突客户需重新预览</span>
+              <?php else: ?><span class="muted">—</span><?php endif ?></td></tr>
+          <?php endforeach ?>
+          <?php if(!$jobs): ?><tr><td colspan="5">暂无分批任务，超过 100 位客户的分组将自动进入此处。</td></tr><?php endif ?>
+          </tbody></table></div>
+        </section>
+    <?php
     } elseif ($view==='mobiles' || $view==='devices') {
         if (!function_exists('device_admin_view')) {
             ?><div class="card"><h2>设备管理模块尚未补齐</h2>
