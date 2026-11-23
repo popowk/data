@@ -62,7 +62,7 @@ function migrate(PDO $conn): void {
     // acquire a MySQL named lock or repeatedly query information_schema.
     try {
         $ready=(int)$conn->query("SELECT COALESCE(MAX(version),0) FROM phonehub_admin_migrations")->fetchColumn();
-        if ($ready>=16) return;
+        if ($ready>=17) return;
     } catch (PDOException $e) {
         if ($e->getCode()!=='42S02') throw $e;
     }
@@ -409,6 +409,43 @@ function migrate(PDO $conn): void {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(16,UTC_TIMESTAMP())");
     }
+    if ($version < 17) {
+        // Persistent, resumable group-bulk jobs. active_group_id is UNIQUE
+        // while open, NULL when terminal; MySQL 5.7 permits multiple NULLs.
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_bulk_jobs (
+          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          group_id BIGINT UNSIGNED NOT NULL,
+          active_group_id BIGINT UNSIGNED NULL,
+          actor_id BIGINT UNSIGNED NOT NULL,
+          actor_name VARCHAR(64) NOT NULL,
+          targets_json TEXT NOT NULL,
+          snapshot_hash CHAR(64) NOT NULL,
+          status VARCHAR(16) NOT NULL DEFAULT 'pending',
+          total_count INT UNSIGNED NOT NULL,
+          processed_count INT UNSIGNED NOT NULL DEFAULT 0,
+          changed_count INT UNSIGNED NOT NULL DEFAULT 0,
+          conflict_count INT UNSIGNED NOT NULL DEFAULT 0,
+          revoked_users INT UNSIGNED NOT NULL DEFAULT 0,
+          revoked_sessions INT UNSIGNED NOT NULL DEFAULT 0,
+          last_error VARCHAR(120) NOT NULL DEFAULT '',
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          completed_at DATETIME NULL,
+          UNIQUE KEY uniq_bulk_active_group(active_group_id),
+          INDEX idx_bulk_actor_when(actor_id,id),
+          INDEX idx_bulk_group_when(group_id,id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("CREATE TABLE IF NOT EXISTS phonehub_bulk_job_items (
+          job_id BIGINT UNSIGNED NOT NULL,
+          user_id BIGINT UNSIGNED NOT NULL,
+          expected_json TEXT NOT NULL,
+          state VARCHAR(16) NOT NULL DEFAULT 'pending',
+          reason_code VARCHAR(32) NOT NULL DEFAULT '',
+          PRIMARY KEY(job_id,user_id),
+          INDEX idx_bulk_item_state(job_id,state,user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $conn->exec("INSERT IGNORE INTO phonehub_admin_migrations(version,applied_at) VALUES(17,UTC_TIMESTAMP())");
+    }
     } finally {
         $conn->query("SELECT RELEASE_LOCK('phonehub_admin_schema_v1')");
     }
@@ -479,6 +516,7 @@ function phonehub_role_can_action(string $role,string $action): bool {
     ]);
     $global=array_merge($staff,[
         'group_create','group_delete','group_bulk','group_bulk_preview',
+        'group_bulk_job_step','group_bulk_job_status','group_bulk_job_cancel',
         'release_publish','release_toggle','package_publish','package_toggle',
         'scrcpy_url_save','main_program_url_save','ai_settings_save','cloud_features_save','logs_purge',
         'history_cleanup_preview','history_cleanup_apply',
