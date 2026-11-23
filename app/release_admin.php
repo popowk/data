@@ -277,7 +277,7 @@ function release_download_history_view(): void {
     ?>
     <section class="card" id="operation-download-history">
       <div class="card-head"><h2>操作包下载记录</h2><span class="count">共 <?=$total?> 条 · 每页 50 条</span></div>
-      <p class="muted">仅统计客户端通过旧操作包接口获取加密操作包的请求，不包括独立的核心 ZIP 文件下载。历史数据只有包 ID，没有具体包版本；这里不展示设备指纹、解密密钥或文件内容。</p>
+      <p class="muted">仅统计加密操作包下载；旧记录不包含具体版本号。</p>
       <form class="device-search-form" method="get" action="index.php">
         <input type="hidden" name="view" value="releases">
         <label for="operation-download-q">客户账号 / 操作包 ID</label>
