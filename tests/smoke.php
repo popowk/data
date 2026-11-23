@@ -480,7 +480,7 @@ if (!str_contains($embeddedBackupHtml,'id="maintenance-backup"') ||
     throw new RuntimeException('embedded backup key panel missing or duplicates page title');
 ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false ||
-    strpos($bulkHtml,'先由服务器预检')===false)
+    strpos($bulkHtml,'成员或原授权值变化时')===false)
     throw new RuntimeException('redesigned group bulk form render failed');
 // Device lists now load only the selected category; check each page separately.
 $_GET['device_tab']='computers';
