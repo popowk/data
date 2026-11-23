@@ -131,11 +131,11 @@ function device_admin_view(): void {
             'device_q'=>$search,'device_page'=>$target]);
     ?>
     <div class="page-title"><div><h1>设备管理</h1>
-      <p>统一查看电脑授权会话、安卓手机指纹绑定及设备黑名单；不采集 IMEI 或 SIM 手机号</p></div></div>
+      <p>电脑、手机和黑名单</p></div></div>
     <div class="device-summary">
-      <div class="device-summary-card"><span>电脑会话设备</span><strong><?=$computerCount?></strong><small>未过期会话的不同电脑数量；不等于实时在线</small></div>
-      <div class="device-summary-card"><span>安卓手机记录</span><strong><?=$mobileCount?></strong><small>全部绑定记录（含已解绑）</small></div>
-      <div class="device-summary-card"><span>有效黑名单</span><strong><?=$blacklistCount?></strong><small>当前有效禁止访问记录</small></div>
+      <div class="device-summary-card"><span>有效电脑会话</span><strong><?=$computerCount?></strong><small>不是实时在线数</small></div>
+      <div class="device-summary-card"><span>手机记录</span><strong><?=$mobileCount?></strong><small>包含已解绑</small></div>
+      <div class="device-summary-card"><span>黑名单</span><strong><?=$blacklistCount?></strong></div>
     </div>
     <div class="device-tabs" aria-label="设备管理分类">
       <a class="device-tab <?=$tab==='computers'?'active':''?>" href="<?=h('index.php?'.http_build_query(['view'=>'devices','device_tab'=>'computers','device_q'=>$search]))?>">电脑设备</a>
@@ -144,7 +144,7 @@ function device_admin_view(): void {
     </div>
     <form method="get" action="index.php" class="device-search-form">
       <input type="hidden" name="view" value="devices"><input type="hidden" name="device_tab" value="<?=h($tab)?>">
-      <label for="device-search">搜索客户、设备标识或备注</label>
+      <label for="device-search">搜索设备</label>
       <input id="device-search" name="device_q" value="<?=h($search)?>" maxlength="80" placeholder="客户账号 / 设备指纹 / 手机型号 / 拉黑原因">
       <button type="submit" class="btn">搜索</button>
       <?php if($search!==''): ?><a class="btn" href="<?=h('index.php?'.http_build_query(['view'=>'devices','device_tab'=>$tab]))?>">清除</a><?php endif ?>
@@ -152,7 +152,7 @@ function device_admin_view(): void {
     </form>
     <?php if($tab==='computers'): ?>
     <section data-device-panel="computers">
-      <div class="card"><div class="card-head"><h2>电脑设备与会话</h2><span class="count">会话到期不等于设备实时离线</span></div>
+      <div class="card"><div class="card-head"><h2>电脑设备与会话</h2></div>
         <div class="table-scroll"><table><thead><tr><th>客户账号</th><th>电脑 ID（完整值可复制）</th><th>有效会话</th><th>会话到期</th><th>管理操作</th></tr></thead><tbody>
         <?php foreach($computers as $d): ?>
         <tr><td><b><?=h($d['username'])?></b></td>
