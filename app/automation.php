@@ -440,7 +440,7 @@ function automation_admin_view(): void {
         ORDER BY a.id DESC LIMIT 60')->fetchAll();
     ?>
     <div class="card"><div class="card-head"><h2>AI / CI 专用发布令牌</h2></div>
-      <p class="muted">仅主管理员管理。令牌只显示一次；自动化端只允许执行勾选权限，并按平台、渠道、有效期和可选来源 IP 限制。stable 始终需要主管理员审批。</p>
+      <p class="muted">令牌仅显示一次，正式版发布需主账号审批。</p>
       <?php if($canOperate): ?><form data-ajax="automation_token_create">
         <div class="form-grid">
           <div class="field"><label>令牌名称</label><input name="label" required maxlength="64" placeholder="CI beta 发布机器人"></div>
@@ -473,7 +473,7 @@ function automation_admin_view(): void {
       <?php endforeach ?></tbody></table></div>
     </div>
     <div class="card"><div class="card-head"><h2>待发布任务与稳定版审批</h2><span class="count">最近 60 条</span></div>
-      <p class="muted">beta 允许符合权限的令牌发布；stable 必须先由主管理员明确批准。此页的批准不代表 Windows 客户端安装已经验证。</p>
+      <p class="muted">测试版可自动发布，正式版需主账号审批；审批不等于客户端安装验证。</p>
       <div class="table-scroll"><table><thead><tr><th>任务 / 来源</th><th>发布目标</th><th>提交摘要</th><th>状态 / 审批</th><th>操作</th></tr></thead><tbody>
       <?php foreach($stages as $r): ?>
       <tr><td>#<?=(int)$r['id']?> <?=h($r['token_label']??'已删除令牌')?> <small><?=h($r['created_at'])?> UTC</small></td>
@@ -487,7 +487,7 @@ function automation_admin_view(): void {
          <button class="small-link" data-action="automation-release-reject" data-id="<?=(int)$r['id']?>">拒绝</button>
       <?php endif ?></td></tr>
       <?php endforeach ?></tbody></table></div>
-      <p class="muted">API 地址映射与调用示例见 docs/自动化核心更新API-v0.5.12.md。生产 Nginx 需配置路由 rewrite；未配置前可使用 automation/v1/index.php?route=releases/... 直连入口。</p>
+      <details class="help-details"><summary>自动发布接口说明</summary><p>配置方法见 <code>docs/自动化核心更新API-v0.5.12.md</code>。Nginx 未设置路由时，可使用 <code>automation/v1/index.php?route=releases/...</code>。</p></details>
     </div>
     <?php
 }

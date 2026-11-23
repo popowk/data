@@ -280,11 +280,6 @@ function release_top_version_rows(PDOStatement $cursor,int $limit): array {
     }
     return $top;
 }
-function latest_release(string $platform,string $channel): ?array {
-    $rows=release_top_version_rows(sql('SELECT * FROM phonehub_releases
-        WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC',[$platform,$channel]),1);
-    return $rows[0]??null;
-}
 function public_release(array $row): array {
     return [
         'id'=>(int)$row['id'],'platform'=>$row['platform'],'channel'=>$row['channel'],

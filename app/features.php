@@ -41,11 +41,6 @@ function phonehub_client_log_filters(array $query): array {
         'params'=>$params];
 }
 
-function phonehub_group_member_snapshot(array $ids): string {
-    // Legacy helper retained for old smoke tests, not the new value-bound
-    // preview. New group_bulk uses phonehub_bulk_snapshot().
-    return hash('sha256',implode(',',array_map(static fn($id)=>(string)(int)$id,$ids)));
-}
 /** A preview is bound to member IDs, their normalized authorization state
  * and the requested changes. No notes, passwords or sessions in the digest. */
 function phonehub_bulk_snapshot(array $ids,array $snapshots,array $targets): string {
@@ -404,8 +399,8 @@ function history_cleanup_admin_view(): void {
     $owner=admin_role()==='owner';
     ?>
     <div class="card" id="maintenance-history">
-      <div class="card-head"><h2>历史记录保留与分批清理</h2><span class="count">先预览，每次最多 500 条</span></div>
-      <p class="muted">仅清理明确选择的历史统计，不处理客户授权、电脑会话、设备绑定、操作包文件、签名或密钥。默认不执行自动删除。</p>
+      <div class="card-head"><h2>历史记录清理</h2><span class="count">每次最多 500 条</span></div>
+      <p class="muted">只清理所选日志，不删除授权、设备或密钥。执行前需确认。</p>
       <form data-ajax="history_cleanup_apply">
         <input type="hidden" name="action" value="history_cleanup_apply">
         <div class="form-grid">
@@ -416,7 +411,7 @@ function history_cleanup_admin_view(): void {
           </select></div>
           <div class="field"><label>保留最近天数</label><input name="days" id="history-cleanup-days" type="number" min="7" max="3650" value="30" required></div>
         </div>
-        <p class="footnote">预览确认后本次最多清理 500 条旧记录；还剩数据时可重复操作。管理审计仅主管理员可操作，并至少保留一年。</p>
+        <p class="footnote">管理员审计仅主账号可清理，至少保留一年。</p>
         <div class="editor-actions"><button type="submit" class="btn">预览并确认清理</button></div>
       </form>
     </div>
@@ -760,11 +755,11 @@ function feature_view(string $view,bool $embedded=false): void {
         require_global_admin();
         $canManageAdmins=admin_role()==='owner';
         $admins=sql('SELECT id,username,role,enabled,created_at FROM phonehub_admins ORDER BY CASE WHEN role=\'owner\' THEN 0 ELSE 1 END,id')->fetchAll();
-        ?><div class="page-title"><div><h1>管理员管理</h1><p>可创建全局管理员和普通管理员；主账号权限受到保护</p></div></div>
+        ?><div class="page-title"><div><h1>管理员管理</h1><p>角色与账号权限</p></div></div>
         <?php if($canManageAdmins): ?>
         <div class="card"><div class="card-head"><h2>创建管理员</h2></div>
         <form data-ajax="admin_create" class="inline-form admin-create-form"><input name="action" type="hidden" value="admin_create"><input name="username" placeholder="管理员登录名（3–64 位英文字符）" required minlength="3"><select name="role" aria-label="管理员角色" required><option value="admin">普通管理员</option><option value="global">全局管理员</option></select><button class="btn primary">创建并生成密码</button></form>
-        <p class="footnote">普通管理员：客户授权、设备管理、套餐管理、客户端日志。全局管理员：其他业务、日志与审计；程序安装、信任签名、备份密钥、自动化发布令牌与管理员权限变更仅主账号可以操作。历史只读管理员不会自动升级。</p></div>
+        <details class="help-details"><summary>角色权限说明</summary><p>普通管理员管理客户、设备、套餐和日志；全局管理员还可管理发布与审计。系统安装、签名密钥和管理员权限仅主账号可操作。</p></details></div>
         <?php endif ?>
         <div class="card"><div class="card-head"><h2>管理员列表</h2></div><div class="table-scroll"><table><thead><tr><th>管理员</th><th>权限</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
         <?php foreach($admins as $a): ?><tr><td><b><?=h($a['username'])?></b></td><td><?=h(phonehub_role_label((string)$a['role']))?><?= $a['role']==='owner'?'（受保护）':'' ?></td><td><span class="pill <?=(int)$a['enabled']?'ok':'off'?>"><?=(int)$a['enabled']?'正常':'已停用'?></span></td><td><?=h(utc_to_cn($a['created_at']))?></td><td>
@@ -785,18 +780,18 @@ function feature_view(string $view,bool $embedded=false): void {
         $groups=sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta WHERE group_id=g.id) AS cnt FROM phonehub_groups g ORDER BY name')->fetchAll();
         ?>
         <?php if (!$embedded): ?>
-        <div class="page-title"><div><h1>分组批量配置</h1><p>先选择客户分组，再勾选需要覆盖的配置；未勾选的字段不会改变。</p></div><a class="btn" href="?view=groups">返回客户分组</a></div>
+        <div class="page-title"><div><h1>分组批量配置</h1><p>选择分组和要修改的字段。</p></div><a class="btn" href="?view=groups">返回客户分组</a></div>
         <?php else: ?>
-        <div class="page-title" id="group-bulk"><div><h2>分组批量配置</h2><p>选择目标分组与字段，先预览影响范围，再确认应用。</p></div><a class="btn" href="#group-list">返回分组列表</a></div>
+        <div class="page-title" id="group-bulk"><div><h2>批量授权</h2><p>先预览，再确认。</p></div><a class="btn" href="#group-list">返回分组列表</a></div>
         <?php endif ?>
-        <div class="bulk-intro"><div class="bulk-intro-icon">≡</div><div><strong>安全批量修改</strong><p>仅影响所选分组中的客户。只有停用账号、收回权限、授权提前到期或电脑额度降到当前占用以下，才撤销受影响客户会话；增加额度或重复保存不会踢下线。</p></div></div>
+        <div class="bulk-intro"><div><strong>批量授权</strong><p>只修改勾选字段；增加额度和权限不会让客户下线。</p></div></div>
         <form id="group-bulk-form" data-ajax="group_bulk">
         <input name="action" type="hidden" value="group_bulk">
         <section class="card bulk-target-card">
-          <div class="bulk-section-head"><div><span class="bulk-step">01</span><div><h2>选择目标分组</h2><p>选择要统一调整授权的客户群组</p></div></div><span class="bulk-required">必选</span></div>
+          <div class="bulk-section-head"><div><span class="bulk-step">01</span><div><h2>选择分组</h2></div></div><span class="bulk-required">必选</span></div>
           <div class="field"><label for="bulk-group">目标客户分组</label><select id="bulk-group" name="group_id" required><option value="">请选择客户分组</option><?php foreach($groups as $g): ?><option value="<?=(int)$g['id']?>" data-members="<?=(int)$g['cnt']?>"><?=h($g['name'])?>（<?=(int)$g['cnt']?> 位客户）</option><?php endforeach ?></select><div class="bulk-group-meta"><span id="bulk-member-count">尚未选择分组</span><span>只会修改该分组内的客户</span></div></div>
         </section>
-        <div class="bulk-section-title"><div><span class="bulk-step">02</span><div><h2>选择要修改的授权字段</h2><p>打开对应选项后，才会应用下面的配置</p></div></div><span class="bulk-tip">未勾选 = 保持原值</span></div>
+        <div class="bulk-section-title"><div><span class="bulk-step">02</span><div><h2>修改字段</h2></div></div><span class="bulk-tip">未勾选 = 保持原值</span></div>
         <div class="bulk-grid">
           <section class="bulk-option">
             <label class="bulk-option-head"><input class="bulk-option-toggle" type="checkbox" name="apply_device_limit"><span class="bulk-option-icon">PC</span><span><strong>电脑数量上限</strong><small>每个客户允许登录的电脑数量</small></span></label>
@@ -828,8 +823,8 @@ function feature_view(string $view,bool $embedded=false): void {
             </div>
           </section>
         </div>
-        <div class="bulk-impact"><strong>生效提示</strong><p>预览会列出实际变化人数、字段和预计撤销会话数；增加额度、延长有效期及授予新权限不会导致电脑下线。手机额度调整不会主动解绑手机。</p></div>
-        <div class="bulk-submit"><div><strong id="bulk-summary">尚未选择修改项</strong><small>提交前预览字段差异和下线人数；成员或原授权值变化时，要求重新预览</small></div><button class="btn primary" type="submit" data-confirm-submit="此操作将批量修改所选分组的指定授权字段，确认继续？">应用批量配置</button></div>
+        <details class="help-details"><summary>会话影响说明</summary><p>停用账号、收回权限、授权提前到期或降额超出占用时，才撤销相关电脑会话。手机额度变更不会主动解绑。</p></details>
+        <div class="bulk-submit"><div><strong id="bulk-summary">尚未选择修改项</strong><small>确认前预览差异；成员或原授权值变化时须重新预览</small></div><button class="btn primary" type="submit" data-confirm-submit="此操作将批量修改所选分组的指定授权字段，确认继续？">应用批量配置</button></div>
         </form>
         <?php
         $jobSql="SELECT j.id,j.group_id,j.actor_name,j.status,j.total_count,
@@ -846,8 +841,9 @@ function feature_view(string $view,bool $embedded=false): void {
             'completed'=>'全部完成','partial'=>'完成（存在冲突）','cancelled'=>'已取消'];
         ?>
         <section class="card" id="bulk-job-history">
-          <div class="card-head"><h2>分批任务进度与中断恢复</h2><span class="count">最近 12 条</span></div>
-          <p class="footnote">超过 100 位客户时自动创建持久化任务，每次最多处理 40 人。关闭浏览器不会继续执行；再次进入可点击「继续执行」。已提交批次不会重复执行；冲突客户会跳过，需重新预览后创建新任务。取消不会回滚已经成功的批次。每个分组同时只允许一个未结束任务。</p>
+          <div class="card-head"><h2>分批任务</h2><span class="count">最近 12 条</span></div>
+          <p class="footnote">超过 100 人时分批处理（每批最多 40 人）。关闭页面后可手动继续，取消不会撤销已完成的修改。</p>
+          <details class="help-details"><summary>恢复与冲突规则</summary><p>同一分组只能运行一个任务；冲突客户会跳过，需重新预览。已完成批次不会重复执行，也不会因取消而自动回滚。</p></details>
           <p id="bulk-job-live" class="muted" role="status" aria-live="polite"></p>
           <div class="table-scroll"><table><thead><tr><th>任务 / 分组</th><th>创建人</th><th>处理进度</th><th>状态</th><th>操作</th></tr></thead><tbody>
           <?php foreach($jobs as $job):
@@ -865,7 +861,7 @@ function feature_view(string $view,bool $embedded=false): void {
               <?php elseif($job['status']==='partial'): ?><span class="muted">冲突客户需重新预览</span>
               <?php else: ?><span class="muted">—</span><?php endif ?></td></tr>
           <?php endforeach ?>
-          <?php if(!$jobs): ?><tr><td colspan="5">暂无分批任务，超过 100 位客户的分组将自动进入此处。</td></tr><?php endif ?>
+          <?php if(!$jobs): ?><tr><td colspan="5">暂无分批任务</td></tr><?php endif ?>
           </tbody></table></div>
         </section>
     <?php
@@ -883,26 +879,25 @@ function feature_view(string $view,bool $embedded=false): void {
         $flags=[];foreach($rows as $row)$flags[$row['setting_key']]=$row['setting_value']==='1';
         $mcp=!empty($flags['mcp_enabled']);$skill=!empty($flags['skill_enabled']);
         $codex=!empty($flags['mcp_codex_enabled']);$harness=!empty($flags['mcp_harness_enabled']);
-        ?><div class="page-title"><div><h1>客户端能力与 AI</h1><p>统一管理 MCP / Skill 能力、DeepSeek AI 接口以及调用策略</p></div><span class="cloud-live-indicator"><i></i> 云端策略生效中</span></div>
-        <div class="cloud-summary"><div><span class="cloud-summary-label">全局开放能力</span><strong><?=((int)$mcp+(int)$skill)?> <small>/ 2</small></strong></div><p>只有全局开关、客户单独授权、已启用签名版本三项同时满足，客户端才可以使用对应能力。</p></div>
+        ?><div class="page-title"><div><h1>客户端能力与 AI</h1><p>设置 MCP、Skill 和 AI 权限。</p></div></div>
         <form data-ajax="cloud_features_save" class="cloud-feature-form"><input type="hidden" name="action" value="cloud_features_save">
           <div class="cloud-feature-grid">
             <section class="cloud-feature-card <?=$mcp?'is-enabled':'is-disabled'?>">
               <div class="cloud-feature-top"><div class="cloud-feature-icon">M</div><span class="cloud-state"><?=$mcp?'全局已开放':'默认禁用'?></span></div>
-              <h2>MCP 连接能力</h2><p>允许已获授权的客户获取并使用 PhoneHub MCP 连接包。</p>
+              <h2>MCP 连接能力</h2><p>授权客户可使用 MCP。</p>
               <label class="cloud-switch"><input type="checkbox" name="mcp_enabled" <?=$mcp?'checked':''?>><span class="cloud-switch-ui"></span><span><?=$mcp?'已开启':'关闭 MCP'?></span></label>
-              <ul><li>控制 MCP 版本查询与下载</li><li>客户还必须单独获得 MCP 授权</li><li>需要存在已启用的签名发布版本</li></ul>
+
             </section>
             <section class="cloud-feature-card <?=$skill?'is-enabled':'is-disabled'?>">
               <div class="cloud-feature-top"><div class="cloud-feature-icon skill">S</div><span class="cloud-state"><?=$skill?'全局已开放':'默认禁用'?></span></div>
-              <h2>Skill 技能能力</h2><p>允许已获授权的客户获取并使用 PhoneHub Skill 技能包。</p>
+              <h2>Skill 技能能力</h2><p>授权客户可使用 Skill。</p>
               <label class="cloud-switch"><input type="checkbox" name="skill_enabled" <?=$skill?'checked':''?>><span class="cloud-switch-ui"></span><span><?=$skill?'已开启':'关闭 Skill'?></span></label>
-              <ul><li>控制 Skill 版本查询与下载</li><li>客户还必须单独获得 Skill 授权</li><li>需要存在已启用的签名发布版本</li></ul>
+
             </section>
           </div>
           <div class="card" style="margin-top:14px">
           <div class="card-head"><h2>MCP 平台独立授权</h2></div>
-          <p class="muted">Codex 和 DeepSeek Harness 默认关闭。实际开放还必须同时启用上方 MCP 总开关，并给客户同时授予 MCP 和对应平台权限。旧版 MCP 权限保持不变，不自动升级为新权限。</p>
+          <p class="muted">Codex 和 DeepSeek Harness 需同时开启 MCP 总开关并单独授权客户。</p>
           <div class="form-grid">
             <div class="field"><label class="check-row"><input type="checkbox" name="mcp_codex_enabled" <?=$codex?'checked':''?>> Codex MCP 全局开放</label></div>
             <div class="field"><label class="check-row"><input type="checkbox" name="mcp_harness_enabled" <?=$harness?'checked':''?>> DeepSeek Harness MCP 全局开放</label></div>
@@ -910,7 +905,7 @@ function feature_view(string $view,bool $embedded=false): void {
         </div>
           <div class="cloud-savebar"><div><strong>修改云端开放策略</strong><small>保存后立即影响后续授权检查与下载请求</small></div><button class="btn primary" type="submit">保存设置</button></div>
         </form>
-        <div class="cloud-warning"><strong>安全说明</strong><p>关闭总开关会立即阻止后续版本查询与下载，但不能远程删除客户已经下载的本地文件。桌面客户端必须定期查询 <code>license_status</code> / <code>capabilities</code>，在能力变为不可用时停止本地调用；离线设备在下次联网校验时收到撤销状态。</p></div>
+        <details class="help-details"><summary>客户端权限生效规则</summary><p>权限需要全局开关、客户授权和已启用版本同时满足。关闭后阻止后续查询与下载，不能远程删除已下载文件；客户端仍须定期校验授权。</p></details>
         <?php
         if (is_file(__DIR__.'/ai.php')) {
             require_once __DIR__.'/ai.php';
@@ -1180,7 +1175,7 @@ function backup_admin_view(bool $embedded=false): void {
         <a class="btn" href="?view=update">运行环境自检</a>
     </div>
     <?php else: ?>
-    <div class="page-title" id="maintenance-backup"><div><h2>备份密钥管理</h2><p>Curve25519 加密备份接收公钥，与 Ed25519 更新验签相互独立；解密私钥只下载一次。</p></div><a class="btn" href="#maintenance-update">返回系统更新</a></div>
+    <div class="page-title" id="maintenance-backup"><div><h2>备份密钥</h2><p>私钥仅可下载一次，请妥善保存。</p></div><a class="btn" href="#maintenance-update">返回系统更新</a></div>
     <?php endif ?>
     <div class="card"><div class="card-head"><h2>Curve25519 备份密钥</h2>
         <span class="pill <?=$status['configured']?'ok':'off'?>"><?=$status['configured']?'已配置公钥':'尚未配置'?></span></div>
@@ -1198,8 +1193,6 @@ function backup_admin_view(bool $embedded=false): void {
           <p class="footnote">请将下载的 32 字节 .key 文件放入独立的加密离线存储，并确认保存成功后再创建备份。不要上传 GitHub 或发送到聊天窗口。该私钥与 Ed25519 签名密钥完全不同。</p>
         <?php endif ?>
     </div>
-    <div class="card"><div class="card-head"><h2>使用边界</h2></div>
-      <p class="muted">密钥初始化不会触发数据库备份，也不提供定时任务、异地同步、密钥轮换或在线恢复。生成公钥后，可通过现有的 PHP CLI 备份工具执行加密导出；恢复操作必须在隔离环境中使用离线私钥。</p>
-    </div>
+    <details class="help-details help-card"><summary>备份与恢复说明</summary><p>生成密钥不会自动执行备份。请使用 PHP CLI 工具导出加密备份，并在隔离环境使用离线私钥恢复。</p></details>
     <?php
 }

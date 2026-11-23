@@ -347,18 +347,27 @@ ob_start();ai_admin_view();$aiHtml=ob_get_clean();
 if (strpos($aiHtml,'AI 接口管理')===false || strpos($aiHtml,'remove_api_key')===false)
     throw new RuntimeException('AI admin settings page render failed');
 require_once dirname(__DIR__).'/app/features.php';
-if (phonehub_group_member_snapshot(['1','2'])!==phonehub_group_member_snapshot([1,2]) ||
-    phonehub_group_member_snapshot([1,2])===phonehub_group_member_snapshot([1,3]))
-    throw new RuntimeException('group bulk preview membership fingerprint invalid');
+// Preview signatures must bind both the selected members and their intended changes.
+$previewRow=[
+    'username'=>'ci_preview','device_limit'=>1,'mobile_limit'=>0,
+    'entitlements'=>['douyin'],'enabled'=>1
+];
+$previewA=phonehub_bulk_snapshot([1],[1=>$previewRow],['device_limit'=>2]);
+$previewB=phonehub_bulk_snapshot([1],[1=>$previewRow],['device_limit'=>3]);
+$previewC=phonehub_bulk_snapshot([2],[2=>$previewRow],['device_limit'=>2]);
+if ($previewA===$previewB || $previewA===$previewC || strlen($previewA)!==64)
+    throw new RuntimeException('group bulk preview did not bind target values and member identities');
 ob_start();feature_view('cloud_features');$cloudHtml=ob_get_clean();
 if (strpos($cloudHtml,'MCP 连接能力')===false || strpos($cloudHtml,'Skill 技能能力')===false)
     throw new RuntimeException('cloud feature control page render failed');
-if (strpos($cloudHtml,'cloud-feature-card')===false || strpos($cloudHtml,'cloud-savebar')===false)
-    throw new RuntimeException('redesigned cloud feature controls missing');
+if (strpos($cloudHtml,'cloud-feature-card')===false || strpos($cloudHtml,'cloud-savebar')===false ||
+    strpos($cloudHtml,'cloud-summary')!==false || strpos($cloudHtml,'cloud-live-indicator')!==false ||
+    strpos($cloudHtml,'<details class="help-details">')===false)
+    throw new RuntimeException('simplified cloud feature controls missing or redundant header remains');
 if (strpos($cloudHtml,'name="mcp_codex_enabled"')===false ||
     strpos($cloudHtml,'name="mcp_harness_enabled"')===false)
     throw new RuntimeException('MCP subplatform switches missing');
-if (strpos($cloudHtml,'AI 接口设置')===false ||
+if (strpos($cloudHtml,'<h2>AI 设置</h2>')===false ||
     strpos($cloudHtml,'data-ajax="ai_settings_save"')===false ||
     strpos($cloudHtml,'服务端 AI 中转')===false)
     throw new RuntimeException('AI settings were not embedded in client capability view');
@@ -496,7 +505,7 @@ if (!str_contains($embeddedBackupHtml,'id="maintenance-backup"') ||
 ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false ||
     strpos($bulkHtml,'成员或原授权值变化时')===false ||
-    strpos($bulkHtml,'分批任务进度与中断恢复')===false)
+    strpos($bulkHtml,'分批任务')===false)
     throw new RuntimeException('redesigned group bulk form render failed');
 // Device lists now load only the selected category; check each page separately.
 $_GET['device_tab']='computers';

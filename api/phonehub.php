@@ -356,6 +356,3 @@ catch (Throwable $e) {
     api_error('服务暂时不可用，请稍后重试',503);
 }
 
-function mb_check_encoding_safe(string $value): bool {
-    return preg_match('//u',$value)===1;
-}

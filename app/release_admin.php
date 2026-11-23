@@ -194,7 +194,7 @@ function release_package_overview(): void {
     ?>
     <section class="card" id="legacy-operation-packages">
       <div class="card-head"><h2>操作包管理中心</h2><span class="count"><?=count($categories)?> 个分类 · <?=count($groups)?> 个独立包 · 共 <?=$pkgTotal?> 个版本</span></div>
-      <p class="muted">这里管理客户端旧协议的<strong>加密操作包</strong>（envelope + content_key），与上方上传的 Ed25519 签名 ZIP 更新包互相独立。下载次数按包 ID 汇总，历史日志不含单个版本号；后台永不显示解密密钥。</p>
+      <p class="muted">加密操作包与签名更新 ZIP 分开管理；下载数据按操作包 ID 统计。</p>
       <?php if($canEdit): ?>
       <form data-ajax="package_publish" enctype="multipart/form-data" class="package-publish-form">
         <input type="hidden" name="action" value="package_publish">
@@ -214,10 +214,12 @@ function release_package_overview(): void {
         </div>
         <div class="editor-actions"><button class="btn primary" data-confirm-submit="确认上传并立即启用此加密操作包版本？现有客户可能开始下载新版本。">上传并发布加密操作包</button></div>
       </form>
-      <p class="footnote">抖音分类下的 <code>douyin</code>（主操作包）和 <code>douyin-notification</code>（通知操作包）各自独立发布、上下架和维护版本；客户只需授权「抖音」，客户端仍须按原始包 ID 获取对应文件。</p>
-      <p class="footnote">仅接受加密工具生成的 JSON：<code>{"envelope":{"manifest":"Base64","signature":"Base64","nonce":"Base64","ciphertext":"Base64"},"content_key":"Base64"}</code>。服务端进行字段、Base64 和大小检查，但不能替代客户端签名验真与解密联调。版本不可覆盖；新版本发布后会成为该包默认下载版本。</p>
+      <details class="help-details"><summary>操作包格式与授权说明</summary>
+        <p>抖音主包与通知包共用“抖音”授权，但各自独立发布；客户端仍按原包 ID 下载。</p>
+        <p>仅接受加密工具生成的 JSON：<code>{"envelope":{"manifest":"Base64","signature":"Base64","nonce":"Base64","ciphertext":"Base64"},"content_key":"Base64"}</code>。版本不可覆盖，发布后默认使用已启用的最高版本。</p>
+      </details>
       <?php endif ?>
-      <div class="card-head package-subsection-head"><h2>操作包概览</h2><span class="count">按包 ID 汇总</span></div>
+      <div class="card-head package-subsection-head"><h2>操作包概览</h2></div>
       <form class="device-search-form" method="get" action="index.php">
         <input type="hidden" name="view" value="releases">
         <label for="pkg-history-filter">操作包 ID</label>
@@ -250,7 +252,7 @@ function release_package_overview(): void {
         <span>第 <?=$pkgPage?> / <?=$pkgPages?> 页</span>
         <?php if($pkgPage<$pkgPages): ?><a class="btn" href="<?=h($packagePageLink($pkgPage+1))?>">下一页</a><?php endif ?>
       </nav><?php endif ?>
-      <p class="footnote package-bottom-note">停用某版本后，客户端只会获取同一包中最高的其他启用版本；如果所有版本停用则不可下载。变更保留管理员审计记录，不删除历史数据。</p>
+      <p class="footnote package-bottom-note">客户端获取已启用的最高版本；所有版本停用后不可下载。</p>
     </section>
     <?php
 }
@@ -275,7 +277,7 @@ function release_download_history_view(): void {
     ?>
     <section class="card" id="operation-download-history">
       <div class="card-head"><h2>操作包下载记录</h2><span class="count">共 <?=$total?> 条 · 每页 50 条</span></div>
-      <p class="muted">仅统计客户端通过旧操作包接口获取加密操作包的请求，不包括独立的核心 ZIP 文件下载。历史数据只有包 ID，没有具体包版本；这里不展示设备指纹、解密密钥或文件内容。</p>
+      <p class="muted">仅统计加密操作包下载；旧记录不包含具体版本号。</p>
       <form class="device-search-form" method="get" action="index.php">
         <input type="hidden" name="view" value="releases">
         <label for="operation-download-q">客户账号 / 操作包 ID</label>
@@ -334,10 +336,9 @@ function release_admin_view(): void {
         return false;
     };
     ?>
-    <div class="page-title"><div><h1>版本发布与操作包</h1><p>分别管理客户端签名 ZIP 更新和加密操作包，支持加密操作包发布、上下架及下载统计</p></div></div>
+    <div class="page-title"><div><h1>版本与操作包</h1><p>更新发布、操作包与下载地址</p></div></div>
     <div class="card" id="scrcpy-download-settings">
-      <div class="card-head"><h2>scrcpy 下载地址</h2><span class="count">客户端启动时查询</span></div>
-      <p class="muted">Windows 客户端可通过无需登录的 JSON 接口获取当前 ZIP 下载地址；接口支持 ETag / HTTP 304 和 300 秒缓存，后台修改后客户端最多使用旧缓存 5 分钟。</p>
+      <div class="card-head"><h2>scrcpy 下载地址</h2></div>
       <form data-ajax="scrcpy_url_save">
         <input type="hidden" name="action" value="scrcpy_url_save">
         <div class="field">
@@ -346,11 +347,10 @@ function release_admin_view(): void {
         </div>
         <div class="editor-actions"><button type="submit" class="btn primary" data-confirm-submit="确认更新 scrcpy 下载地址？客户端会在缓存到期后获取新地址。">保存下载地址</button></div>
       </form>
-      <p class="footnote">公开查询接口：<a href="api/phonehub.php?action=scrcpy_download" target="_blank" rel="noopener">api/phonehub.php?action=scrcpy_download</a>。接口仅提供地址，不转发文件，也不要求客户端携带授权 Token。</p>
+      <details class="help-details"><summary>客户端查询接口</summary><p><a href="api/phonehub.php?action=scrcpy_download" target="_blank" rel="noopener">scrcpy_download</a> · 公开查询，返回下载地址，缓存最长 5 分钟。</p></details>
     </div>
     <div class="card" id="main-program-download-settings">
-      <div class="card-head"><h2>官网主程序下载地址</h2><span class="count">程序启动时查询</span></div>
-      <p class="muted">独立于 scrcpy 的主程序下载地址，支持后台实时修改。首次安装可能使用 ZIP 初始化占位值，请以当前表单显示的已保存地址为准；支持 ZIP / EXE / MSI 和 300 秒缓存。</p>
+      <div class="card-head"><h2>官网主程序下载地址</h2></div>
       <form data-ajax="main_program_url_save">
         <input type="hidden" name="action" value="main_program_url_save">
         <div class="field">
@@ -359,7 +359,7 @@ function release_admin_view(): void {
         </div>
         <div class="editor-actions"><button type="submit" class="btn primary" data-confirm-submit="确认修改官网主程序下载地址？该项不会影响 scrcpy 下载配置。">保存主程序地址</button></div>
       </form>
-      <p class="footnote">公开查询接口：<a href="api/phonehub.php?action=main_program_download" target="_blank" rel="noopener">api/phonehub.php?action=main_program_download</a>。只返回地址，不执行跳转或文件下载。</p>
+      <details class="help-details"><summary>客户端查询接口</summary><p><a href="api/phonehub.php?action=main_program_download" target="_blank" rel="noopener">main_program_download</a> · 公开查询，返回下载地址，缓存最长 5 分钟。</p></details>
     </div>
     <div class="card"><div class="card-head"><h2>上传新版本（50 MB 以内）</h2></div>
       <form data-ajax="release_publish" enctype="multipart/form-data">
@@ -373,15 +373,17 @@ function release_admin_view(): void {
         <div class="field span2"><label>版本说明</label><textarea name="notes" maxlength="1000" rows="3" style="padding:12px;border:1px solid #dce3ef;border-radius:8px;width:100%;resize:vertical" placeholder="更新内容与兼容提醒"></textarea></div>
        </div><div class="editor-actions"><button class="btn primary" data-confirm-submit="确认发布此版本并签署更新包？版本号发布后不可重复。">上传并签名发布</button></div>
       </form>
-      <p class="muted">需要 PHP sodium、ZipArchive，并调整 PHP upload_max_filesize 至 50M 以上、post_max_size 至 55M 以上。私钥仅存放服务器 storage/updates/signing.key，不在 GitHub。</p>
-      <p class="muted">客户端下载后必须验证：信任的公钥 → Ed25519 原始清单签名 → 清单 SHA-256 → ZIP 安全解压。不能只信任更新接口返回的公钥。</p>
+      <details class="help-details"><summary>签名与部署要求</summary>
+        <p>服务器需启用 sodium 和 ZipArchive；PHP 上传上限至少 50 MB。签名私钥仅保存在服务器，不上传 GitHub。</p>
+        <p>客户端必须使用预置公钥验证 Ed25519 签名、文件 SHA-256，并安全解压 ZIP；不能直接信任接口返回的公钥。</p>
+      </details>
     </div>
     <div class="card"><div class="card-head"><h2>签名公钥</h2></div>
       <?php $pub=release_public_key(); ?>
       <?php if ($pub): ?>
-        <p class="muted">客户端必须预置此 Ed25519 公钥，并在正式版中固定使用。公钥变更需要单独可信渠道更新。</p>
+        <p class="muted">客户端须预置并固定信任该公钥。</p>
         <code class="public-key"><?=h($pub)?></code>
-      <?php else: ?><p class="muted">首次上传签名版本后将生成长期签名密钥对，公钥显示在这里。</p><?php endif ?>
+      <?php else: ?><p class="muted">首次发布后显示签名公钥。</p><?php endif ?>
     </div>
     <div class="card" id="release-history"><div class="card-head"><h2>已发布版本</h2><span class="count"><?=$releaseCount?> 个版本；每页 50 条</span></div>
       <form class="device-search-form" method="get" action="index.php">
