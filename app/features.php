@@ -423,6 +423,8 @@ function feature_action(string $action): never {
     phonehub_require_action($action);
     if (in_array($action,['history_cleanup_preview','history_cleanup_apply'],true))
         phonehub_history_cleanup_action($action);
+    if(in_array($action,['group_bulk_job_status','group_bulk_job_step','group_bulk_job_cancel'],true))
+        phonehub_bulk_job_action($action);
     $id=(int)($_POST['id'] ?? 0);
     if ($action==='admin_create') {
         require_owner();
@@ -546,6 +548,11 @@ function feature_action(string $action): never {
         $preview=(string)($_POST['preview_snapshot']??'');
         if (!preg_match('/^[a-f0-9]{64}$/D',$preview))
             throw new RuntimeException('批量修改需要先在当前页面完成服务端预览');
+        // Large groups never take a whole-group write transaction.
+        // Persist a per-customer preview baseline, then apply 40 per step.
+        $memberCount=(int)sql('SELECT COUNT(*) FROM phonehub_user_meta WHERE group_id=?',[$group])->fetchColumn();
+        if($memberCount>100)
+            json_response(['ok'=>true]+phonehub_bulk_job_start($group,$targets,$preview));
         db()->beginTransaction();
         try {
             $memberIds=sql('SELECT u.id FROM phonehub_users u
