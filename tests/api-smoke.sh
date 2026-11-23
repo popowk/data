@@ -261,6 +261,26 @@ if(!$hash || $hash===getenv("INITIAL_PASSWORD") || !password_verify(getenv("INIT
 customLogin=$(curl -sS -X POST 'http://127.0.0.1:18765/api/phonehub.php?action=login' -H 'Content-Type: application/json' \
  --data '{"username":"ci_custom_password","password":"CI-chosen-Password-2026!","device_id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}')
 TEST_RESPONSE="$customLogin" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["username"]=="ci_custom_password",j'
+# Dashboard alerts and exact database-backed 80% quota filters. Fixtures
+# are isolated to the ephemeral CI database, never production accounts.
+php -r '
+require "app/core.php";
+$id=(int)sql("SELECT id FROM phonehub_users WHERE username=?",["ci_open_plan_user"])->fetchColumn();
+sql("UPDATE phonehub_users SET license_until=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 6 DAY) WHERE id=?",[$id]);
+sql("INSERT INTO phonehub_mobile_devices(user_id,phone_id,display_name,enabled,last_seen) VALUES(?,?,?,1,UTC_TIMESTAMP())",
+ [$id,str_repeat("e",64),"CI quota alert"]);
+'
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=dashboard' -o "$adminHtml"
+grep -q '授权到期与额度预警' "$adminHtml"
+grep -q '未来 7 天到期' "$adminHtml"
+grep -q '电脑名额使用率' "$adminHtml"
+grep -q '手机名额使用率' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&expiry=due7' -o "$adminHtml"
+grep -q 'ci_open_plan_user' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&usage=pc80' -o "$adminHtml"
+grep -q 'ci_custom_password' "$adminHtml"
+curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=accounts&usage=mobile80' -o "$adminHtml"
+grep -q 'ci_open_plan_user' "$adminHtml"
 weakCreated=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=account_save' \
  --data-urlencode 'username=ci_weak_pw' --data-urlencode 'opening_plan=personal' \
@@ -318,6 +338,8 @@ for page in dashboard groups group_bulk packages releases cloud_features update 
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 403 || { echo "ordinary GET allowed $page ($status)" >&2; exit 1; }
 done
+ordinaryExport=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}'  'http://127.0.0.1:18765/index.php?view=account_history&user_id=1&export=csv')
+test "$ordinaryExport" = 403
 for action in group_create group_bulk_preview release_publish release_delete package_publish scrcpy_url_save main_program_url_save history_cleanup_preview history_cleanup_apply admin_create backup_key_generate update_apply cloud_features_save; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=$action")
   test "$status" = 403 || { echo "ordinary POST allowed $action ($status)" >&2; exit 1; }
@@ -419,6 +441,20 @@ grep -q '客户授权变更明细' "$adminHtml"
 grep -q '开户套餐' "$adminHtml"
 grep -q 'ci_ai_owner' "$adminHtml"
 grep -q '变更明细' "$adminHtml"
+grep -q '导出 CSV' "$adminHtml"
+historyCsv=$(mktemp);historyCsvHeaders=$(mktemp)
+curl -fsS -b "$adminCookies" -D "$historyCsvHeaders"  "http://127.0.0.1:18765/index.php?view=account_history&user_id=$planSwitchId&export=csv" -o "$historyCsv"
+grep -qi '^content-type: text/csv' "$historyCsvHeaders"
+grep -qi '^cache-control: private, no-store' "$historyCsvHeaders"
+grep -q '开户套餐' "$historyCsv"
+grep -q 'ci_ai_owner' "$historyCsv"
+grep -q 'standard' "$historyCsv"
+if grep -q 'CI-chosen-Password-2026!' "$historyCsv"; then
+ echo 'CSV leaked password' >&2;exit 1
+fi
+noCsv=$(curl -sS -b "$adminCookies" -o "$historyCsv" -w '%{http_code}'  'http://127.0.0.1:18765/index.php?view=account_history&user_id=0&export=csv')
+test "$noCsv" = 404
+rm -f "$historyCsv" "$historyCsvHeaders"
 # Stable customer IDs, not usernames or untrusted query strings, bind history.
 missingHistory=$(curl -sS -b "$adminCookies" -o "$adminHtml" -w '%{http_code}' 'http://127.0.0.1:18765/index.php?view=account_history&user_id=0')
 test "$missingHistory" = 404
@@ -1071,6 +1107,24 @@ TEST_RESPONSE="$logs" python3 -c 'import os,json; j=json.loads(os.environ["TEST_
 update=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\"}")
 TEST_RESPONSE="$update" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and not j["available"],j'
 read -r releaseId releaseHash <<< "$(php tests/seed-release.php | tr '|' ' ')"
+# Regression: hundreds of recently inserted *lower* versions must not hide
+# the signed 0.8.0 release from either latest or top-30 version lookups.
+php -r '
+require "app/core.php";
+$pdo=db();$pdo->beginTransaction();
+$statement=$pdo->prepare("INSERT INTO phonehub_releases
+ (platform,channel,version,min_client,notes,filename,storage_name,size_bytes,sha256,manifest,signature,enabled)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,1)");
+for($i=1;$i<=520;$i++){
+ $v="0.1.".$i;
+ $statement->execute(["core","stable",$v,"0.7.1","CI older version",
+ "ci-$v.zip",bin2hex(random_bytes(20)).".zip",10,str_repeat("c",64),"{}",base64_encode(random_bytes(64))]);
+}
+$pdo->commit();
+'
+releaseList=$(api update_list "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\"}")
+TEST_RESPONSE="$releaseList" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and len(j["releases"])==30 and j["releases"][0]["version"]=="0.8.0",j'
+
 compatOld=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\",\"client_version\":\"0.6.0\"}")
 TEST_RESPONSE="$compatOld" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["available"] and j["client_upgrade_required"] and j["minimum_client_version"]=="0.7.1" and j["server_protocol_version"]==1,j'
 compatNew=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\",\"client_version\":\"0.7.1\"}")
@@ -1080,7 +1134,7 @@ TEST_RESPONSE="$invalidVersion" python3 -c 'import os,json;j=json.loads(os.envir
 blockedDownload=$(curl -sS -w '\n%{http_code}' -X POST "$BASE""update_download" -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" --data "{\"device_id\":\"$DEVICE\",\"release_id\":$releaseId,\"client_version\":\"0.6.0\"}")
 TEST_RESPONSE="$blockedDownload" python3 -c 'import os,json;s=os.environ["TEST_RESPONSE"].splitlines();j=json.loads(s[0]);assert s[-1]=="409" and not j["ok"] and j["error_code"]=="CLIENT_UPGRADE_REQUIRED",s'
 newer=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\"}")
-TEST_RESPONSE="$newer" php -r '$j=json_decode(getenv("TEST_RESPONSE"),true);if(!$j["ok"]||!$j["available"])exit(1);$r=$j["release"];$pub=base64_decode($r["public_key"],true);$raw=base64_decode($r["manifest"],true);$signature=base64_decode($r["signature"],true);if(!sodium_crypto_sign_verify_detached($signature,$raw,$pub))exit(2);'
+TEST_RESPONSE="$newer" php -r '$j=json_decode(getenv("TEST_RESPONSE"),true);if(!$j["ok"]||!$j["available"]||$j["latest_version"]!=="0.8.0")exit(1);$r=$j["release"];$pub=base64_decode($r["public_key"],true);$raw=base64_decode($r["manifest"],true);$signature=base64_decode($r["signature"],true);if(!sodium_crypto_sign_verify_detached($signature,$raw,$pub))exit(2);'
 curl -fsS -X POST "$BASE""update_download" -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $TOKEN" -o /tmp/phonehub-ci-update.zip \
   --data "{\"device_id\":\"$DEVICE\",\"release_id\":$releaseId}"

@@ -128,8 +128,8 @@ function api_release_client_compatibility(array $release,?string $clientVersion)
         'client_upgrade_required'=>version_compare($clientVersion,$required,'<')];
 }
 function api_latest_release(string $platform,string $channel): ?array {
-    $rows=client_sql('SELECT * FROM phonehub_releases WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC LIMIT 500',[$platform,$channel])->fetchAll();
-    usort($rows,static fn($a,$b)=>version_compare($b['version'],$a['version']));
+    $rows=release_top_version_rows(client_sql('SELECT * FROM phonehub_releases
+        WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC',[$platform,$channel]),1);
     return $rows[0]??null;
 }
 /**
@@ -399,8 +399,8 @@ function api_extra(string $action,array $input,array $session,int $userId): void
         $allowed=json_decode((string)$session['entitlements'],true)?:[];
         if (in_array($platform,['mcp','skill','mcp-codex','mcp-harness'],true)) api_require_cloud_feature($platform,$session);
         if ($platform!=='core' && !in_array($platform,$allowed,true)) api_problem('NOT_ENTITLED','未授权此更新目标',403);
-        $rows=client_sql('SELECT * FROM phonehub_releases WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC LIMIT 30',[$platform,$channel])->fetchAll();
-        usort($rows,static fn($a,$b)=>version_compare($b['version'],$a['version']));
+        $rows=release_top_version_rows(client_sql('SELECT * FROM phonehub_releases
+            WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC',[$platform,$channel]),30);
         $clientVersion=api_reported_client_version($input);
         $public=array_map(static function($row) use ($clientVersion): array {
             return public_release($row)+api_release_client_compatibility($row,$clientVersion);
