@@ -1175,7 +1175,7 @@ function backup_admin_view(bool $embedded=false): void {
         <a class="btn" href="?view=update">运行环境自检</a>
     </div>
     <?php else: ?>
-    <div class="page-title" id="maintenance-backup"><div><h2>备份密钥管理</h2><p>Curve25519 加密备份接收公钥，与 Ed25519 更新验签相互独立；解密私钥只下载一次。</p></div><a class="btn" href="#maintenance-update">返回系统更新</a></div>
+    <div class="page-title" id="maintenance-backup"><div><h2>备份密钥</h2><p>私钥仅可下载一次，请妥善保存。</p></div><a class="btn" href="#maintenance-update">返回系统更新</a></div>
     <?php endif ?>
     <div class="card"><div class="card-head"><h2>Curve25519 备份密钥</h2>
         <span class="pill <?=$status['configured']?'ok':'off'?>"><?=$status['configured']?'已配置公钥':'尚未配置'?></span></div>
@@ -1193,8 +1193,6 @@ function backup_admin_view(bool $embedded=false): void {
           <p class="footnote">请将下载的 32 字节 .key 文件放入独立的加密离线存储，并确认保存成功后再创建备份。不要上传 GitHub 或发送到聊天窗口。该私钥与 Ed25519 签名密钥完全不同。</p>
         <?php endif ?>
     </div>
-    <div class="card"><div class="card-head"><h2>使用边界</h2></div>
-      <p class="muted">密钥初始化不会触发数据库备份，也不提供定时任务、异地同步、密钥轮换或在线恢复。生成公钥后，可通过现有的 PHP CLI 备份工具执行加密导出；恢复操作必须在隔离环境中使用离线私钥。</p>
-    </div>
+    <details class="help-details help-card"><summary>备份与恢复说明</summary><p>生成密钥不会自动执行备份。请使用 PHP CLI 工具导出加密备份，并在隔离环境使用离线私钥恢复。</p></details>
     <?php
 }
