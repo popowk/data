@@ -827,6 +827,43 @@ function feature_view(string $view,bool $embedded=false): void {
         <div class="bulk-submit"><div><strong id="bulk-summary">尚未选择修改项</strong><small>提交前预览字段差异和下线人数；成员或原授权值变化时，要求重新预览</small></div><button class="btn primary" type="submit" data-confirm-submit="此操作将批量修改所选分组的指定授权字段，确认继续？">应用批量配置</button></div>
         </form>
         <?php
+        $jobSql="SELECT j.id,j.group_id,j.actor_name,j.status,j.total_count,
+            j.processed_count,j.changed_count,j.conflict_count,j.revoked_sessions,
+            j.last_error,j.created_at,g.name AS group_name
+            FROM phonehub_bulk_jobs j LEFT JOIN phonehub_groups g ON g.id=j.group_id";
+        $jobParams=[];
+        if(admin_role()!=='owner') {
+            $jobSql.=" WHERE j.actor_id=?";
+            $jobParams[] = admin_id();
+        }
+        $jobs=sql($jobSql." ORDER BY j.id DESC LIMIT 12",$jobParams)->fetchAll();
+        $jobStates=['pending'=>'等待执行','running'=>'进行中（可恢复）',
+            'completed'=>'全部完成','partial'=>'完成（存在冲突）','cancelled'=>'已取消'];
+        ?>
+        <section class="card" id="bulk-job-history">
+          <div class="card-head"><h2>分批任务进度与中断恢复</h2><span class="count">最近 12 条</span></div>
+          <p class="footnote">超过 100 位客户时自动创建持久化任务，每次最多处理 40 人。关闭浏览器不会继续执行；再次进入可点击「继续执行」。已提交批次不会重复执行；冲突客户会跳过，需重新预览后创建新任务。取消不会回滚已经成功的批次。每个分组同时只允许一个未结束任务。</p>
+          <p id="bulk-job-live" class="muted" role="status" aria-live="polite"></p>
+          <div class="table-scroll"><table><thead><tr><th>任务 / 分组</th><th>创建人</th><th>处理进度</th><th>状态</th><th>操作</th></tr></thead><tbody>
+          <?php foreach($jobs as $job):
+            $finished=(int)$job['processed_count']+(int)$job['conflict_count'];
+            $active=in_array($job['status'],['pending','running'],true); ?>
+            <tr><td>#<?=(int)$job['id']?> · <?=h($job['group_name']??('已删除分组 #'.$job['group_id']))?>
+              <small class="muted"><?=h(utc_to_cn($job['created_at']))?></small></td>
+              <td><?=h($job['actor_name'])?></td>
+              <td><?=$finished?> / <?=(int)$job['total_count']?>（实际变化 <?=(int)$job['changed_count']?>，冲突 <?=(int)$job['conflict_count']?>，撤销会话 <?=(int)$job['revoked_sessions']?>）</td>
+              <td><?=h($jobStates[$job['status']]??$job['status'])?>
+              <?php if($job['last_error']!==''): ?><div class="muted"><?=h($job['last_error'])?></div><?php endif ?></td>
+              <td><?php if($active): ?>
+                <button type="button" class="small-link" data-action="bulk-job-resume" data-job-id="<?=(int)$job['id']?>">继续执行</button>
+                <button type="button" class="small-link" data-action="bulk-job-cancel" data-job-id="<?=(int)$job['id']?>">取消任务</button>
+              <?php elseif($job['status']==='partial'): ?><span class="muted">冲突客户需重新预览</span>
+              <?php else: ?><span class="muted">—</span><?php endif ?></td></tr>
+          <?php endforeach ?>
+          <?php if(!$jobs): ?><tr><td colspan="5">暂无分批任务，超过 100 位客户的分组将自动进入此处。</td></tr><?php endif ?>
+          </tbody></table></div>
+        </section>
+    <?php
     } elseif ($view==='mobiles' || $view==='devices') {
         if (!function_exists('device_admin_view')) {
             ?><div class="card"><h2>设备管理模块尚未补齐</h2>
