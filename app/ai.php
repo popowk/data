@@ -298,13 +298,12 @@ function ai_admin_view(bool $embedded=false): void {
     $today=(int)sql("SELECT COUNT(*) FROM phonehub_ai_usage WHERE created_at>=UTC_DATE()")->fetchColumn();
     ?>
     <?php if(!$embedded): ?><div class="page-title"><div><h1>AI 接口管理</h1><p>默认由服务器代理 DeepSeek；服务端密钥不会下发给客户端</p></div></div><?php endif ?>
-    <?php if($embedded): ?><div id="ai-management" class="page-title"><div><h2>AI 接口设置</h2><p>服务端 DeepSeek 中转、客户配额和最近调用记录；与上方 MCP / Skill 开关独立保存</p></div></div><?php endif ?>
+    <?php if($embedded): ?><div id="ai-management" class="page-title"><div><h2>AI 设置</h2><p>模型、配额与调用记录</p></div></div><?php endif ?>
     <div class="card"><div class="card-head"><h2>服务端 AI 中转</h2><span class="pill <?=$s['enabled']?'ok':'off'?>"><?=$s['enabled']?'已开放':'已关闭'?></span></div>
       <form data-ajax="ai_settings_save">
         <input type="hidden" name="action" value="ai_settings_save">
         <div class="form-grid">
-          <div class="field"><label>服务商</label><input value="DeepSeek" readonly></div>
-          <div class="field"><label>默认模型</label><select name="model"><?php foreach(AI_ALLOWED_MODELS as $m): ?><option value="<?=h($m)?>" <?=$s['model']===$m?'selected':''?>><?=h($m)?></option><?php endforeach ?></select></div>
+          <div class="field"><label>默认模型（DeepSeek）</label><select name="model"><?php foreach(AI_ALLOWED_MODELS as $m): ?><option value="<?=h($m)?>" <?=$s['model']===$m?'selected':''?>><?=h($m)?></option><?php endforeach ?></select></div>
           <div class="field"><label>服务器 DeepSeek API Key（留空不修改）</label><input type="password" name="api_key" autocomplete="new-password" placeholder="<?=$s['server_key_configured']?'已安全配置；留空保持不变':'尚未配置，请粘贴服务端密钥'?>"></div>
           <div class="field"><label>单次最大输出 Token</label><input type="number" name="max_tokens" min="256" max="8192" value="<?=$s['max_tokens']?>"></div>
           <div class="field"><label>每客户每分钟请求上限</label><input type="number" name="requests_per_minute" min="1" max="30" value="<?=$s['requests_per_minute']?>"></div>
@@ -313,10 +312,11 @@ function ai_admin_view(bool $embedded=false): void {
           <div class="field"><label>删除已保存的服务器 Key</label><label class="check-row"><input type="checkbox" name="remove_api_key"> 删除密钥</label></div>
         </div><div class="editor-actions"><button class="btn primary">保存 AI 配置</button></div>
       </form>
-      <p class="muted">服务器密钥使用 sodium secretbox 加密存入数据库；加密主密钥保存在 storage/ai-master.key。必须备份该文件，丢失后无法解密原密钥。当前接口固定连接 https://api.deepseek.com，不接受客户端自定义 URL，避免 SSRF。</p>
+      <p class="footnote">请备份 <code>storage/ai-master.key</code>，否则无法恢复服务器 API Key。</p>
+      <details class="help-details"><summary>密钥保存方式</summary><p>服务器 Key 加密保存，固定使用 DeepSeek 官方接口，不向客户端下发密钥。</p></details>
     </div>
-    <div class="stats"><div class="stat"><span>今日 AI 请求</span><strong><?=$today?></strong><small>只记录模型、Token、耗时与状态，不保存提示词</small></div><div class="stat"><span>服务端密钥</span><strong><?=$s['server_key_configured']?'已配置':'未配置'?></strong><small>客户端永远无法读取密钥</small></div><div class="stat"><span>客户端自带 Key</span><strong><?=$s['client_key_enabled']?'全局允许':'全局关闭'?></strong><small>还需在客户授权中单独勾选</small></div></div>
-    <div class="card"><div class="card-head"><h2>最近 AI 调用记录</h2><span class="count">最近 100 条 · 不记录 Prompt</span></div>
+    <div class="stats"><div class="stat"><span>今日 AI 请求</span><strong><?=$today?></strong></div><div class="stat"><span>服务端密钥</span><strong><?=$s['server_key_configured']?'已配置':'未配置'?></strong></div><div class="stat"><span>客户端自带 Key</span><strong><?=$s['client_key_enabled']?'全局允许':'全局关闭'?></strong></div></div>
+    <div class="card"><div class="card-head"><h2>AI 调用记录</h2><span class="count">最近 100 条 · 不记录对话内容</span></div>
       <div class="table-scroll"><table><thead><tr><th>时间</th><th>客户</th><th>模式</th><th>模型</th><th>状态</th><th>HTTP</th><th>Token</th><th>耗时</th></tr></thead><tbody>
       <?php foreach($usage as $u): ?><tr><td><?=h(utc_to_cn($u['created_at']))?></td><td><?=h($u['username'])?></td><td><?=h($u['mode'])?></td><td><?=h($u['model'])?></td><td><?=h($u['status'])?></td><td><?=(int)$u['http_status']?></td><td><?=(int)$u['prompt_tokens']?> / <?=(int)$u['completion_tokens']?></td><td><?=(int)$u['elapsed_ms']?> ms</td></tr><?php endforeach ?>
       </tbody></table></div>
