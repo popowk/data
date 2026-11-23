@@ -279,12 +279,14 @@ if ($view==='backup_keys') {header('Location: index.php?view=update#maintenance-
 $groups=in_array($view,['dashboard','accounts','groups','group_bulk'],true) ? sql('SELECT id,name,(SELECT COUNT(*) FROM phonehub_user_meta m WHERE m.group_id=g.id) AS users FROM phonehub_groups g ORDER BY id DESC')->fetchAll() : [];
 $accounts=[];
 $accountTotal=0;$accountPage=1;$accountPages=1;
-$accountFilters=['q'=>'','group'=>'all','status'=>'all','expiry'=>'all','plan'=>'all','page'=>1];
+$accountFilters=['q'=>'','group'=>'all','status'=>'all','expiry'=>'all','usage'=>'all','plan'=>'all','page'=>1];
 $accountSelect="SELECT u.id,u.username,u.enabled,u.device_limit,u.license_until,u.entitlements,u.created_at,
     u.ai_enabled,u.allow_client_ai_key,u.ai_daily_limit,m.group_id,COALESCE(m.mobile_limit,0) AS mobile_limit,
     m.opening_plan_code,COALESCE(m.notes,'') AS notes,g.name AS group_name,
     (SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s
-      WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices
+      WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP()) AS active_devices,
+    (SELECT COUNT(*) FROM phonehub_mobile_devices d
+      WHERE d.user_id=u.id AND d.enabled=1) AS active_mobiles
     FROM phonehub_users u
     LEFT JOIN phonehub_user_meta m ON m.user_id=u.id
     LEFT JOIN phonehub_groups g ON g.id=m.group_id";
@@ -297,6 +299,24 @@ if ($view==='dashboard') {
       GROUP BY user_id,device_id
     ) live')->fetchColumn();
     $accounts=sql($accountSelect.' ORDER BY u.id DESC LIMIT 8')->fetchAll();
+    $expiryAlerts=sql("SELECT
+       COALESCE(SUM(CASE WHEN enabled=1 AND license_until>=UTC_TIMESTAMP()
+         AND license_until<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 7 DAY) THEN 1 ELSE 0 END),0) AS due7,
+       COALESCE(SUM(CASE WHEN enabled=1 AND license_until>=UTC_TIMESTAMP()
+         AND license_until<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 DAY) THEN 1 ELSE 0 END),0) AS due30,
+       COALESCE(SUM(CASE WHEN enabled=1 AND license_until<UTC_TIMESTAMP() THEN 1 ELSE 0 END),0) AS expired
+       FROM phonehub_users")->fetch();
+    $quotaAlerts=sql("SELECT
+       COALESCE(SUM(CASE WHEN u.enabled=1 AND (u.license_until IS NULL OR u.license_until>=UTC_TIMESTAMP())
+         AND u.device_limit>0 AND COALESCE(s.used_pc,0)*5>=u.device_limit*4 THEN 1 ELSE 0 END),0) AS pc80,
+       COALESCE(SUM(CASE WHEN u.enabled=1 AND (u.license_until IS NULL OR u.license_until>=UTC_TIMESTAMP())
+         AND m.mobile_limit>0 AND COALESCE(d.used_mobile,0)*5>=m.mobile_limit*4 THEN 1 ELSE 0 END),0) AS mobile80
+       FROM phonehub_users u
+       LEFT JOIN phonehub_user_meta m ON m.user_id=u.id
+       LEFT JOIN (SELECT user_id,COUNT(DISTINCT device_id) AS used_pc FROM phonehub_sessions
+         WHERE expires_at>UTC_TIMESTAMP() GROUP BY user_id) s ON s.user_id=u.id
+       LEFT JOIN (SELECT user_id,COUNT(*) AS used_mobile FROM phonehub_mobile_devices
+         WHERE enabled=1 GROUP BY user_id) d ON d.user_id=u.id")->fetch();
 }
 if ($view==='accounts') {
     $accountFilters=phonehub_account_filters($_GET);
@@ -333,6 +353,16 @@ $nav=[
 <?php if ($view==='dashboard'): ?>
 <div class="page-title"><div><h1>运营概览</h1><p>客户授权与电脑会话状态一览</p></div><a class="btn primary" href="?view=accounts"><?=$adminRole==='viewer'?'查看客户':'+ 新增授权'?></a></div>
 <div class="stats"><div class="stat"><span>客户总数</span><strong><?=$total?></strong><small>全部授权账号</small></div><div class="stat"><span>正常授权</span><strong><?=$enabled?></strong><small>账号启用中（不含到期校验）</small></div><div class="stat"><span>电脑名额占用</span><strong><?=$devices?></strong><small>未过期的设备会话</small></div><div class="stat"><span>客户分组</span><strong><?=count($groups)?></strong><small>支持自主分组管理</small></div></div>
+<div class="card" id="license-usage-alerts">
+<div class="card-head"><h2>授权到期与额度预警</h2><a href="?view=accounts">查看客户授权</a></div>
+<p class="muted">只统计启用客户；授权到期按 UTC 实时判断，电脑占用按有效会话去重，手机占用按已启用的绑定设备计算。80% 为提示阈值，不触发自动停用或解绑。</p>
+<div class="stats">
+  <a class="stat" href="index.php?view=accounts&amp;status=enabled&amp;expiry=due7"><span>未来 7 天到期</span><strong><?=(int)($expiryAlerts['due7']??0)?></strong><small>点击查看客户</small></a>
+  <a class="stat" href="index.php?view=accounts&amp;status=enabled&amp;expiry=due30"><span>未来 30 天到期</span><strong><?=(int)($expiryAlerts['due30']??0)?></strong><small>包含未来 7 天</small></a>
+  <a class="stat" href="index.php?view=accounts&amp;status=enabled&amp;expiry=expired"><span>已过期但仍启用</span><strong><?=(int)($expiryAlerts['expired']??0)?></strong><small>点击排查</small></a>
+  <a class="stat" href="index.php?view=accounts&amp;usage=pc80"><span>电脑名额使用率 ≥ 80%</span><strong><?=(int)($quotaAlerts['pc80']??0)?></strong><small>仅有效授权客户</small></a>
+  <a class="stat" href="index.php?view=accounts&amp;usage=mobile80"><span>手机名额使用率 ≥ 80%</span><strong><?=(int)($quotaAlerts['mobile80']??0)?></strong><small>仅有效授权客户</small></a>
+</div></div>
 <div class="card"><div class="card-head"><h2>最近客户</h2><a href="?view=accounts">查看全部</a></div><div class="table-scroll"><table><thead><tr><th>客户账号</th><th>分组</th><th>电脑名额</th><th>授权期限</th><th>状态</th></tr></thead><tbody><?php foreach (array_slice($accounts,0,8) as $a): ?><tr><td><b><?=h($a['username'])?></b></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td></tr><?php endforeach ?></tbody></table></div></div>
 <?php elseif ($view==='accounts'): ?>
 <div class="page-title"><div><h1>客户授权</h1><p>新建客户可设置密码，留空则生成安全随机密码；已有客户只能通过独立重置功能改密</p></div><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><button class="btn primary" data-action="new-account">+ 创建客户</button><?php else: ?><span class="muted">只读查看，不允许修改授权</span><?php endif ?></div>
@@ -372,6 +402,9 @@ $nav=[
 <div class="field"><label for="account-filter-expiry">到期情况</label><select id="account-filter-expiry" name="expiry">
 <?php foreach(['all'=>'全部期限','expired'=>'已过期','due7'=>'未来 7 天到期','due30'=>'未来 30 天到期','permanent'=>'永久','valid'=>'未过期（含永久）'] as $value=>$label): ?><option value="<?=h($value)?>" <?=$accountFilters['expiry']===$value?'selected':''?>><?=h($label)?></option><?php endforeach ?>
 </select></div>
+<div class="field"><label for="account-filter-usage">名额使用率</label><select id="account-filter-usage" name="usage">
+<?php foreach(['all'=>'全部使用情况','pc80'=>'电脑名额 ≥ 80%','mobile80'=>'手机名额 ≥ 80%'] as $value=>$label): ?><option value="<?=h($value)?>" <?=$accountFilters['usage']===$value?'selected':''?>><?=h($label)?></option><?php endforeach ?>
+</select></div>
 <div class="field"><label for="account-filter-plan">客户套餐</label><select id="account-filter-plan" name="plan">
 <option value="all">全部套餐</option><option value="legacy" <?=$accountFilters['plan']==='legacy'?'selected':''?>>旧授权（无套餐）</option><option value="custom" <?=$accountFilters['plan']==='custom'?'selected':''?>>自定义授权</option>
 <?php foreach(phonehub_opening_plans(false) as $code=>$p): ?><option value="<?=h($code)?>" <?=$accountFilters['plan']===$code?'selected':''?>><?=h($p['label'])?><?=$p['enabled']?'':'（已停用）'?></option><?php endforeach ?>
@@ -382,14 +415,14 @@ $nav=[
 $accountPageLink=static function(int $page) use($accountFilters): string {
     return 'index.php?'.http_build_query(['view'=>'accounts','q'=>$accountFilters['q'],
       'group'=>$accountFilters['group'],'status'=>$accountFilters['status'],
-      'expiry'=>$accountFilters['expiry'],'plan'=>$accountFilters['plan'],'page'=>$page],
+      'expiry'=>$accountFilters['expiry'],'usage'=>$accountFilters['usage'],'plan'=>$accountFilters['plan'],'page'=>$page],
       '', '&', PHP_QUERY_RFC3986);
 };
 ?>
 <div class="card"><div class="card-head"><h2>客户列表</h2><span class="count">匹配 <?=$accountTotal?> 位 · 第 <?=$accountPage?> / <?=$accountPages?> 页（每页 30 位）</span></div>
 <div class="table-scroll"><table><thead><tr><th>客户账号</th><th>客户套餐</th><th>分组</th><th>电脑名额</th><th>手机额度</th><th>授权截止（北京时间）</th><th>平台权限</th><th>状态</th><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><th>操作</th><?php endif ?></tr></thead><tbody>
 <?php foreach($accounts as $a): $payload=['id'=>(int)$a['id'],'username'=>$a['username'],'group_id'=>(int)$a['group_id'],'device_limit'=>(int)$a['device_limit'],'mobile_limit'=>(int)$a['mobile_limit'],'opening_plan_code'=>$a['opening_plan_code']??null,'license_until'=>utc_to_input($a['license_until']),'entitlements'=>json_decode((string)$a['entitlements'],true)?:[],'notes'=>$a['notes'],'enabled'=>(bool)$a['enabled'],'ai_enabled'=>(bool)$a['ai_enabled'],'allow_client_ai_key'=>(bool)$a['allow_client_ai_key'],'ai_daily_limit'=>(int)$a['ai_daily_limit']]; ?>
-<tr><td><b><?=h($a['username'])?></b></td><td><?=h(phonehub_plan_label($a['opening_plan_code']??null))?></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?= (int)$a['mobile_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><?=h(implode('、',array_map(static fn($x)=>['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP','skill'=>'Skill','mcp-codex'=>'Codex MCP','mcp-harness'=>'DeepSeek Harness MCP'][$x]??$x,json_decode((string)$a['entitlements'],true)?:[])))?></td>
+<tr><td><b><?=h($a['username'])?></b></td><td><?=h(phonehub_plan_label($a['opening_plan_code']??null))?></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?= (int)$a['active_mobiles']?> / <?= (int)$a['mobile_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><?=h(implode('、',array_map(static fn($x)=>['douyin'=>'抖音','xiaohongshu'=>'小红书','mcp'=>'MCP','skill'=>'Skill','mcp-codex'=>'Codex MCP','mcp-harness'=>'DeepSeek Harness MCP'][$x]??$x,json_decode((string)$a['entitlements'],true)?:[])))?></td>
 <td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><td class="actions">
 <button class="small-link" data-edit="<?=h(json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP|JSON_HEX_TAG))?>">编辑</button>
 <button class="small-link" data-action="reset-account-password" data-id="<?=(int)$a['id']?>">重置密码</button>
