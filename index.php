@@ -389,16 +389,14 @@ if ($view==='accounts') {
 $nav=[
 'dashboard'=>['概览','▦'],
 'accounts'=>['客户授权','♙'],
-'groups'=>['客户分组与批量配置','◫'],
+'groups'=>['客户分组','◫'],
 'devices'=>['设备管理','▣'],
 'plans'=>['套餐管理','▤'],
 'client_logs'=>['客户端日志','☷'],
-'performance'=>['接口性能监控','▤'],
 'releases'=>['版本发布与操作包','⇧'],
 'cloud_features'=>['客户端能力与 AI','⚙'],
 'update'=>['系统维护','⟳'],
 'admins'=>['管理员管理','♧'],
-'audit'=>['操作记录','☷']
 ];
 ?>
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -406,39 +404,39 @@ $nav=[
 <body><div class="app"><aside class="sidebar"><div class="brand"><span class="brand-mark">P</span><div><strong>PhoneHub</strong><small>授权管理中心</small></div></div>
 <nav><?php foreach ($nav as $route=>$item): if (!phonehub_role_can_view($adminRole,$route)) continue; ?><a class="<?= $view===$route?'active':'' ?>" href="?view=<?=h($route)?>"><span class="nav-icon"><?=h($item[1])?></span><?=h($item[0])?></a><?php endforeach ?></nav>
 <div class="sidebar-footer"><span class="status-dot"></span> 运行中 <small><?=h(phonehub_role_label($adminRole))?> · v<?=h(app_version())?></small></div></aside>
-<div class="main"><header class="topbar"><div><span class="crumb">PhoneHub /</span> <?=h($nav[$view][0]??($view==='packages'?'历史操作包':'管理页面'))?></div><div class="top-right"><span class="avatar"><?=h(substr((string)($_SESSION['admin_user']??'A'),0,1))?></span><?=h($_SESSION['admin_user']??'管理员')?><button class="text-button" data-action="logout">退出</button></div></header>
+<div class="main"><header class="topbar"><div><span class="crumb">PhoneHub /</span> <?=h($nav[$view][0]??(['performance'=>'接口性能','audit'=>'操作记录','account_history'=>'授权变更明细','packages'=>'历史操作包'][$view]??'管理页面'))?></div><div class="top-right"><span class="avatar"><?=h(substr((string)($_SESSION['admin_user']??'A'),0,1))?></span><?=h($_SESSION['admin_user']??'管理员')?><button class="text-button" data-action="logout">退出</button></div></header>
 <main id="content" class="content">
 <?php if ($view==='dashboard'): ?>
-<div class="page-title"><div><h1>运营概览</h1><p>客户授权与电脑会话状态一览</p></div><a class="btn primary" href="?view=accounts"><?=$adminRole==='viewer'?'查看客户':'+ 新增授权'?></a></div>
-<div class="stats"><div class="stat"><span>客户总数</span><strong><?=$total?></strong><small>全部授权账号</small></div><div class="stat"><span>正常授权</span><strong><?=$enabled?></strong><small>账号启用中（不含到期校验）</small></div><div class="stat"><span>电脑名额占用</span><strong><?=$devices?></strong><small>未过期的设备会话</small></div><div class="stat"><span>客户分组</span><strong><?=count($groups)?></strong><small>支持自主分组管理</small></div></div>
+<div class="page-title"><div><h1>运营概览</h1></div><a class="btn primary" href="?view=accounts"><?=$adminRole==='viewer'?'查看客户':'+ 新增授权'?></a></div>
+<div class="stats"><div class="stat"><span>客户总数</span><strong><?=$total?></strong></div><div class="stat"><span>已启用账号</span><strong><?=$enabled?></strong></div><div class="stat"><span>在线电脑</span><strong><?=$devices?></strong></div><div class="stat"><span>客户分组</span><strong><?=count($groups)?></strong></div></div>
 <div class="card" id="license-usage-alerts">
-<div class="card-head"><h2>授权到期与额度预警</h2><a href="?view=accounts">查看客户授权</a></div>
-<p class="muted">只统计启用客户；授权到期按 UTC 实时判断，电脑占用按有效会话去重，手机占用按已启用的绑定设备计算。80% 为提示阈值，不触发自动停用或解绑。</p>
+<div class="card-head"><h2>到期与名额提醒</h2><a href="?view=accounts">查看客户</a></div>
+<p class="muted">提醒仅供查看，不自动停用或解绑；名额使用率阈值为 80%。</p>
 <div class="stats">
-  <a class="stat" href="index.php?view=accounts&amp;status=enabled&amp;expiry=due7"><span>未来 7 天到期</span><strong><?=(int)($expiryAlerts['due7']??0)?></strong><small>点击查看客户</small></a>
-  <a class="stat" href="index.php?view=accounts&amp;status=enabled&amp;expiry=due30"><span>未来 30 天到期</span><strong><?=(int)($expiryAlerts['due30']??0)?></strong><small>包含未来 7 天</small></a>
-  <a class="stat" href="index.php?view=accounts&amp;status=enabled&amp;expiry=expired"><span>已过期但仍启用</span><strong><?=(int)($expiryAlerts['expired']??0)?></strong><small>点击排查</small></a>
-  <a class="stat" href="index.php?view=accounts&amp;usage=pc80"><span>电脑名额使用率 ≥ 80%</span><strong><?=(int)($quotaAlerts['pc80']??0)?></strong><small>仅有效授权客户</small></a>
-  <a class="stat" href="index.php?view=accounts&amp;usage=mobile80"><span>手机名额使用率 ≥ 80%</span><strong><?=(int)($quotaAlerts['mobile80']??0)?></strong><small>仅有效授权客户</small></a>
+  <a class="stat" href="index.php?view=accounts&amp;status=enabled&amp;expiry=due7"><span>7 天内到期</span><strong><?=(int)($expiryAlerts['due7']??0)?></strong><small>查看客户</small></a>
+  <a class="stat" href="index.php?view=accounts&amp;status=enabled&amp;expiry=due30"><span>30 天内到期</span><strong><?=(int)($expiryAlerts['due30']??0)?></strong><small>含 7 天内</small></a>
+  <a class="stat" href="index.php?view=accounts&amp;status=enabled&amp;expiry=expired"><span>已过期</span><strong><?=(int)($expiryAlerts['expired']??0)?></strong><small>查看客户</small></a>
+  <a class="stat" href="index.php?view=accounts&amp;usage=pc80"><span>电脑名额 ≥ 80%</span><strong><?=(int)($quotaAlerts['pc80']??0)?></strong><small>有效授权</small></a>
+  <a class="stat" href="index.php?view=accounts&amp;usage=mobile80"><span>手机名额 ≥ 80%</span><strong><?=(int)($quotaAlerts['mobile80']??0)?></strong><small>有效授权</small></a>
 </div></div>
 <div class="card"><div class="card-head"><h2>最近客户</h2><a href="?view=accounts">查看全部</a></div><div class="table-scroll"><table><thead><tr><th>客户账号</th><th>分组</th><th>电脑名额</th><th>授权期限</th><th>状态</th></tr></thead><tbody><?php foreach (array_slice($accounts,0,8) as $a): ?><tr><td><b><?=h($a['username'])?></b></td><td><?=h($a['group_name']??'未分组')?></td><td><?= (int)$a['active_devices']?> / <?= (int)$a['device_limit']?></td><td><?=h(utc_to_cn($a['license_until']))?></td><td><span class="pill <?= (int)$a['enabled']?'ok':'off'?>"><?= (int)$a['enabled']?'启用':'停用'?></span></td></tr><?php endforeach ?></tbody></table></div></div>
 <?php elseif ($view==='accounts'): ?>
-<div class="page-title"><div><h1>客户授权</h1><p>新建客户可设置密码，留空则生成安全随机密码；已有客户只能通过独立重置功能改密</p></div><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><button class="btn primary" data-action="new-account">+ 创建客户</button><?php else: ?><span class="muted">只读查看，不允许修改授权</span><?php endif ?></div>
+<div class="page-title"><div><h1>客户授权</h1><p>创建和管理客户授权</p></div><?php if(phonehub_role_can_action($adminRole,'account_save')): ?><button class="btn primary" data-action="new-account">+ 创建客户</button><?php else: ?><span class="muted">只读查看，不允许修改授权</span><?php endif ?></div>
 <?php if(phonehub_role_can_action($adminRole,'account_save')): ?>
 <div class="card editor" id="account-editor" hidden><div class="card-head"><h2 id="editor-title">创建客户</h2><button class="text-button" data-action="close-editor">关闭</button></div>
 <form data-ajax="account_save"><input name="action" type="hidden" value="account_save"><input name="id" type="hidden" value="0">
 <div class="form-grid">
-<div class="field span2" id="opening-plan-field"><label for="opening-plan">客户套餐（创建后可修改）</label><select id="opening-plan" name="opening_plan" required><option value="">请选择客户套餐</option><?php foreach(phonehub_opening_plans(false) as $code=>$plan): ?><option value="<?=h($code)?>" data-pc="<?=(int)$plan['device_limit']?>" data-mobile="<?=(int)$plan['mobile_limit']?>" data-enabled="<?=(int)$plan['enabled']?>" <?=$plan['enabled']?'':'disabled'?>><?=h($plan['label'])?><?=$plan['enabled']?'':'（已停用）'?> · <?=(int)$plan['device_limit']?> 台电脑 / <?=(int)$plan['mobile_limit']?> 台手机</option><?php endforeach ?><option value="custom">自定义授权额度</option></select><span class="footnote">切换套餐会按新套餐设置电脑和手机额度；原套餐未变时保留当前额度，也可单独调整。套餐不影响其他平台、AI 权限、到期时间或费用。</span></div>
+<div class="field span2" id="opening-plan-field"><label for="opening-plan">客户套餐（创建后可修改）</label><select id="opening-plan" name="opening_plan" required><option value="">请选择客户套餐</option><?php foreach(phonehub_opening_plans(false) as $code=>$plan): ?><option value="<?=h($code)?>" data-pc="<?=(int)$plan['device_limit']?>" data-mobile="<?=(int)$plan['mobile_limit']?>" data-enabled="<?=(int)$plan['enabled']?>" <?=$plan['enabled']?'':'disabled'?>><?=h($plan['label'])?><?=$plan['enabled']?'':'（已停用）'?> · <?=(int)$plan['device_limit']?> 台电脑 / <?=(int)$plan['mobile_limit']?> 台手机</option><?php endforeach ?><option value="custom">自定义授权额度</option></select><span class="footnote">切换套餐将更新电脑与手机额度，其他权限不变。</span></div>
 <div class="field"><label>客户账号</label><input name="username" required minlength="3" maxlength="64"></div>
-<div class="field" id="customer-create-password-field"><label for="customer-create-password">初始密码（仅创建客户时）</label>
+<div class="field" id="customer-create-password-field"><label for="customer-create-password">初始密码</label>
 <input id="customer-create-password" name="password" type="password" autocomplete="new-password"
   minlength="12" maxlength="128" placeholder="留空自动生成安全密码，或输入 12–128 字节密码">
-<span class="footnote">可自行指定初始密码；留空则自动生成。已有客户修改密码请在客户列表使用“重置密码”。密码不会显示在编辑界面。</span></div>
+<span class="footnote">留空自动生成；已有客户请使用“重置密码”。</span></div>
 <div class="field"><label>客户分组</label><select name="group_id"><option value="0">未分组</option><?php foreach($groups as $g): ?><option value="<?=(int)$g['id']?>"><?=h($g['name'])?></option><?php endforeach ?></select></div>
-<div class="field"><label>授权截止时间（北京时间，留空永久）</label><input name="license_until" type="datetime-local" step="1"></div>
+<div class="field"><label>到期时间（留空永久，北京时间）</label><input name="license_until" type="datetime-local" step="1"></div>
 <div class="field"><label>电脑授权名额（1–100）</label><input name="device_limit" type="number" min="1" max="100" value="3"></div>
 <div class="field"><label>安卓手机名额（0 表示禁止绑定）</label><input name="mobile_limit" type="number" min="0" max="1000" value="1"></div>
-<div class="field span2"><label>平台与扩展权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked> 抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu"> 小红书</label><label><input type="checkbox" name="entitlements[]" value="mcp" <?=$adminRole==='admin'?'disabled':''?>> MCP</label><label><input type="checkbox" name="entitlements[]" value="mcp-codex" <?=$adminRole==='admin'?'disabled':''?>> Codex MCP</label><label><input type="checkbox" name="entitlements[]" value="mcp-harness" <?=$adminRole==='admin'?'disabled':''?>> DeepSeek Harness MCP</label><label><input type="checkbox" name="entitlements[]" value="skill" <?=$adminRole==='admin'?'disabled':''?>> Skill</label></div><span class="footnote">MCP/Skill 还需在「客户端能力控制」打开全局开关；新客户默认不授权。</span></div>
+<div class="field span2"><label>平台与扩展权限</label><div class="check-row"><label><input type="checkbox" name="entitlements[]" value="douyin" checked> 抖音</label><label><input type="checkbox" name="entitlements[]" value="xiaohongshu"> 小红书</label><label><input type="checkbox" name="entitlements[]" value="mcp" <?=$adminRole==='admin'?'disabled':''?>> MCP</label><label><input type="checkbox" name="entitlements[]" value="mcp-codex" <?=$adminRole==='admin'?'disabled':''?>> Codex MCP</label><label><input type="checkbox" name="entitlements[]" value="mcp-harness" <?=$adminRole==='admin'?'disabled':''?>> DeepSeek Harness MCP</label><label><input type="checkbox" name="entitlements[]" value="skill" <?=$adminRole==='admin'?'disabled':''?>> Skill</label></div><span class="footnote">MCP / Skill 须同时开启全局权限。</span></div>
 <div class="field"><label>账号状态</label><label class="check-row"><input type="checkbox" name="enabled" checked> 启用账号</label></div>
 <div class="field"><label>AI 功能</label><label class="check-row"><input type="checkbox" name="ai_enabled" checked> 允许使用 AI</label></div>
 <div class="field"><label>AI 每日请求额度（0–5000）</label><input name="ai_daily_limit" type="number" min="0" max="5000" value="100"></div>
@@ -495,17 +493,17 @@ $accountPageLink=static function(int $page) use($accountFilters): string {
 <?php if($accountPage<$accountPages): ?><a class="btn" href="<?=h($accountPageLink($accountPage+1))?>">下一页</a><?php endif ?>
 </nav></div>
 <?php elseif($view==='groups'): ?>
-<div class="page-title"><div><h1>客户分组与批量配置</h1><p>创建、查看客户分组，并在同一页面批量调整组内授权。</p></div><?php if(phonehub_role_can_view($adminRole,'group_bulk')): ?><a class="btn primary" href="#group-bulk">批量配置授权</a><?php endif ?></div><?php if(phonehub_role_can_action($adminRole,'group_create')): ?><div class="card"><div class="card-head"><h2>新建分组</h2></div><form class="inline-form" data-ajax="group_create"><input type="hidden" name="action" value="group_create"><input name="name" placeholder="例如：代理商A / 企业客户" maxlength="100" required><button class="btn primary">创建分组</button></form></div><?php endif ?>
+<div class="page-title"><div><h1>客户分组</h1></div><?php if(phonehub_role_can_view($adminRole,'group_bulk')): ?><a class="btn primary" href="#group-bulk">批量配置授权</a><?php endif ?></div><?php if(phonehub_role_can_action($adminRole,'group_create')): ?><div class="card"><div class="card-head"><h2>新建分组</h2></div><form class="inline-form" data-ajax="group_create"><input type="hidden" name="action" value="group_create"><input name="name" placeholder="例如：代理商A / 企业客户" maxlength="100" required><button class="btn primary">创建分组</button></form></div><?php endif ?>
 <div class="card" id="group-list"><div class="card-head"><h2>已创建分组</h2></div><div class="table-scroll"><table><thead><tr><th>分组名称</th><th>客户数</th><th>操作</th></tr></thead><tbody><?php foreach($groups as $g): ?><tr><td><b><?=h($g['name'])?></b></td><td><?=(int)$g['users']?></td><td><?php if(phonehub_role_can_action($adminRole,'group_delete')): ?><button class="small-link" data-action="delete-group" data-id="<?=(int)$g['id']?>">删除</button><?php else: ?>只读<?php endif ?></td></tr><?php endforeach ?></tbody></table></div></div>
 <?php if(phonehub_role_can_view($adminRole,'group_bulk')): require_once __DIR__.'/app/features.php'; feature_view('group_bulk',true); endif; ?>
 <?php elseif($view==='plans'): require_once __DIR__.'/app/features.php'; plan_admin_view(); ?>
 <?php elseif($view==='packages'): require_once __DIR__.'/app/release_admin.php'; ?>
-<div class="page-title"><div><h1>历史操作包</h1><p>只读兼容入口；主管理员请使用「版本发布与操作包」页面</p></div></div>
+<div class="page-title"><div><h1>历史操作包</h1><p>只读查询</p></div></div>
 <?php release_package_overview(); ?>
 <?php elseif($view==='update'): ?>
-<div class="page-title"><div><h1>系统维护</h1><p>统一管理程序在线更新、运行环境自检、签名信任和独立加密备份密钥。</p></div></div>
-<div class="update-actions maintenance-nav"><a class="btn" href="#maintenance-update">系统更新与自检</a><?php if($adminRole==='owner'): ?><a class="btn" href="#maintenance-backup">备份密钥管理</a><?php endif ?></div>
-<div class="card update-card" id="maintenance-update"><div class="update-icon">⟳</div><h2>当前版本 v<?=h(app_version())?></h2><p class="muted">更新源：<code>https://git.wksite.cn/popowk/data</code></p><p class="muted">仅更新管理程序文件，自动跳过 storage 内的数据库配置和运行数据。</p>
+<div class="page-title"><div><h1>系统维护</h1></div></div>
+<div class="update-actions maintenance-nav"><a class="btn" href="#maintenance-update">程序更新</a><a class="btn" href="?view=performance">接口性能</a><a class="btn" href="?view=audit">操作记录</a><?php if($adminRole==='owner'): ?><a class="btn" href="#maintenance-backup">备份密钥</a><?php endif ?></div>
+<div class="card update-card" id="maintenance-update"><div class="update-icon">⟳</div><h2>当前版本 v<?=h(app_version())?></h2><p class="muted">更新源：<code>https://git.wksite.cn/popowk/data</code></p><p class="muted">仅更新程序，保留现有数据和配置。</p>
 <div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><?php if($adminRole==='owner'): ?><a class="btn" href="#maintenance-backup">备份密钥</a><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button><?php endif ?></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
 <?php
 $signingModuleReady=is_file(__DIR__.'/app/signing_admin.php');
@@ -523,10 +521,10 @@ if ($signingModuleReady) {
 <?php else: ?>
 <div class="card">
  <div class="card-head"><h2>Ed25519 签名密钥管理</h2><span class="pill <?=$signing['state']==='active'?'ok':'off'?>"><?=$signing['state']==='active'?'强制验签已启用':($signing['state']==='pending'?'等待发布签名':'尚未初始化')?></span></div>
- <p class="muted">主管理员在这里直接初始化签名密钥，服务器生成 Ed25519 私钥并加密传入 GitHub Actions Secret，随后擦除本次服务器内存中的私钥；只保留固定公钥。使用 GitHub 一次性 Token，不保存 Token、私钥或签名明文在数据库。</p>
+ <details class="help-details"><summary>签名密钥说明</summary><p>首次初始化需使用 GitHub 一次性 Token。系统生成 Ed25519 签名密钥并配置 GitHub Actions；服务器只保留固定公钥。不要向他人提供 Token 或私钥。</p></details>
  <?php if(isset($signing['fingerprint'])): ?><p class="muted">公钥 SHA-256 指纹：<code><?=h($signing['fingerprint'])?></code></p><?php endif ?>
  <?php if($adminRole!=='owner'): ?>
- <p class="muted">全局管理员可查看更新与签名状态；更换信任密钥及安装服务器更新仅主账号可操作。</p>
+ <p class="muted">安装更新和管理签名密钥仅限主账号。</p>
  <?php elseif($signing['state']==='unconfigured'): ?>
  <form data-ajax="signing_generate"><input type="hidden" name="action" value="signing_generate">
   <div class="field"><label>GitHub 临时访问 Token（须有 popowk/data 仓库 Actions Secrets 写入权限）</label><input type="password" name="github_token" autocomplete="off" required placeholder="只用于本次安全配置，不保存"></div>
@@ -537,11 +535,11 @@ if ($signingModuleReady) {
  <div class="update-actions"><button class="btn primary" data-action="signing-activate">验证镜像并启用签名</button></div>
  <p class="muted">签名发布或镜像同步尚未完成时，验证会安全失败，可稍后重新点击；不会覆盖已有公钥。</p>
  <?php else: ?>
- <p class="muted">今后每次后台安装更新都必须先通过独立 Ed25519 签名和完整文件摘要校验，不允许重新生成新密钥覆盖当前信任链。</p>
+ <p class="muted">更新前自动校验签名与文件完整性。</p>
  <?php endif ?>
  </div>
 <?php endif ?>
-<div class="card"><h2>更新说明</h2><p class="muted">安装前自动备份原文件。下载、解压、写入或校验失败会报错；写入阶段失败将尝试自动回滚。更新过程不删除客户、会话和数据库。镜像站需要支持 GitHub 源码 ZIP 下载接口。</p></div>
+<details class="help-details help-card"><summary>更新与回滚说明</summary><p>安装前自动备份程序文件；校验或写入失败会报错，写入失败时尝试回滚。更新不删除客户、会话或数据库。</p></details>
 <?php
 require_once __DIR__.'/app/features.php';
 history_cleanup_admin_view();
@@ -573,7 +571,7 @@ $historyLabels=phonehub_account_history_fields();
   <h1>客户授权变更明细</h1>
   <p><?=h($historyUser['username'])?> · 客户 ID #<?=(int)$historyUserId?> · 每页最多 25 条事件</p>
 </div><div class="editor-actions"><a class="btn" href="<?=h('index.php?'.http_build_query(['view'=>'account_history','user_id'=>$historyUserId,'export'=>'csv']))?>">导出 CSV</a><a class="btn" href="index.php?view=accounts">返回客户列表</a></div></div>
-<div class="card"><p class="muted">从 v0.5.32 起记录实际字段变化，不补造升级前未保存的历史。创建、编辑、批量修改和密码重置都会标明操作者；密码、密钥、Token 与备注内容不会进入此表。没有实际变化的重复保存不会新增变更事件。</p>
+<div class="card"><p class="muted">记录 v0.5.32 及之后的授权变更；密码、密钥和备注内容不会保存。</p>
   <?php if(!$historyEvents): ?><p class="footnote">暂无可查询的授权变更记录。</p><?php endif ?>
   <div class="table-scroll"><table class="account-history-table"><thead>
   <tr><th>时间（北京时间）/ 操作者</th><th>变更字段</th><th>修改前</th><th>修改后</th></tr>
@@ -638,7 +636,7 @@ $nextBefore=$audits?(int)$audits[count($audits)-1]['id']:0;
 $auditPageLink=static fn(int $id):string=>'index.php?'.http_build_query([
     'view'=>'audit','audit_q'=>$auditQ,'before'=>$id]);
 ?>
-<div class="page-title"><div><h1>管理员操作记录</h1><p>按时间倒序，每页 50 条；可按操作类型和历史目标文本检索</p></div><?php if($before>0): ?><a class="btn" href="<?=h($auditPageLink(0))?>">返回最新记录</a><?php endif ?></div>
+<div class="page-title"><div><h1>操作记录</h1><p>按时间倒序查看或搜索</p></div><?php if($before>0): ?><a class="btn" href="<?=h($auditPageLink(0))?>">返回最新记录</a><?php endif ?></div>
 <div class="card">
 <form class="device-search-form" method="get" action="index.php"><input type="hidden" name="view" value="audit">
 <label for="admin-audit-q">客户账号、操作名称或目标摘要</label>
@@ -646,7 +644,7 @@ $auditPageLink=static fn(int $id):string=>'index.php?'.http_build_query([
 <button type="submit" class="btn">查询审计记录</button>
 <?php if($auditQ!==''): ?><a class="btn" href="?view=audit">清除筛选</a><?php endif ?>
 </form>
-<p class="footnote">历史记录按原审计目标文本搜索。部分旧操作只保存了记录 ID 或摘要，无法还原未记录的字段差异。</p>
+<p class="footnote">旧记录可能只有概要，无法还原字段差异。</p>
 <div class="table-scroll"><table><thead><tr><th>时间（北京时间）</th><th>管理员</th><th>操作</th><th>目标</th><th>IP</th></tr></thead><tbody><?php foreach($audits as $a): ?><tr><td><?=h(utc_to_cn($a['created_at']))?></td><td><?=h($a['username'])?></td><td><?=h($a['action'])?></td><td><?=h($a['target'])?></td><td><?=h($a['ip'])?></td></tr><?php endforeach ?></tbody></table></div><?php if($hasOlder && $nextBefore>0): ?><div class="editor-actions"><a class="btn" href="<?=h($auditPageLink($nextBefore))?>">更早记录</a></div><?php endif ?></div>
 <?php elseif ($view==='releases'): require __DIR__.'/app/release_admin.php'; release_admin_view(); ?>
 <?php elseif (in_array($view,['admins','devices','client_logs','cloud_features','performance'],true)): require __DIR__.'/app/features.php'; feature_view($view); ?>
