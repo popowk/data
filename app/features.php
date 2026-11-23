@@ -274,9 +274,9 @@ function phonehub_bulk_job_step(int $id): array {
         $final=$doneTotal>=(int)$job['total_count'];
         $status=$final?((int)$job['conflict_count']+$conflicts>0?'partial':'completed'):'running';
         sql('UPDATE phonehub_bulk_jobs SET
-            processed_count=processed_count=?, changed_count=changed_count=?,
-            conflict_count=conflict_count=?,revoked_users=revoked_users=?,
-            revoked_sessions=revoked_sessions=?,status=?,last_error="",
+            processed_count=processed_count+?, changed_count=changed_count+?,
+            conflict_count=conflict_count+?,revoked_users=revoked_users+?,
+            revoked_sessions=revoked_sessions+?,status=?,last_error="",
             active_group_id='.($final?'NULL':'active_group_id').',
             completed_at='.($final?'UTC_TIMESTAMP()':'completed_at').',
             updated_at=UTC_TIMESTAMP() WHERE id=?',
