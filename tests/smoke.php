@@ -367,7 +367,7 @@ if (strpos($cloudHtml,'cloud-feature-card')===false || strpos($cloudHtml,'cloud-
 if (strpos($cloudHtml,'name="mcp_codex_enabled"')===false ||
     strpos($cloudHtml,'name="mcp_harness_enabled"')===false)
     throw new RuntimeException('MCP subplatform switches missing');
-if (strpos($cloudHtml,'AI 接口设置')===false ||
+if (strpos($cloudHtml,'<h2>AI 设置</h2>')===false ||
     strpos($cloudHtml,'data-ajax="ai_settings_save"')===false ||
     strpos($cloudHtml,'服务端 AI 中转')===false)
     throw new RuntimeException('AI settings were not embedded in client capability view');
