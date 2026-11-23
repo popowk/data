@@ -347,9 +347,16 @@ ob_start();ai_admin_view();$aiHtml=ob_get_clean();
 if (strpos($aiHtml,'AI 接口管理')===false || strpos($aiHtml,'remove_api_key')===false)
     throw new RuntimeException('AI admin settings page render failed');
 require_once dirname(__DIR__).'/app/features.php';
-if (phonehub_group_member_snapshot(['1','2'])!==phonehub_group_member_snapshot([1,2]) ||
-    phonehub_group_member_snapshot([1,2])===phonehub_group_member_snapshot([1,3]))
-    throw new RuntimeException('group bulk preview membership fingerprint invalid');
+// Preview signatures must bind both the selected members and their intended changes.
+$previewRow=[
+    'username'=>'ci_preview','device_limit'=>1,'mobile_limit'=>0,
+    'entitlements'=>['douyin'],'enabled'=>1
+];
+$previewA=phonehub_bulk_snapshot([1],[1=>$previewRow],['device_limit'=>2]);
+$previewB=phonehub_bulk_snapshot([1],[1=>$previewRow],['device_limit'=>3]);
+$previewC=phonehub_bulk_snapshot([2],[2=>$previewRow],['device_limit'=>2]);
+if ($previewA===$previewB || $previewA===$previewC || strlen($previewA)!==64)
+    throw new RuntimeException('group bulk preview did not bind target values and member identities');
 ob_start();feature_view('cloud_features');$cloudHtml=ob_get_clean();
 if (strpos($cloudHtml,'MCP 连接能力')===false || strpos($cloudHtml,'Skill 技能能力')===false)
     throw new RuntimeException('cloud feature control page render failed');
