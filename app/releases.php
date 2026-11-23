@@ -262,11 +262,27 @@ function release_delete_obsolete_core(int $id): array {
             ? '旧版 core 已从发布列表移除；回收文件尚未能删除，请检查服务器更新目录'
             : '旧版 core 已永久删除（版本记录及其 ZIP）'];
 }
+/**
+ * Streaming semantic release ordering. Keeping only the highest N rows in
+ * memory avoids interpreting most-recent database IDs as version precedence.
+ * Tie-breaks prefer the newest ID, while semver always decides first.
+ */
+function release_top_version_rows(PDOStatement $cursor,int $limit): array {
+    if($limit<1 || $limit>100) throw new RuntimeException('版本查询条数无效');
+    $top=[];
+    while($row=$cursor->fetch(PDO::FETCH_ASSOC)) {
+        $top[]=$row;
+        usort($top,static function(array $a,array $b): int {
+            $compare=version_compare((string)$b['version'],(string)$a['version']);
+            return $compare!==0?$compare:((int)$b['id']<=>(int)$a['id']);
+        });
+        if(count($top)>$limit)array_pop($top);
+    }
+    return $top;
+}
 function latest_release(string $platform,string $channel): ?array {
-    // Version strings are semantic rather than lexical. Filter in PHP after DB access.
-    $rows=sql('SELECT * FROM phonehub_releases WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC LIMIT 500',
-        [$platform,$channel])->fetchAll();
-    usort($rows,static fn($a,$b)=>version_compare($b['version'],$a['version']));
+    $rows=release_top_version_rows(sql('SELECT * FROM phonehub_releases
+        WHERE platform=? AND channel=? AND enabled=1 ORDER BY id DESC',[$platform,$channel]),1);
     return $rows[0]??null;
 }
 function public_release(array $row): array {
