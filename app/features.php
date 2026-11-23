@@ -100,9 +100,16 @@ function phonehub_bulk_impact(array $ids,array $before,array $targets): array {
         if($revoke && $usage['sessions']>0) {
             $revokeIds[]=$id;$revokeSessions+=$usage['sessions'];
         }
-        if(count($examples)<8)$examples[]=[
-            'username'=>$state['username'],'fields'=>$diff,
-            'revoke_sessions'=>$revoke && $usage['sessions']>0];
+        if(count($examples)<8) {
+            $changes=[];
+            foreach($diff as $field) $changes[]=[
+                'field'=>$field,
+                'before'=>phonehub_account_history_value($field,$state[$field]??null),
+                'after'=>phonehub_account_history_value($field,$targets[$field])
+            ];
+            $examples[]=['username'=>$state['username'],'changes'=>$changes,
+                'revoke_sessions'=>$revoke && $usage['sessions']>0];
+        }
     }
     return ['changed'=>$changed,'field_changes'=>$counts,'revoke_ids'=>$revokeIds,
         'revoke_users'=>count($revokeIds),'revoke_sessions'=>$revokeSessions,'examples'=>$examples];
@@ -300,10 +307,14 @@ function feature_action(string $action): never {
             foreach($impact['field_changes'] as $field=>$count)
                 $fieldChanges[]=['field'=>$labels[$field],'count'=>$count];
             $samples=[];
-            foreach($impact['examples'] as $ex)
-                $samples[]=['username'=>$ex['username'],
-                    'fields'=>array_map(static fn($field)=>$labels[$field],$ex['fields']),
+            foreach($impact['examples'] as $ex) {
+                $displayChanges=[];
+                foreach($ex['changes'] as $change) $displayChanges[]=[
+                    'field'=>$labels[$change['field']],'before'=>$change['before'],
+                    'after'=>$change['after']];
+                $samples[]=['username'=>$ex['username'],'changes'=>$displayChanges,
                     'revoke_sessions'=>$ex['revoke_sessions']];
+            }
             json_response(['ok'=>true,'members'=>count($ids),
               'fields'=>array_map(static fn($field)=>$labels[$field],$fields),
               'changed'=>$impact['changed'],'field_changes'=>$fieldChanges,'examples'=>$samples,
