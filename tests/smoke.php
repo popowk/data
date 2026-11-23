@@ -41,7 +41,7 @@ if (!in_array('opening_plan_code',$metaColumns,true))
     throw new RuntimeException('opening plan migration missing');
 $planTable=(int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_plan_templates'")->fetchColumn();
 if($planTable!==1) throw new RuntimeException('plan migration table missing');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==16)
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==17)
     throw new RuntimeException('performance sample migration version incorrect');
 $defaultScrcpy=$pdo->query("SELECT download_url FROM phonehub_download_settings WHERE resource='scrcpy'")->fetchColumn();
 if($defaultScrcpy!==SCRCPY_DEFAULT_DOWNLOAD_URL)
@@ -60,7 +60,7 @@ if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resou
     throw new RuntimeException('scrcpy migration seeded duplicate rows');
 if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_download_settings WHERE resource='main_program'")->fetchColumn()!==1)
     throw new RuntimeException('main program migration seeded duplicate rows');
-if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==16)
+if((int)$pdo->query("SELECT MAX(version) FROM phonehub_admin_migrations")->fetchColumn()!==17)
     throw new RuntimeException('performance sample migration failed');
 $replacementColumns=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='phonehub_computer_replacement_events'")->fetchAll(PDO::FETCH_COLUMN);
@@ -93,6 +93,20 @@ foreach (['password','password_hash','token_hash','api_key','notes'] as $forbidd
 migrate($pdo);
 if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_admin_migrations WHERE version=16")->fetchColumn()!==1)
     throw new RuntimeException('customer authorization audit migration not idempotent');
+foreach ([
+ 'phonehub_bulk_jobs'=>['id','group_id','active_group_id','actor_id','targets_json','snapshot_hash','status','total_count','processed_count','conflict_count'],
+ 'phonehub_bulk_job_items'=>['job_id','user_id','expected_json','state','reason_code']
+] as $table=>$wanted) {
+    $cols=$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='".$table."'")->fetchAll(PDO::FETCH_COLUMN);
+    foreach($wanted as $field)if(!in_array($field,$cols,true))
+        throw new RuntimeException('resumable bulk schema missing '.$table.'.'.$field);
+    if(array_intersect($cols,['password','password_hash','token_hash','api_key','notes']))
+        throw new RuntimeException('resumable bulk schema stores forbidden secret field');
+}
+migrate($pdo);
+if((int)$pdo->query("SELECT COUNT(*) FROM phonehub_admin_migrations WHERE version=17")->fetchColumn()!==1)
+    throw new RuntimeException('resumable bulk migration is not idempotent');
 foreach (['https://example.com/PhoneHub.exe','https://example.com/PhoneHub.msi',
           MAIN_PROGRAM_DEFAULT_DOWNLOAD_URL] as $validMain) {
     if(main_program_validate_download_url($validMain)!==$validMain)
@@ -153,7 +167,8 @@ foreach (['owner','global','admin','viewer','not_a_role'] as $role)
 foreach (['admin','viewer','not_a_role'] as $role)
     foreach (['group_create','group_bulk_preview','release_publish','backup_key_generate',
         'update_apply','admin_create','admin_role_change','automation_token_create',
-        'cloud_features_save','main_program_url_save'] as $action)
+        'cloud_features_save','main_program_url_save','group_bulk_job_step',
+        'group_bulk_job_status','group_bulk_job_cancel'] as $action)
         if (phonehub_role_can_action($role,$action))
             throw new RuntimeException('staff operator can use '.$action);
 foreach (['global','admin','viewer','not_a_role'] as $role)
@@ -480,7 +495,8 @@ if (!str_contains($embeddedBackupHtml,'id="maintenance-backup"') ||
     throw new RuntimeException('embedded backup key panel missing or duplicates page title');
 ob_start();feature_view('group_bulk');$bulkHtml=ob_get_clean();
 if (strpos($bulkHtml,'bulk-option-toggle')===false || strpos($bulkHtml,'bulk-member-count')===false ||
-    strpos($bulkHtml,'成员或原授权值变化时')===false)
+    strpos($bulkHtml,'成员或原授权值变化时')===false ||
+    strpos($bulkHtml,'分批任务进度与中断恢复')===false)
     throw new RuntimeException('redesigned group bulk form render failed');
 // Device lists now load only the selected category; check each page separately.
 $_GET['device_tab']='computers';
