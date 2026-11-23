@@ -790,7 +790,7 @@ for($i=0;$i<505;$i++)$stmt->execute([$user,"2020-01-01 00:00:00"]);
 $stmt->execute([$user,gmdate("Y-m-d H:i:s")]);
 '
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"
-grep -q '历史记录保留与分批清理' "$adminHtml"
+grep -q '历史记录清理' "$adminHtml"
 invalidRetention=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$CSRF" --data-urlencode 'action=history_cleanup_preview' --data-urlencode 'kind=admin_audit' --data-urlencode 'days=30')
 TEST_RESPONSE="$invalidRetention" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"],j'
 preview=$(curl -fsS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$CSRF" --data-urlencode 'action=history_cleanup_preview' --data-urlencode 'kind=replacement_events' --data-urlencode 'days=180')
