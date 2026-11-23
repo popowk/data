@@ -545,6 +545,8 @@ function phonehub_account_filters(array $query): array {
     if (!in_array($status,['enabled','disabled'],true)) $status='all';
     $expiry=$field('expiry');
     if (!in_array($expiry,['expired','due7','due30','permanent','valid'],true)) $expiry='all';
+    $usage=$field('usage');
+    if (!in_array($usage,['pc80','mobile80'],true))$usage='all';
     $plan=$field('plan');
     if ($plan!=='legacy' && !preg_match('/^[A-Za-z0-9_-]{1,24}$/D',$plan)) $plan='all';
     $page=$field('page');
@@ -560,6 +562,15 @@ function phonehub_account_filters(array $query): array {
     elseif ($group!=='all') {$conditions[]='m.group_id=?';$params[]=(int)$group;}
     if ($status==='enabled') $conditions[]='u.enabled=1';
     elseif ($status==='disabled') $conditions[]='u.enabled=0';
+    if ($usage==='pc80') {
+        $conditions[]='u.enabled=1 AND (u.license_until IS NULL OR u.license_until>=UTC_TIMESTAMP()) AND u.device_limit>0
+            AND (SELECT COUNT(DISTINCT s.device_id) FROM phonehub_sessions s
+                 WHERE s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP())*5>=u.device_limit*4';
+    } elseif ($usage==='mobile80') {
+        $conditions[]='u.enabled=1 AND (u.license_until IS NULL OR u.license_until>=UTC_TIMESTAMP()) AND m.mobile_limit>0
+            AND (SELECT COUNT(*) FROM phonehub_mobile_devices d
+                 WHERE d.user_id=u.id AND d.enabled=1)*5>=m.mobile_limit*4';
+    }
     if ($expiry==='expired') $conditions[]='u.license_until < UTC_TIMESTAMP()';
     elseif ($expiry==='permanent') $conditions[]='u.license_until IS NULL';
     elseif ($expiry==='valid') $conditions[]='(u.license_until IS NULL OR u.license_until >= UTC_TIMESTAMP())';
@@ -570,7 +581,7 @@ function phonehub_account_filters(array $query): array {
     elseif ($plan!=='all') {$conditions[]='m.opening_plan_code=?';$params[]=$plan;}
     return ['where'=>$conditions?' WHERE '.implode(' AND ',$conditions):'',
         'params'=>$params,'q'=>$q,'group'=>$group,'status'=>$status,
-        'expiry'=>$expiry,'plan'=>$plan,'page'=>$page];
+        'expiry'=>$expiry,'usage'=>$usage,'plan'=>$plan,'page'=>$page];
 }
 function phonehub_opening_plans(bool $activeOnly=true,?PDO $connection=null): array {
     // A supplied connection supports pre-install migration tests without
