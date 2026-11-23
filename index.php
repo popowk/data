@@ -503,8 +503,8 @@ $accountPageLink=static function(int $page) use($accountFilters): string {
 <?php elseif($view==='update'): ?>
 <div class="page-title"><div><h1>系统维护</h1></div></div>
 <div class="update-actions maintenance-nav"><a class="btn" href="#maintenance-update">程序更新</a><a class="btn" href="?view=performance">接口性能</a><a class="btn" href="?view=audit">操作记录</a><?php if($adminRole==='owner'): ?><a class="btn" href="#maintenance-backup">备份密钥</a><?php endif ?></div>
-<div class="card update-card" id="maintenance-update"><div class="update-icon">⟳</div><h2>当前版本 v<?=h(app_version())?></h2><p class="muted">更新源：<code>https://git.wksite.cn/popowk/data</code></p><p class="muted">仅更新程序，保留现有数据和配置。</p>
-<div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><?php if($adminRole==='owner'): ?><a class="btn" href="#maintenance-backup">备份密钥</a><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button><?php endif ?></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
+<div class="card update-card" id="maintenance-update"><h2>当前版本 v<?=h(app_version())?></h2><p class="muted">更新源：<code>https://git.wksite.cn/popowk/data</code></p><p class="muted">仅更新程序，保留现有数据和配置。</p>
+<div class="update-actions"><button class="btn" data-action="check-update">检查更新</button><button class="btn" data-action="diagnose-update">运行环境自检</button><?php if($adminRole==='owner'): ?><button class="btn primary" id="apply-update" data-action="apply-update" disabled>下载并安装更新</button><?php endif ?></div><p id="update-status" class="update-status">正在等待检查…</p><div id="update-diagnostics" class="update-status" role="status" aria-live="polite"></div></div>
 <?php
 $signingModuleReady=is_file(__DIR__.'/app/signing_admin.php');
 if ($signingModuleReady) {
