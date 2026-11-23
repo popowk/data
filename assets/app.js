@@ -77,6 +77,31 @@
     try { await refreshContent(); }
     catch (error) { toast('操作已完成，但页面刷新失败，请手动刷新页面',true); }
   }
+  // Stateless browser runner: each request commits a bounded transaction.
+  // Closing the tab simply pauses execution; the durable job remains resumable.
+  let bulkJobRunning=false;
+  async function continueBulkJob(jobId) {
+    if(bulkJobRunning){toast('当前已有分批任务正在执行');return;}
+    bulkJobRunning=true;
+    const status=document.querySelector('#bulk-job-live');
+    try {
+      for(let step=0;step<200;step++) {
+        const result=await request('group_bulk_job_step',{job_id:String(jobId)});
+        const completed=(result.processed||0)+(result.conflicts||0);
+        if(status)status.textContent='任务 #'+jobId+'：'+completed+' / '+result.total+
+          ' 人，实际变更 '+result.changed+' 人，冲突 '+result.conflicts+
+          ' 人；撤销 '+result.revoked_sessions+' 条会话。';
+        if(result.terminal) {
+          toast(result.conflicts?'任务结束，'+result.conflicts+' 位客户存在授权冲突，需重新预览':
+            result.status==='cancelled'?'任务已取消':'分批任务已全部完成');
+          await refreshAfterSuccess();
+          return;
+        }
+      }
+      toast('单次执行已达安全步数上限，请点击继续执行');
+      await refreshAfterSuccess();
+    } finally {bulkJobRunning=false;}
+  }
   document.addEventListener('submit',async event=>{
     const form=event.target.closest('form[data-ajax]');if (!form)return;
     event.preventDefault();
@@ -127,6 +152,11 @@
       }
       const result=await request(action,fields);
       if(action==='login'){location.href='index.php';return;}
+      if(action==='group_bulk' && result.job_created) {
+        toast(result.message||'分批任务已创建');
+        await continueBulkJob(result.job_id);
+        return;
+      }
       toast(result.message || '保存成功');
       // Reveal one-time credentials before refreshing page content. If the refresh
       // fails after the server committed the password reset, the secret must not be lost.
@@ -259,6 +289,27 @@
     }
     const trigger=event.target.closest('[data-action]');if(!trigger)return;
     const action=trigger.dataset.action, id=trigger.dataset.id;
+    if (action==='bulk-job-resume') {
+      const jobId=Number(trigger.dataset.jobId);
+      if(!Number.isSafeInteger(jobId)||jobId<1)return;
+      trigger.disabled=true;
+      try{await continueBulkJob(jobId);}
+      catch(error){toast('分批任务暂停，可稍后继续：'+error.message,true);await refreshAfterSuccess();}
+      finally{trigger.disabled=false;}
+      return;
+    }
+    if (action==='bulk-job-cancel') {
+      const jobId=Number(trigger.dataset.jobId);
+      if(!Number.isSafeInteger(jobId)||jobId<1)return;
+      if(!confirm('确认取消任务 #'+jobId+'？已完成的客户授权不会自动回滚，未处理客户保持原状态。'))return;
+      trigger.disabled=true;
+      try{const result=await request('group_bulk_job_cancel',{job_id:String(jobId)});
+        toast('任务已取消：已处理 '+result.processed+' 位客户，剩余 '+result.remaining+' 位未执行');
+        await refreshAfterSuccess();
+      }catch(err){toast(err.message,true);}
+      finally{trigger.disabled=false;}
+      return;
+    }
     if (action==='new-account'){openEditor(null);return;}
     if (action==='new-plan'){openPlanEditor(null);return;}
     if (action==='close-plan-editor'){const panel=$('#plan-editor');if(panel)panel.hidden=true;return;}
