@@ -502,7 +502,7 @@ $s->execute([(int)getenv("GROUP_ID"),"ci_open_plan_user"]);
 preview=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=group_bulk_preview" \
   --data-urlencode "group_id=$groupId" --data-urlencode "apply_device_limit=on" --data-urlencode "device_limit=6")
-snapshot=$(TEST_RESPONSE="$preview" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["members"]==1 and "电脑名额" in j["fields"] and len(j["snapshot"])==64,j; print(j["snapshot"])')
+snapshot=$(TEST_RESPONSE="$preview" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["members"]==1 and j["changed"]==1 and "电脑名额" in j["fields"] and len(j["snapshot"])==64 and not j["revoke_sessions"] and j["examples"][0]["changes"][0]["before"]=="2" and j["examples"][0]["changes"][0]["after"]=="6",j; print(j["snapshot"])')
 # Change membership between preview and apply: must reject and not update.
 GROUP_ID="$groupId" php -r '
 $cfg=require "storage/config.php";
@@ -524,7 +524,30 @@ if ((int)$r["ci_open_plan_user"]!==2 || (int)$r["ci_dynamic_plan_user"]!==7) exi
 fresh=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=group_bulk_preview" \
   --data-urlencode "group_id=$groupId" --data-urlencode "apply_device_limit=on" --data-urlencode "device_limit=6")
-freshSnapshot=$(TEST_RESPONSE="$fresh" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["members"]==2,j; print(j["snapshot"])')
+freshSnapshot=$(TEST_RESPONSE="$fresh" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and j["members"]==2 and j["changed"]==2,j; print(j["snapshot"])')
+# Even with the same member IDs, a newly edited authorization invalidates
+# a stale preview. No user quota is overwritten by the rejected operation.
+GROUP_ID="$groupId" php -r '
+require "app/core.php";
+sql("UPDATE phonehub_users SET device_limit=5 WHERE username=?",["ci_open_plan_user"]);
+'
+staleValues=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+  --data-urlencode "csrf=$CSRF" --data-urlencode 'action=group_bulk' \
+  --data-urlencode "group_id=$groupId" --data-urlencode 'apply_device_limit=on' \
+  --data-urlencode 'device_limit=6' --data-urlencode "preview_snapshot=$freshSnapshot")
+TEST_RESPONSE="$staleValues" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert not j["ok"] and "授权配置" in j["error"],j'
+fresh=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$CSRF" --data-urlencode 'action=group_bulk_preview' \
+ --data-urlencode "group_id=$groupId" --data-urlencode 'apply_device_limit=on' --data-urlencode 'device_limit=6')
+freshSnapshot=$(TEST_RESPONSE="$fresh" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["changed"]==2,j;print(j["snapshot"])')
+# Add live computer sessions. Increasing allowance MUST keep all online.
+GROUP_ID="$groupId" php -r '
+require "app/core.php";
+$ids=sql("SELECT u.id FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id WHERE m.group_id=? ORDER BY u.id",[(int)getenv("GROUP_ID")])->fetchAll(PDO::FETCH_COLUMN);
+foreach($ids as $index=>$id)for($k=0;$k<=($index===0?2:0);$k++)
+  sql("INSERT INTO phonehub_sessions(user_id,device_id,token_hash,expires_at) VALUES(?,?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 DAY))",
+    [$id,hash("sha256","group-session-$id-$k"),hash("sha256","group-token-$id-$k")]);
+'
 applied=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
   --data-urlencode "csrf=$CSRF" --data-urlencode "action=group_bulk" \
   --data-urlencode "group_id=$groupId" --data-urlencode "apply_device_limit=on" \
@@ -550,6 +573,40 @@ $s=$p->prepare("SELECT u.device_limit FROM phonehub_users u JOIN phonehub_user_m
 $s->execute([(int)getenv("GROUP_ID")]);
 $v=$s->fetchAll(PDO::FETCH_COLUMN);
 if(count($v)!==2 || array_filter($v,static fn($x)=>(int)$x!==6)) exit(4);
+'
+GROUP_ID="$groupId" php -r '
+require "app/core.php";
+$n=(int)sql("SELECT COUNT(*) FROM phonehub_sessions s JOIN phonehub_user_meta m ON m.user_id=s.user_id WHERE m.group_id=? AND s.expires_at>UTC_TIMESTAMP()",[(int)getenv("GROUP_ID")])->fetchColumn();
+if($n!==4)exit(21);
+'
+# A repeated save with no differences must be safe and not revoke sessions.
+noChangePreview=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$CSRF" --data-urlencode 'action=group_bulk_preview' \
+ --data-urlencode "group_id=$groupId" --data-urlencode 'apply_device_limit=on' --data-urlencode 'device_limit=6')
+noChangeSnapshot=$(TEST_RESPONSE="$noChangePreview" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["changed"]==0 and not j["revoke_sessions"],j;print(j["snapshot"])')
+noChangeApply=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$CSRF" --data-urlencode 'action=group_bulk' \
+ --data-urlencode "group_id=$groupId" --data-urlencode 'apply_device_limit=on' \
+ --data-urlencode 'device_limit=6' --data-urlencode "preview_snapshot=$noChangeSnapshot")
+TEST_RESPONSE="$noChangeApply" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["changed"]==0 and j["revoke_session_count"]==0,j'
+GROUP_ID="$groupId" php -r '
+require "app/core.php";
+if((int)sql("SELECT COUNT(*) FROM phonehub_sessions s JOIN phonehub_user_meta m ON m.user_id=s.user_id WHERE m.group_id=? AND s.expires_at>UTC_TIMESTAMP()",[(int)getenv("GROUP_ID")])->fetchColumn()!==4)exit(22);
+'
+# Reduction to 2: one member is using 3 devices, the other only 1.
+limitPreview=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$CSRF" --data-urlencode 'action=group_bulk_preview' \
+ --data-urlencode "group_id=$groupId" --data-urlencode 'apply_device_limit=on' --data-urlencode 'device_limit=2')
+limitSnapshot=$(TEST_RESPONSE="$limitPreview" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["changed"]==2 and j["revoke_users"]==1 and j["revoke_session_count"]==3,j;print(j["snapshot"])')
+limitApplied=$(curl -sS -b "$adminCookies" -X POST 'http://127.0.0.1:18765/index.php' \
+ --data-urlencode "csrf=$CSRF" --data-urlencode 'action=group_bulk' \
+ --data-urlencode "group_id=$groupId" --data-urlencode 'apply_device_limit=on' \
+ --data-urlencode 'device_limit=2' --data-urlencode "preview_snapshot=$limitSnapshot")
+TEST_RESPONSE="$limitApplied" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["revoke_users"]==1 and j["revoke_session_count"]==3,j'
+GROUP_ID="$groupId" php -r '
+require "app/core.php";
+$rows=sql("SELECT u.id,COUNT(s.id) AS sessions FROM phonehub_users u JOIN phonehub_user_meta m ON m.user_id=u.id LEFT JOIN phonehub_sessions s ON s.user_id=u.id AND s.expires_at>UTC_TIMESTAMP() WHERE m.group_id=? GROUP BY u.id ORDER BY u.id",[(int)getenv("GROUP_ID")])->fetchAll();
+if(count($rows)!==2 || (int)$rows[0]["sessions"]!==0 || (int)$rows[1]["sessions"]!==1)exit(23);
 '
 # A backup decryption key can be downloaded only once by the owner.
 curl -fsS -b "$adminCookies" 'http://127.0.0.1:18765/index.php?view=update' -o "$adminHtml"

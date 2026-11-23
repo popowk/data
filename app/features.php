@@ -42,8 +42,77 @@ function phonehub_client_log_filters(array $query): array {
 }
 
 function phonehub_group_member_snapshot(array $ids): string {
-    // The list is ordered by user ID by both preview and the locked apply.
+    // Legacy helper retained for old smoke tests, not the new value-bound
+    // preview. New group_bulk uses phonehub_bulk_snapshot().
     return hash('sha256',implode(',',array_map(static fn($id)=>(string)(int)$id,$ids)));
+}
+/** A preview is bound to member IDs, their normalized authorization state
+ * and the requested changes. No notes, passwords or sessions in the digest. */
+function phonehub_bulk_snapshot(array $ids,array $snapshots,array $targets): string {
+    ksort($targets);
+    $fields=array_keys(phonehub_account_history_fields());
+    $rows=[];
+    foreach ($ids as $id) {
+        $id=(int)$id;
+        $state=[];
+        foreach ($fields as $field) $state[$field]=$snapshots[$id][$field]??null;
+        $rows[]=['id'=>$id,'state'=>$state];
+    }
+    return hash('sha256',json_encode(['members'=>$rows,'targets'=>$targets],
+        JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR));
+}
+function phonehub_bulk_impact(array $ids,array $before,array $targets): array {
+    $sessionCounts=[];
+    foreach(array_chunk($ids,200) as $chunk) {
+        if(!$chunk) continue;
+        $slots=implode(',',array_fill(0,count($chunk),'?'));
+        $rows=sql('SELECT user_id,COUNT(*) AS sessions,COUNT(DISTINCT device_id) AS computers
+            FROM phonehub_sessions WHERE expires_at>UTC_TIMESTAMP() AND user_id IN ('.$slots.')
+            GROUP BY user_id',$chunk)->fetchAll();
+        foreach($rows as $row) $sessionCounts[(int)$row['user_id']]=[
+            'sessions'=>(int)$row['sessions'],'computers'=>(int)$row['computers']];
+    }
+    $counts=[];$changed=0;$revokeIds=[];$revokeSessions=0;$examples=[];$utcNow=gmdate('Y-m-d H:i:s');
+    foreach($ids as $id) {
+        $id=(int)$id;$state=$before[$id]??[];
+        if(!$state) throw new RuntimeException('预览期间客户授权数据不完整，请刷新重试');
+        $diff=[];
+        foreach($targets as $field=>$target) {
+            $old=$state[$field]??null;
+            $same=$old===$target;
+            if(!$same) {
+                $diff[]=$field;$counts[$field]=($counts[$field]??0)+1;
+            }
+        }
+        if(!$diff) continue;
+        $changed++;
+        $usage=$sessionCounts[$id]??['sessions'=>0,'computers'=>0];
+        $revoke=false;
+        if(in_array('enabled',$diff,true) && (int)$targets['enabled']===0)$revoke=true;
+        if(in_array('device_limit',$diff,true) &&
+           (int)$targets['device_limit']<(int)$state['device_limit'] &&
+           $usage['computers']>(int)$targets['device_limit']) $revoke=true;
+        if(in_array('license_until',$diff,true) && $targets['license_until']!==null &&
+           (string)$targets['license_until']<=$utcNow &&
+           ($state['license_until']===null || (string)$state['license_until']>$utcNow))$revoke=true;
+        if(in_array('entitlements',$diff,true) &&
+           array_diff((array)$state['entitlements'],(array)$targets['entitlements']))$revoke=true;
+        if($revoke && $usage['sessions']>0) {
+            $revokeIds[]=$id;$revokeSessions+=$usage['sessions'];
+        }
+        if(count($examples)<8) {
+            $changes=[];
+            foreach($diff as $field) $changes[]=[
+                'field'=>$field,
+                'before'=>phonehub_account_history_value($field,$state[$field]??null),
+                'after'=>phonehub_account_history_value($field,$targets[$field])
+            ];
+            $examples[]=['username'=>$state['username'],'changes'=>$changes,
+                'revoke_sessions'=>$revoke && $usage['sessions']>0];
+        }
+    }
+    return ['changed'=>$changed,'field_changes'=>$counts,'revoke_ids'=>$revokeIds,
+        'revoke_users'=>count($revokeIds),'revoke_sessions'=>$revokeSessions,'examples'=>$examples];
 }
 
 /**
@@ -200,40 +269,58 @@ function feature_action(string $action): never {
         $allowed=['device_limit','mobile_limit','enabled','license_until','entitlements'];
         foreach($allowed as $f) if(isset($_POST['apply_'.$f])) $fields[]=$f;
         if (!$fields) throw new RuntimeException('请至少勾选一项需要批量修改的配置');
-        $set=[];$params=[];
+        $set=[];$params=[];$targets=[];
         foreach($fields as $f) {
             if ($f==='device_limit' || $f==='mobile_limit') {
                 $v=filter_var($_POST[$f]??null,FILTER_VALIDATE_INT);
                 if ($v===false || $v<($f==='device_limit'?1:0) || $v>($f==='device_limit'?100:1000))
                     throw new RuntimeException('设备名额无效');
                 $set[]=$f==='device_limit'?'u.device_limit=?':'m.mobile_limit=?';
-                $params[]=$v;
+                $params[]=$v;$targets[$f]=$v;
             } elseif ($f==='enabled') {
                 $v=(string)($_POST['enabled']??'');
                 if (!in_array($v,['0','1'],true)) throw new RuntimeException('账号状态无效');
-                $set[]='u.enabled=?';$params[]=(int)$v;
+                $set[]='u.enabled=?';$params[]=(int)$v;$targets[$f]=(int)$v;
             } elseif ($f==='license_until') {
-                $set[]='u.license_until=?';$params[]=input_to_utc(trim((string)($_POST['license_until']??'')));
+                $until=input_to_utc(trim((string)($_POST['license_until']??'')));
+                $set[]='u.license_until=?';$params[]=$until;$targets[$f]=$until;
             } elseif ($f==='entitlements') {
                 $v=(array)($_POST['entitlements']??[]);
                 if (array_diff($v,['douyin','xiaohongshu','mcp','skill','mcp-codex','mcp-harness'])) throw new RuntimeException('未知平台或扩展授权');
                 if (array_intersect($v,['mcp','skill','mcp-codex','mcp-harness'])) require_global_admin();
                 if (array_intersect($v,['mcp-codex','mcp-harness']) && !in_array('mcp',$v,true))
                     throw new RuntimeException('Codex 与 DeepSeek Harness MCP 必须同时授权上级 MCP 权限');
-                $set[]='u.entitlements=?';$params[]=json_encode(array_values(array_unique($v)),JSON_UNESCAPED_UNICODE);
+                $v=array_values(array_unique($v));sort($v,SORT_STRING);
+                $set[]='u.entitlements=?';$params[]=json_encode($v,JSON_UNESCAPED_UNICODE);$targets[$f]=$v;
             }
         }
-        $revoke=(bool)array_intersect($fields,['device_limit','enabled','license_until','entitlements']);
+        $labels=['device_limit'=>'电脑名额','mobile_limit'=>'安卓手机名额',
+            'enabled'=>'账号状态','license_until'=>'授权期限','entitlements'=>'平台与扩展权限'];
         if ($action==='group_bulk_preview') {
             $ids=sql('SELECT u.id FROM phonehub_users u
               JOIN phonehub_user_meta m ON m.user_id=u.id
               WHERE m.group_id=? ORDER BY u.id',[$group])->fetchAll(PDO::FETCH_COLUMN);
             if (!$ids) throw new RuntimeException('该分组没有客户');
-            $labels=['device_limit'=>'电脑名额','mobile_limit'=>'安卓手机名额',
-              'enabled'=>'账号状态','license_until'=>'授权期限','entitlements'=>'平台与扩展权限'];
+            $before=phonehub_account_history_snapshots($ids);
+            $impact=phonehub_bulk_impact($ids,$before,$targets);
+            $fieldChanges=[];
+            foreach($impact['field_changes'] as $field=>$count)
+                $fieldChanges[]=['field'=>$labels[$field],'count'=>$count];
+            $samples=[];
+            foreach($impact['examples'] as $ex) {
+                $displayChanges=[];
+                foreach($ex['changes'] as $change) $displayChanges[]=[
+                    'field'=>$labels[$change['field']],'before'=>$change['before'],
+                    'after'=>$change['after']];
+                $samples[]=['username'=>$ex['username'],'changes'=>$displayChanges,
+                    'revoke_sessions'=>$ex['revoke_sessions']];
+            }
             json_response(['ok'=>true,'members'=>count($ids),
-              'fields'=>array_map(static fn($f)=>$labels[$f],$fields),
-              'revoke_sessions'=>$revoke,'snapshot'=>phonehub_group_member_snapshot($ids)]);
+              'fields'=>array_map(static fn($field)=>$labels[$field],$fields),
+              'changed'=>$impact['changed'],'field_changes'=>$fieldChanges,'examples'=>$samples,
+              'revoke_users'=>$impact['revoke_users'],'revoke_session_count'=>$impact['revoke_sessions'],
+              'revoke_sessions'=>$impact['revoke_sessions']>0,
+              'snapshot'=>phonehub_bulk_snapshot($ids,$before,$targets)]);
         }
         $preview=(string)($_POST['preview_snapshot']??'');
         if (!preg_match('/^[a-f0-9]{64}$/D',$preview))
@@ -244,29 +331,40 @@ function feature_action(string $action): never {
               JOIN phonehub_user_meta m ON m.user_id=u.id
               WHERE m.group_id=? ORDER BY u.id FOR UPDATE',[$group])->fetchAll(PDO::FETCH_COLUMN);
             if (!$memberIds) throw new RuntimeException('该分组没有客户');
-            if (!hash_equals($preview,phonehub_group_member_snapshot($memberIds)))
-                throw new RuntimeException('预览后分组成员发生变化，未执行修改；请重新预览确认');
             $beforeSnapshots=phonehub_account_history_snapshots($memberIds);
+            if (!hash_equals($preview,phonehub_bulk_snapshot($memberIds,$beforeSnapshots,$targets)))
+                throw new RuntimeException('预览后分组成员或授权配置发生变化，未执行修改；请重新预览确认');
+            $impact=phonehub_bulk_impact($memberIds,$beforeSnapshots,$targets);
             $placeholders=implode(',',array_fill(0,count($memberIds),'?'));
             // Target only the previewed members even if another request joins
             // the group while this transaction is in progress.
             $updateParams=array_merge($params,[$group],$memberIds);
             sql('UPDATE phonehub_users u INNER JOIN phonehub_user_meta m ON m.user_id=u.id
               SET '.implode(',',$set).' WHERE m.group_id=? AND u.id IN ('.$placeholders.')',$updateParams);
-            if ($revoke) sql('DELETE FROM phonehub_sessions WHERE user_id IN ('.$placeholders.')',$memberIds);
+            // Only invalidate sessions whose authorization was actually
+            // restricted. No-op/increased quota/granted scopes remain online.
+            foreach(array_chunk($impact['revoke_ids'],200) as $chunk) {
+                $revokeSlots=implode(',',array_fill(0,count($chunk),'?'));
+                sql('DELETE FROM phonehub_sessions WHERE user_id IN ('.$revokeSlots.')',$chunk);
+            }
             $afterSnapshots=phonehub_account_history_snapshots($memberIds);
             foreach ($memberIds as $memberId) {
                 $memberId=(int)$memberId;
                 phonehub_account_history_record($memberId,'group_bulk',
                     $beforeSnapshots[$memberId]??[],$afterSnapshots[$memberId]??[]);
             }
-            audit('group_bulk','group='.$group.' members='.count($memberIds).' fields='.implode(',',$fields));
+            audit('group_bulk','group='.$group.' members='.count($memberIds).
+                ' changed='.$impact['changed'].' revoked='.$impact['revoke_users'].
+                ' fields='.implode(',',$fields));
             db()->commit();
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
             throw $e;
         }
-        json_response(['ok'=>true,'message'=>'已批量更新 '.count($memberIds).' 个客户；'.($revoke?'相关电脑会话已撤销':'无需退出客户端')]);
+        json_response(['ok'=>true,'members'=>count($memberIds),'changed'=>$impact['changed'],
+            'revoke_users'=>$impact['revoke_users'],'revoke_session_count'=>$impact['revoke_sessions'],
+            'message'=>'已检查 '.count($memberIds).' 个客户，实际变更 '.$impact['changed'].
+            ' 位；撤销 '.$impact['revoke_users'].' 位客户的受影响电脑会话']);
     }
     if (in_array($action,['device_blacklist_add'],true)) {
         if (!function_exists('device_admin_action'))
@@ -458,7 +556,7 @@ function feature_view(string $view,bool $embedded=false): void {
         <?php else: ?>
         <div class="page-title" id="group-bulk"><div><h2>分组批量配置</h2><p>选择目标分组与字段，先预览影响范围，再确认应用。</p></div><a class="btn" href="#group-list">返回分组列表</a></div>
         <?php endif ?>
-        <div class="bulk-intro"><div class="bulk-intro-icon">≡</div><div><strong>安全批量修改</strong><p>仅影响所选分组中的客户。涉及电脑会话权限的变更会自动撤销旧会话，确保新配置立即生效。</p></div></div>
+        <div class="bulk-intro"><div class="bulk-intro-icon">≡</div><div><strong>安全批量修改</strong><p>仅影响所选分组中的客户。只有停用账号、收回权限、授权提前到期或电脑额度降到当前占用以下，才撤销受影响客户会话；增加额度或重复保存不会踢下线。</p></div></div>
         <form id="group-bulk-form" data-ajax="group_bulk">
         <input name="action" type="hidden" value="group_bulk">
         <section class="card bulk-target-card">
@@ -497,8 +595,8 @@ function feature_view(string $view,bool $embedded=false): void {
             </div>
           </section>
         </div>
-        <div class="bulk-impact"><strong>生效提示</strong><p>修改电脑名额、客户状态、授权期限或平台权限时，会撤销该分组客户现有的电脑会话。修改手机名额不会主动解绑已有手机。</p></div>
-        <div class="bulk-submit"><div><strong id="bulk-summary">尚未选择修改项</strong><small>提交后先由服务器预检影响人数和字段，确认后才执行；分组成员变化时拒绝旧预览</small></div><button class="btn primary" type="submit" data-confirm-submit="此操作将批量修改所选分组的指定授权字段，确认继续？">应用批量配置</button></div>
+        <div class="bulk-impact"><strong>生效提示</strong><p>预览会列出实际变化人数、字段和预计撤销会话数；增加额度、延长有效期及授予新权限不会导致电脑下线。手机额度调整不会主动解绑手机。</p></div>
+        <div class="bulk-submit"><div><strong id="bulk-summary">尚未选择修改项</strong><small>提交前预览字段差异和下线人数；成员或原授权值变化时，要求重新预览</small></div><button class="btn primary" type="submit" data-confirm-submit="此操作将批量修改所选分组的指定授权字段，确认继续？">应用批量配置</button></div>
         </form>
         <?php
     } elseif ($view==='mobiles' || $view==='devices') {
