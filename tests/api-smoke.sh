@@ -338,6 +338,8 @@ for page in dashboard groups group_bulk packages releases cloud_features update 
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' "http://127.0.0.1:18765/index.php?view=$page")
   test "$status" = 403 || { echo "ordinary GET allowed $page ($status)" >&2; exit 1; }
 done
+ordinaryExport=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}'  'http://127.0.0.1:18765/index.php?view=account_history&user_id=1&export=csv')
+test "$ordinaryExport" = 403
 for action in group_create group_bulk_preview release_publish release_delete package_publish scrcpy_url_save main_program_url_save history_cleanup_preview history_cleanup_apply admin_create backup_key_generate update_apply cloud_features_save; do
   status=$(curl -sS -b "$normalCookies" -o "$normalHtml" -w '%{http_code}' -X POST 'http://127.0.0.1:18765/index.php' --data-urlencode "csrf=$normalCsrf" --data-urlencode "action=$action")
   test "$status" = 403 || { echo "ordinary POST allowed $action ($status)" >&2; exit 1; }
@@ -1105,6 +1107,24 @@ TEST_RESPONSE="$logs" python3 -c 'import os,json; j=json.loads(os.environ["TEST_
 update=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\"}")
 TEST_RESPONSE="$update" python3 -c 'import os,json; j=json.loads(os.environ["TEST_RESPONSE"]); assert j["ok"] and not j["available"],j'
 read -r releaseId releaseHash <<< "$(php tests/seed-release.php | tr '|' ' ')"
+# Regression: hundreds of recently inserted *lower* versions must not hide
+# the signed 0.8.0 release from either latest or top-30 version lookups.
+php -r '
+require "app/core.php";
+$pdo=db();$pdo->beginTransaction();
+$statement=$pdo->prepare("INSERT INTO phonehub_releases
+ (platform,channel,version,min_client,notes,filename,storage_name,size_bytes,sha256,manifest,signature,enabled)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,1)");
+for($i=1;$i<=520;$i++){
+ $v="0.1.".$i;
+ $statement->execute(["core","stable",$v,"0.7.1","CI older version",
+ "ci-$v.zip",bin2hex(random_bytes(20)).".zip",10,str_repeat("c",64),"{}",base64_encode(random_bytes(64))]);
+}
+$pdo->commit();
+'
+releaseList=$(api update_list "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\"}")
+TEST_RESPONSE="$releaseList" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and len(j["releases"])==30 and j["releases"][0]["version"]=="0.8.0",j'
+
 compatOld=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\",\"client_version\":\"0.6.0\"}")
 TEST_RESPONSE="$compatOld" python3 -c 'import os,json;j=json.loads(os.environ["TEST_RESPONSE"]);assert j["ok"] and j["available"] and j["client_upgrade_required"] and j["minimum_client_version"]=="0.7.1" and j["server_protocol_version"]==1,j'
 compatNew=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\",\"client_version\":\"0.7.1\"}")
@@ -1114,7 +1134,7 @@ TEST_RESPONSE="$invalidVersion" python3 -c 'import os,json;j=json.loads(os.envir
 blockedDownload=$(curl -sS -w '\n%{http_code}' -X POST "$BASE""update_download" -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" --data "{\"device_id\":\"$DEVICE\",\"release_id\":$releaseId,\"client_version\":\"0.6.0\"}")
 TEST_RESPONSE="$blockedDownload" python3 -c 'import os,json;s=os.environ["TEST_RESPONSE"].splitlines();j=json.loads(s[0]);assert s[-1]=="409" and not j["ok"] and j["error_code"]=="CLIENT_UPGRADE_REQUIRED",s'
 newer=$(api update_check "{\"device_id\":\"$DEVICE\",\"platform\":\"core\",\"channel\":\"stable\",\"current_version\":\"0.7.1\"}")
-TEST_RESPONSE="$newer" php -r '$j=json_decode(getenv("TEST_RESPONSE"),true);if(!$j["ok"]||!$j["available"])exit(1);$r=$j["release"];$pub=base64_decode($r["public_key"],true);$raw=base64_decode($r["manifest"],true);$signature=base64_decode($r["signature"],true);if(!sodium_crypto_sign_verify_detached($signature,$raw,$pub))exit(2);'
+TEST_RESPONSE="$newer" php -r '$j=json_decode(getenv("TEST_RESPONSE"),true);if(!$j["ok"]||!$j["available"]||$j["latest_version"]!=="0.8.0")exit(1);$r=$j["release"];$pub=base64_decode($r["public_key"],true);$raw=base64_decode($r["manifest"],true);$signature=base64_decode($r["signature"],true);if(!sodium_crypto_sign_verify_detached($signature,$raw,$pub))exit(2);'
 curl -fsS -X POST "$BASE""update_download" -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $TOKEN" -o /tmp/phonehub-ci-update.zip \
   --data "{\"device_id\":\"$DEVICE\",\"release_id\":$releaseId}"
