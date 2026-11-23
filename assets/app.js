@@ -109,9 +109,19 @@
         const preview=await request('group_bulk_preview',fields);
         if(!preview.snapshot || !Array.isArray(preview.fields) || !Number.isInteger(preview.members))
           throw new Error('服务器未返回有效的批量操作预览');
-        const message='服务器预检：将修改 '+preview.members+' 位客户的【'+preview.fields.join('、')+
-          '】。'+(preview.revoke_sessions?'相关电脑会话会被撤销。':'本次不会主动撤销电脑会话。')+
-          '\n确认提交此批量修改？';
+        const details=(Array.isArray(preview.field_changes)?preview.field_changes:[])
+          .map(x=>x.field+'：'+x.count+' 人').join('；');
+        const examples=(Array.isArray(preview.examples)?preview.examples:[]).slice(0,5)
+          .map(x=>x.username+'：'+(x.changes||[])
+            .map(change=>change.field+' '+change.before+' → '+change.after).join('、'))
+          .join('\n');
+        const message='服务器预览：分组 '+preview.members+' 人，实际变化 '+
+          preview.changed+' 人。\n字段变化：'+(details||'无')+
+          '\n预计撤销 '+(preview.revoke_users||0)+' 人、'+
+          (preview.revoke_session_count||0)+' 条电脑会话。'+
+          (examples?'\n示例（最多 5 人）：\n'+examples:'')+
+          '\n\n再次确认后执行；原授权值变化会要求重新预览。';
+        if(preview.changed===0){toast('所有客户均已是目标配置，无需修改');return;}
         if(!confirm(message))return;
         fields.set('preview_snapshot',preview.snapshot);
       }
