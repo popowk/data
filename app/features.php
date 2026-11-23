@@ -556,6 +556,8 @@ function feature_action(string $action): never {
         $memberCount=(int)sql('SELECT COUNT(*) FROM phonehub_user_meta WHERE group_id=?',[$group])->fetchColumn();
         if($memberCount>100)
             json_response(['ok'=>true]+phonehub_bulk_job_start($group,$targets,$preview));
+        if((int)sql('SELECT COUNT(*) FROM phonehub_bulk_jobs WHERE active_group_id=?',[$group])->fetchColumn()>0)
+            throw new RuntimeException('该分组有正在执行的分批任务，请先完成或取消，避免操作交叉');
         db()->beginTransaction();
         try {
             $memberIds=sql('SELECT u.id FROM phonehub_users u
