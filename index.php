@@ -273,6 +273,64 @@ if (!in_array($view,['dashboard','accounts','groups','group_bulk','devices','pac
 if ($view==='ai') { header('Location: index.php?view=cloud_features#ai-management',true,302);exit; }
 if ($view==='packages' && in_array($adminRole,['owner','global'],true)) { header('Location: index.php?view=releases#legacy-operation-packages',true,302);exit; }
 if (!phonehub_role_can_view($adminRole,$view)) { http_response_code(403); exit('当前管理员无权访问此页面'); }
+// Stream a customer-scoped CSV only after role and customer-ID validation.
+// Cursor pagination keeps memory bounded even for long-lived customers.
+if ($view==='account_history' && ($_GET['export']??'')==='csv') {
+    require_global_admin();
+    $customerId=filter_var($_GET['user_id']??null,FILTER_VALIDATE_INT);
+    if(!is_int($customerId) || $customerId<1 ||
+       !(int)sql('SELECT COUNT(*) FROM phonehub_users WHERE id=?',[$customerId])->fetchColumn()) {
+        http_response_code(404);exit('客户记录不存在');
+    }
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="phonehub-account-'.$customerId.'-history-'.gmdate('Ymd').'.csv"');
+    header('Cache-Control: private, no-store, max-age=0');
+    header('X-Content-Type-Options: nosniff');
+    $output=fopen('php://output','w');
+    if($output===false) throw new RuntimeException('无法创建历史数据导出');
+    fwrite($output,"\xEF\xBB\xBF");
+    $csvCell=static function(mixed $value): string {
+        $result=(string)$value;
+        // Prevent CSV formula injection in Excel-compatible spreadsheet apps.
+        return preg_match('/^\\s*[=+\\-@]/u',$result)?"'".$result:$result;
+    };
+    $csvWrite=static function(array $row) use($output,$csvCell): void {
+        fputcsv($output,array_map($csvCell,$row));
+    };
+    $csvWrite(['记录ID','北京时间','操作管理员','操作类型','变更字段','修改前','修改后']);
+    $labels=phonehub_account_history_fields();
+    $types=['create'=>'创建客户','update'=>'编辑授权',
+        'group_bulk'=>'分组批量修改','password_reset'=>'密码重置'];
+    $beforeId=PHP_INT_MAX;
+    do {
+        $events=sql('SELECT id,source,actor_name,created_at,changes_json
+            FROM phonehub_account_change_events
+            WHERE user_id=? AND id<? ORDER BY id DESC LIMIT 200',[$customerId,$beforeId])->fetchAll();
+        foreach($events as $event) {
+            $beforeId=(int)$event['id'];
+            $prefix=[$event['id'],utc_to_cn((string)$event['created_at']),
+                $event['actor_name'],$types[$event['source']]??$event['source']];
+            $changes=json_decode((string)$event['changes_json'],true);
+            if(!is_array($changes) || !$changes) {
+                $csvWrite(array_merge($prefix,['密码重置（不记录凭据）','','']));
+                continue;
+            }
+            foreach($changes as $field=>$change) {
+                if($field==='notes') {
+                    $csvWrite(array_merge($prefix,['备注（内容隐藏）','不展示','已修改']));
+                    continue;
+                }
+                if(!isset($labels[$field]) || !is_array($change)) continue;
+                $old=$event['source']==='create'?'—':
+                    phonehub_account_history_value($field,$change['before']??null);
+                $next=phonehub_account_history_value($field,$change['after']??null);
+                $csvWrite(array_merge($prefix,[$labels[$field],$old,$next]));
+            }
+        }
+    } while(count($events)===200);
+    fclose($output);
+    exit;
+}
 // Keep only internal administrative bookmarks: no legacy client API endpoint.
 if ($view==='group_bulk') {header('Location: index.php?view=groups#group-bulk',true,302);exit;}
 if ($view==='backup_keys') {header('Location: index.php?view=update#maintenance-backup',true,302);exit;}
@@ -514,7 +572,7 @@ $historyLabels=phonehub_account_history_fields();
 <div class="page-title"><div>
   <h1>客户授权变更明细</h1>
   <p><?=h($historyUser['username'])?> · 客户 ID #<?=(int)$historyUserId?> · 每页最多 25 条事件</p>
-</div><a class="btn" href="index.php?view=accounts">返回客户列表</a></div>
+</div><div class="editor-actions"><a class="btn" href="<?=h('index.php?'.http_build_query(['view'=>'account_history','user_id'=>$historyUserId,'export'=>'csv']))?>">导出 CSV</a><a class="btn" href="index.php?view=accounts">返回客户列表</a></div></div>
 <div class="card"><p class="muted">从 v0.5.32 起记录实际字段变化，不补造升级前未保存的历史。创建、编辑、批量修改和密码重置都会标明操作者；密码、密钥、Token 与备注内容不会进入此表。没有实际变化的重复保存不会新增变更事件。</p>
   <?php if(!$historyEvents): ?><p class="footnote">暂无可查询的授权变更记录。</p><?php endif ?>
   <div class="table-scroll"><table class="account-history-table"><thead>
